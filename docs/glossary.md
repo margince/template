@@ -116,7 +116,8 @@ per governed operation the unit adds (an agent tool, a job), carrying its id,
 operation, scopes, `tier` (for example `auto_execute`) and digests. A unit that
 declares no governed operation has an empty list. See
 `core/docs/explanation/extensibility.md` and
-`extensions/acme-sync/manifest.generated.json`.
+`core/extensions/openchannel/manifest.generated.json`, upstream's own worked
+example.
 
 ## scratch / staged copy
 

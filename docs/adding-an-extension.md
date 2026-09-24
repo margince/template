@@ -83,8 +83,9 @@ the Go side uses. That workspace's lockfile is build output and is gitignored.
 Core's tracked `pnpm-lock.yaml` is never modified.
 
 A unit frontend may therefore have dependencies of its own.
-`extensions/acme-sync/frontend/` is the worked example: it declares `vitest` and
-`@testing-library/react` as dev dependencies, and core's lockfile is untouched.
+`core/extensions/openchannel/frontend/` is upstream's own worked example: its
+`package.json` declares `vitest` and `@testing-library/react` as dev
+dependencies, and core's lockfile is untouched.
 
 Two rules follow:
 
@@ -103,9 +104,10 @@ workspace rather than core's root one.
 
 `make new-unit` gives you `<name>.go`, `<name>_test.go` and `go.mod`. Everything
 else you add yourself. This table says which file, and which gate proves it.
-`extensions/acme-sync/` is the worked example for all of it — a unit that
-polls an outside provider — and the comment at the top of its `acmesync.go` maps
-each of its files to the thing it demonstrates.
+`core/extensions/openchannel/` is upstream's own worked example for all of it —
+a unit that owns tables, a scheduled job, a screen, and an anonymous edge an
+outside provider posts to — and the package comment at the top of its `doc.go`
+explains the design.
 
 | To add | Write | Proven by |
 |---|---|---|

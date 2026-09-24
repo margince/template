@@ -63,9 +63,10 @@ and deployment (issue T9).
 | Repository | Role |
 |---|---|
 | `margince/margince` | Core product, release tags, image and desktop build definitions. |
-| `margince/margince-constellation` | Licensing, license-gated registry and downloads, upgrades. |
+| `gradionhq/margince-constellation` | Licensing, license-gated registry and downloads, upgrades. |
 | `gradionhq/margince-demo-database` | Demo datasets. |
-| `margince/margince-qc` | Acceptance tests. |
+| `gradionhq/margince-qc` | Acceptance tests. |
+| `gradionhq/margince-automation-world` | Source of the template tooling. |
 
 ## Documentation
 
