@@ -148,6 +148,10 @@ template-owned paths, so there is nothing to compare it with, and
 `make template-sync` merges the template's `main` into the instance and
 updates `.template-version` to the merged commit, which is how an instance
 picks up a template-owned change before `make check-template` next runs.
+The instance keeps its own `core` gitlink; the sync prints the template's
+core pin, and `make update-core` follows it. A conflict on an instance-owned
+path keeps the instance's side; a conflict on a template-owned path takes the
+template's side; a conflict on any other path stops the sync.
 
 ### 6.2 `instance.yaml`
 

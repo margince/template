@@ -83,15 +83,20 @@ make template-sync
 ```
 
 This fetches the `template` remote, merges its `main` into the instance, and
-records the merged commit in `.template-version`. `make check` (through
+records the merged commit in `.template-version` in the merge commit
+(`chore: merge template <short> and record it`). `make check` (through
 `make check-template`) then compares template-owned paths against that new
-commit.
+commit. If nothing changed, it reports `already at template commit`.
 
-Conflict rule: for a template-owned path, keep the template's side —
-`git checkout --theirs -- <path>` — since the instance must not diverge from
-the template there. Finish the merge with `git commit`, then run
-`make template-sync` again so it records the commit (the first run stops
-before recording it, because a merge with conflicts is not a clean merge).
+The sync applies the following rules:
+
+| Case | Action |
+|------|--------|
+| The template pins a different core commit | The instance keeps its own `core` gitlink and `core/` checkout. The sync prints the template's pin. Run `make update-core REF=<tag>` to follow it. |
+| Conflict on an instance-owned path (`instance.yaml`, `instance.mk`, `README.md`, `.template-version`, `extensions/`, `config/`, `data/`, `deploy/`, `docs/client/`) | The instance's side is kept. |
+| Conflict on a path listed in the template's `.template-owned` | The template's side is taken. |
+| Conflict on any other path | The sync stops. The merge stays in progress and `.template-version` is not written. Resolve the paths, finish the merge with `git commit`, then run `make template-sync` again. |
+| The template changed `instance.yaml` or `README.md` | The sync prints `git diff <old> <target> -- <file>` so the change can be reviewed and applied by hand. |
 
 ## 6. Upgrading core
 
