@@ -39,6 +39,21 @@ func Parse(data []byte) (Instance, error) {
 	return in, nil
 }
 
+// Value returns the value of one instance.yaml key by its YAML name.
+func (in Instance) Value(key string) (string, bool) {
+	switch key {
+	case "name":
+		return in.Name, true
+	case "display_name":
+		return in.DisplayName, true
+	case "core":
+		return in.Core, true
+	case "flavor":
+		return in.Flavor, true
+	}
+	return "", false
+}
+
 // Validate returns one message per problem, or nil.
 func (in Instance) Validate() []string {
 	var problems []string

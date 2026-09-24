@@ -26,6 +26,15 @@ source_units() {
   find "$SRC_EXT" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort
 }
 
+# instance_get <key> — one value from instance.yaml.
+#
+# Read through the template CLI so there is one parser. GOWORK=off because the
+# editor go.work at the repository root does not list scripts/cli.
+# INSTANCE_FILE overrides the file, for tests.
+instance_get() {
+  (cd "$ROOT/scripts/cli" && GOWORK=off go run . get -file "${INSTANCE_FILE:-$ROOT/instance.yaml}" "$1")
+}
+
 # The managed block in the submodule's info/exclude. Staged units are untracked
 # content in core/, which would otherwise make this repo report the submodule as
 # dirty on every build and train everyone to ignore that signal.

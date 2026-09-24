@@ -324,6 +324,15 @@ expect_eq_str "a Windows drive path with backslashes is absolute too" \
 expect_eq_str "a relative path that does not exist is still made absolute" \
   "$(cd "$TMP" && dataset_path "not-cloned-yet")" "$TMP/not-cloned-yet"
 
+# --- instance_get ---
+
+INSTANCE_FILE="$TMP/instance.yaml"
+printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.2\nflavor: acme/margince\n' > "$INSTANCE_FILE"
+if [ "$(instance_get name)" = "acme" ]; then ok "instance_get reads a key"; else fail "instance_get reads a key"; fi
+if [ "$(instance_get flavor)" = "acme/margince" ]; then ok "instance_get reads the flavor"; else fail "instance_get reads the flavor"; fi
+if instance_get units >/dev/null 2>&1; then fail "instance_get refuses an unknown key"; else ok "instance_get refuses an unknown key"; fi
+unset INSTANCE_FILE
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%s case(s) failed\n' "$FAILURES" >&2
   exit 1
