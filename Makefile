@@ -283,24 +283,22 @@ arch: compose ## Upstream's arch fitness tests over the composed tree
 ext-imports: compose ## The unit import allowlist
 	@set -o pipefail; $(MAKE) -C $(CORE) ext-imports 2>&1 $(REWRITE)
 
-## This gate needs a database, and gained that need quietly: it exits 0 before
-## touching Postgres only while NO unit ships migrations/, and three units now
-## do. So `make check` silently started requiring a cluster it never began, and
-## failed on a fresh machine at a lane whose comment still said check has never
-## needed one.
+## This gate needs a database. It starts one only when a unit under
+## $(CORE)/extensions declares a migrations/ layer. Core ships units with
+## migrations of its own — openchannel is one — so once units are staged the
+## condition is normally true and the database starts on every run. An
+## instance's own units with migrations are covered by the same scan.
 ##
 ## ARMED OFF THE TREE rather than by a plain `db-up` prerequisite, which is how
-## core's own lane and CI both decide: the first unit to declare a migrations/
-## layer gets the cluster, and a tree with none stays hermetic. An unconditional
-## prerequisite would start Postgres for a gate that is about to exit 0.
+## core's own lane and CI both decide: the scan decides whether the cluster is
+## needed, not a fixed rule. An unconditional prerequisite would start Postgres
+## even for a gate that is about to exit 0.
 ##
 ## Scanned in $(CORE)/extensions, not our own extensions/: `stage` (compose's
-## prerequisite) copies our units in there, but core ships its own example
-## units alongside them (openchannel carries migrations), so the tree core's
-## own check-ext-migrations.sh gate reads always has a migrations/ layer once
-## staged — checking our extensions/ here misses that and never starts the
-## cluster, so the gate below fails on any client instance, including the
-## template with no units of its own.
+## prerequisite) copies our units in there, and core's own shipped units are
+## already there alongside them. Checking our extensions/ here would miss
+## core's own migrations and never start the cluster for the template, which
+## ships no units of its own.
 check-ext-migrations: compose ## Unit migration rules
 	@if ls -d $(CORE)/extensions/*/migrations >/dev/null 2>&1; then \
 		echo "check-ext-migrations: a unit declares migrations/ — starting the test cluster"; \
