@@ -17,8 +17,7 @@ different because we build *downstream* of the core rather than inside it.
    `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters. `scripts/stage.sh` checks
    this before the composer does, so a bad name fails with a clear message.
 
-2. **Add its `go.mod`.** Its own module, as every unit is. Use the path where
-   the source actually lives:
+2. **Add its `go.mod`.** Its own module, as every unit is. Give it this path:
 
    ```text
    module margince.instance/extensions/<name>
@@ -28,7 +27,8 @@ different because we build *downstream* of the core rather than inside it.
 
    Nothing ever downloads this path. The composed workspace written by
    `gen-composition` resolves the unit locally; no module proxy is contacted.
-   The path only has to be unique and to match where the source really lives.
+   The path only has to be unique among this instance's units — it is never
+   fetched, so it does not need to describe where the source lives.
 
    Note the two module namespaces, which are unrelated: our units live under
    `margince.instance/...`, and the host they import is
@@ -44,7 +44,12 @@ different because we build *downstream* of the core rather than inside it.
    `pkg/extension/jurisdiction`, `pkg/extension/crm` today. Anything else fails
    upstream's arch test.
 
-5. **Prove it.** `make u NAME=<name>` is the inner loop: that unit's Go tests
+5. **Generate and commit the manifest.** `make compose` writes
+   `extensions/<name>/manifest.generated.json`; `git add extensions/<name>`
+   stages it alongside the unit. `make u` below fails on an untracked
+   manifest, so a first run needs this step first.
+
+6. **Prove it.** `make u NAME=<name>` is the inner loop: that unit's Go tests
    plus the cheap policy gates, in seconds. `make u-check NAME=<name>` adds the
    screen suites and the composed typecheck. `make ci` is the full answer, and
    the one to run before opening a pull request.
