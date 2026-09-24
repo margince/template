@@ -238,8 +238,8 @@ SRC_EXT="$SAVED_SRC_EXT"
 # scaffolder fail on Linux at the first step of the first journey.
 
 f="$TMP/rewrite-basic"
-printf 'package gradion\nname = "gradion"\n' > "$f"
-rewrite_file_in_place "$f" 's|package gradion|package crmsync|g' 's|"gradion"|"crm-sync"|g'
+printf 'package acme\nname = "acme"\n' > "$f"
+rewrite_file_in_place "$f" 's|package acme|package crmsync|g' 's|"acme"|"crm-sync"|g'
 expect_file_is "applies every expression in order" "$f" \
 'package crmsync
 name = "crm-sync"'

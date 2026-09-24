@@ -12,9 +12,8 @@ Without extensions, the template is itself a working instance, referred to as
 
 ## Status
 
-**Design phase.** The design is in
-[`docs/superpowers/specs/2026-09-24-client-instance-template-design.md`](docs/superpowers/specs/2026-09-24-client-instance-template-design.md)
-and is pending review. The tooling described below is not implemented yet.
+**Foundation in place.** The template works as Margince Default. Trial,
+release, and deployment are planned (see the issue breakdown).
 
 ## How instances use this template
 
@@ -42,28 +41,31 @@ scripts/         lifecycle scripts and tests (template-owned)
 Each path is owned by either the template or the instance, never both. See
 Section 6 of the design.
 
-## Planned commands
+## Commands
+
+Run `make help` for the full list.
 
 | Command | Function |
 |---|---|
-| `make install` | Set up tools, core, dependencies, hooks, and configuration. |
+| `make install` | Check prerequisites, check out core, install dependencies, hooks, and configuration. |
 | `make dev` | Run the development stack with the instance units. |
-| `make new-unit NAME=<n>` | Create an extension unit. |
+| `make new-unit NAME=<n>` | Create an extension unit from `scripts/unit-skeleton/`. |
+| `make u NAME=<n>` | Run one unit's tests and the policy gates. |
 | `make check` | Run the full quality gate. |
-| `make trial` | Build a laptop trial bundle with a trial license. |
-| `make update-core REF=<tag>` | Move the core pin to a core tag. |
-| `make release VERSION=<v>` | Tag a release. CI builds the `api`, `web`, and `worker` images. |
-| `make deploy ENV=<env> VERSION=<v>` | Deploy a release to an environment. |
+| `make ci` | Run `make check` plus the database and submodule lanes. |
+| `make update-core REF=<ref>` | Move the core pin. |
+
+Planned, not implemented yet: the trial bundle (issue T8), release (issue T7),
+and deployment (issue T9).
 
 ## Related repositories
 
 | Repository | Role |
 |---|---|
 | `margince/margince` | Core product, release tags, image and desktop build definitions. |
-| `gradionhq/margince-constellation` | Licensing, license-gated registry and downloads, upgrades. |
+| `margince/margince-constellation` | Licensing, license-gated registry and downloads, upgrades. |
 | `gradionhq/margince-demo-database` | Demo datasets. |
-| `gradionhq/margince-qc` | Acceptance tests. |
-| `gradionhq/margince-automation-world` | Source of the template tooling. |
+| `margince/margince-qc` | Acceptance tests. |
 
 ## Documentation
 

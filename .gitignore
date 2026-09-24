@@ -45,8 +45,3 @@
 # so an unrelated future /build asset should have to be ignored deliberately
 # rather than inherit a blanket rule. Same reasoning core's own file gives.
 /build/desktop/
-
-# The zalo lab's output (make zalo-lab). Holds a LIVE Zalo session for one real
-# human plus its measurement log. Never committed; delete it when the
-# measurement is done.
-.zalolab/

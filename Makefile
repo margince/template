@@ -1,10 +1,7 @@
-# Margince for Gradion.
+# Margince instance template.
 #
 # core/ is upstream Margince as a submodule, never edited. extensions/ holds the
-# units Gradion builds. Upstream's composer only scans <core-root>/extensions/
-# and refuses symlinked entries, so every lane here STAGES our units into the
-# submodule first, then delegates. The staged copies are scratch; this repo is
-# the source of truth.
+# instance's own units (none in the template).
 
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
@@ -19,7 +16,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit u u-fe u-check zalo-lab \
+	stage unstage compose watch new-unit u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts secret-scan test-secret-scan \
@@ -155,7 +152,7 @@ new-unit: ## Scaffold a unit from scripts/unit-skeleton (NAME=<name>)
 ## deliberately: they are seconds, so a policy failure should be the fastest
 ## failure you see, not the slowest. ~14s warm.
 u: compose ## One unit's tests + policy gates (NAME=<unit>)
-	@[ -n "$(NAME)" ] || { echo "u: pass NAME=<unit>, e.g. make u NAME=zalo-oa" >&2; exit 1; }
+	@[ -n "$(NAME)" ] || { echo "u: pass NAME=<unit>, e.g. make u NAME=acme-sync" >&2; exit 1; }
 	@[ -d extensions/$(NAME) ] || { echo "u: no such unit: extensions/$(NAME)" >&2; exit 1; }
 	@echo "== go test: $(NAME)"
 	@# In the STAGED copy: the composed go.work `use`s core/extensions/<unit>, so
@@ -186,35 +183,6 @@ u-fe: compose ## Every unit's screen suite (not per-unit; slow)
 u-check: u ## One unit, plus the screen suites and the composed typecheck (NAME=<unit>)
 	@$(MAKE) u-fe
 	@$(MAKE) -C $(CORE) fe-typecheck-composed
-
-## zalo-lab is NOT A GATE and is not reachable from one. It drives a REAL Zalo
-## account against a REAL phone to settle the two measurements zalo-personal's
-## design is waiting on (cookie rotation, and whether any command acks the
-## backlog). It lives behind the `zalolab` build tag precisely so that `make u`,
-## `make check` and `make ci` never compile it, let alone run it.
-##
-## THE DIRECTORY IS ABSOLUTE AND OUTSIDE THE STAGED TREE. The harness runs in
-## core/extensions/zalo-personal like every other unit test, and it writes a live
-## credential plus its measurement log — into core/, the next `make compose` would
-## erase both, one of which took somebody's phone to produce.
-##
-## -timeout 0 because the resume phase deliberately runs for half a day, and go
-## test's own ten-minute default would kill the measurement in the middle. -count=1
-## because a cached PASS of a measurement is worthless. -v because the whole output
-## of this lane IS the log lines.
-zalo-lab: compose ## Measure a live Zalo account (PHASE=login|resume|drain)
-	@case "$(PHASE)" in \
-		login)  test=TestZaloLabLogin ;; \
-		resume) test=TestZaloLabResume ;; \
-		drain)  test=TestZaloLabDrain ;; \
-		"")     echo "zalo-lab: pass PHASE=login|resume|drain (login needs a phone in the room)" >&2; exit 1 ;; \
-		*)      echo "zalo-lab: PHASE must be login, resume or drain, not '$(PHASE)'" >&2; exit 1 ;; \
-	esac; \
-	echo "== zalo-lab: $(PHASE) — a LIVE account. Output and credential: $(CURDIR)/.zalolab"; \
-	cd $(CORE)/extensions/zalo-personal && \
-		ZALO_LAB_DIR=$(CURDIR)/.zalolab \
-		GOWORK=$(CURDIR)/$(CORE)/build/composition/go.work \
-		go test -tags zalolab -count=1 -v -timeout 0 -run "$$test" ./...
 
 # ─────────────────────────────── gates ────────────────────────────────
 

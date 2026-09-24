@@ -160,7 +160,7 @@ EOF
 #
 # ABSOLUTE paths only, and that is the whole target rather than a limitation. The
 # delegating lanes run as `make -C core …`, so a gate's cwd is core/ and it
-# prints CORE-RELATIVE paths (extensions/zalo-oa/send.go) — which already resolve
+# prints CORE-RELATIVE paths (extensions/acme-sync/send.go) — which already resolve
 # to our source when read from the repository root, and must be left alone. What
 # misleads is Go's toolchain, which prints absolute paths into the submodule.
 #

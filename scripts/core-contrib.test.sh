@@ -304,13 +304,13 @@ fi
 # pushed.
 
 expect_eq "ssh remote reduces to owner/repo" \
-  "$(repo_slug 'git@github.com:gradionhq/margince-poc-v1.git')" "gradionhq/margince-poc-v1"
+  "$(repo_slug 'git@github.com:margince/margince.git')" "margince/margince"
 expect_eq "https remote reduces to owner/repo" \
-  "$(repo_slug 'https://github.com/gradionhq/margince-poc-v1.git')" "gradionhq/margince-poc-v1"
+  "$(repo_slug 'https://github.com/margince/margince.git')" "margince/margince"
 expect_eq "a url without the .git suffix still reduces" \
-  "$(repo_slug 'https://github.com/gradionhq/margince-poc-v1')" "gradionhq/margince-poc-v1"
+  "$(repo_slug 'https://github.com/margince/margince')" "margince/margince"
 expect_eq "a fork url reduces to the fork owner" \
-  "$(repo_slug 'git@github.com:someone/margince-poc-v1.git')" "someone/margince-poc-v1"
+  "$(repo_slug 'git@github.com:someone/margince.git')" "someone/margince"
 
 # --- push_remote: an UNREADABLE remote is refused, not chosen ---
 #

@@ -4,8 +4,8 @@
 # It exists because core's has a hole this repository cannot see from the
 # outside: core/scripts/test-integration-parallel.sh sets GO_DIRS=(backend), so
 # the lane that proves core against a real Postgres never discovers an
-# extension module. zalo-oa, zalo-personal and dispact-connector all ship
-# migrations/, and until this lane nothing ever executed that SQL against a
+# extension module. A unit that ships migrations/ (for example acme-sync) is
+# invisible to it, and until this lane nothing ever executed that SQL against a
 # cluster.
 #
 # Every connection setting comes from core's own scripts/lib-testdb.sh —

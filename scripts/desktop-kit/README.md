@@ -93,8 +93,8 @@ The demo colleagues all use the password `1234`.
 
 A new installation is empty. To fill it:
 
-1. Get the demo database folder. It is not in this download — ask your Gradion
-   contact for it. The folder contains a `datasets` directory.
+1. Get the demo database folder. It is not in this download — ask your
+   administrator for it. The folder contains a `datasets` directory.
 2. Copy it into `data@@SEP@@demo@@SEP@@`, inside this folder.
 3. Start Margince and leave it running.
 4. Double-click **@@LOADER@@**.
