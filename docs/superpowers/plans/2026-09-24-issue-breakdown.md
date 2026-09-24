@@ -2,6 +2,8 @@
 
 Source: [design specification](../specs/2026-09-24-client-instance-template-design.md).
 
+The Constellation issues (C1, K1–K4) include the proposal for mainline builds, a release harness, flavors, and trials. Trials start after flavors exist.
+
 **Target:** a new Margince instance can be created, developed, trialled,
 released, and deployed using only the template. This is milestone **M1**.
 Milestone **M2** retires old repositories. Existing instances (`incap`, `afs`) are not migrated; the template applies to new instances only.
@@ -17,28 +19,29 @@ dependencies.
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
-| C1 | One version scheme | Choose `v0.0.x` or `YYYY.edition`. Make `release-tag.yml` and `docker-bake.hcl` use the same value. | Tag `<v>` produces images stamped with version `<v>`. | — |
+| C1 | Release tags use the YYYY.edition version scheme | Release git tags currently use `v0.0.x`, while `docker-bake.hcl` stamps images with the `YYYY.edition` scheme. Use `YYYY.edition` (for example `2026.3`) for release tags, and make `release-tag.yml` and `docker-bake.hcl` use the same value. Test builds use year `1970`. | Pushing release tag `<v>` produces images stamped with version `<v>`. | — |
 
 ### gradionhq/margince-constellation
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
-| K1 | Trial license | Add a trial license type (validity period, trial marker) and an issuance endpoint that accepts an operator credential. | An operator credential can obtain a trial JWT for a product. Core accepts it in production mode. | — |
-| K2 | Instance registry access | Define the registry namespace for instance images. Grant push to the publisher identity and pull to licensed customers per product. | An instance CI can push `<ns>/<name>-api`. A customer license can pull it. | — |
-| K3 | Close PR #421 | Close the PR. List the Go commands to reuse in T7 (`notes`, `cleanup`, `promote`). | PR closed with a reference to T7. | — |
+| K2 | Flavors: vendor-namespaced products with dynamic catalog and licenses | Add flavors to the dist service. A flavor is namespaced by vendor: `margince/margince` is core, `<vendor>/margince` is a client instance. Add management APIs to create flavors. Make the static `MARGINCE_AUTH_CATALOG` dynamic through the event outbox, so that a new flavor can be licensed immediately. Grant push to the publisher identity for the flavor image namespace. | Creating a flavor through the API allows issuing a license for it, pushing `<vendor>/margince-api`, `-web`, `-worker` with the publisher identity, and pulling them with the license. | — |
+| K3 | Mainline builds of core | Build core `main` on a schedule (for example hourly) and record each build as a test release `1970.N` in the dist service, published to testing. The build definition stays in core (`docker-bake.hcl`, desktop build). Reuse the Go commands from PR #421 (`verdict`, `promote`, `notes`, `cleanup`) and close PR #421. | A new `1970.N` release appears in testing after each scheduled run. PR #421 is closed. | C1 |
+| K4 | Release harness | After each release (mainline core build or flavor release), verify: a license for the product is valid, the containers can be pulled with it, the binaries can be downloaded, the SBOMs can be downloaded. Provide it as a command that instance CI can also run. | The harness runs after every mainline build and fails the run on any failed check. | K3 |
+| K1 | Trial license per flavor | Add a trial license type (validity period, trial marker) and an issuance endpoint that accepts an operator credential. Trial licenses are issued per flavor. Used by `make trial` in instance repositories. | An operator credential can obtain a trial JWT for a flavor. Core accepts it in production mode. | K2 |
 
 ### gradionhq/margince-template
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
 | T1 | Import tooling | Copy `scripts/`, `Makefile`, `.github/`, `.githooks/`, `config/`, and supporting files from `margince-automation-world`. Take `lint.sh` from branch `chore/update-core` of `margince-automation-world`. Remove all extensions and `zalo-lab`. Record source commits in the commit message. | `make install && make check` pass with no extensions. | — |
-| T2 | `instance.yaml` and CLI | Add `instance.yaml` and `scripts/cli` (Go) to read and validate it. Add validation to `make check`. | `make check` fails on an invalid `instance.yaml`. | T1 |
-| T3 | Generalize scripts | `package.sh` reads name and registry from `instance.yaml`. `new-unit.sh` uses `scripts/unit-skeleton/`. `desktop.sh` and `build-info.sh` use `display_name`. Update tests. | No script contains "gradion" or "automation-world". `make test-scripts` passes. | T2 |
+| T2 | instance.yaml and CLI | Add `instance.yaml` (including `flavor: <vendor>/margince`) and a Go CLI in `scripts/cli` that reads and validates it. Add the validation to `make check`. | `make check` fails on an invalid `instance.yaml`. | T1 |
+| T3 | Remove client-specific values from scripts | `package.sh` derives the image namespace from `flavor` in `instance.yaml`. `new-unit.sh` uses `scripts/unit-skeleton/`. `desktop.sh` and `build-info.sh` use `display_name`. Update the tests. | No script contains "gradion" or "automation-world". `make test-scripts` passes. | T2 |
 | T4 | `instance.mk` | Add `-include instance.mk` and a check that it does not redefine template targets. | A redefined target fails `make check`. | T1 |
 | T5 | Core pin by tag | `make update-core` accepts tags only and updates `instance.yaml`. `make check` verifies the submodule matches `instance.yaml`. | A branch ref is rejected. A mismatch fails `make check`. | T2, C1 |
 | T6 | Drift check | Add `.template-version` and `make check-template`. | Editing a template-owned file fails `make check`. | T1 |
-| T7 | Release | Add `make release`. Extend `release.yml` with image build (candidate tag), smoke test, and publish. Port `notes` and `cleanup` into `scripts/cli`. | Tag `v<v>` publishes three role images and release notes to the Constellation registry. | T3, C1, K2, K3 |
-| T8 | Trial | Add `make trial`: desktop build, production config, dataset, trial license from `scripts/trial-license.sh`. | `make trial` produces a bundle that starts in production mode on macOS. | T3, K1 |
+| T7 | Release workflow | Add `make release`. Extend `release.yml` with image build (candidate tag), smoke test, publish to the flavor namespace, record the flavor release in the dist service, and run the release harness. Port `notes` and `cleanup` from PR #421 into `scripts/cli`. | Tag `v<v>` publishes three role images and release notes for the flavor, and the release harness passes. | T3, C1, K2, K4 |
+| T8 | Laptop trial build | Add `make trial`: desktop build, production configuration, dataset, and a trial license for the flavor from `scripts/trial-license.sh`. | `make trial` produces a bundle that starts in production mode on macOS. | T3, K1 |
 | T9 | Deploy contract and `hook` adapter | Add `make deploy`, `deploy.yml`, and the four steps (`preflight`, `apply`, `verify`, `rollback`) with the `hook` adapter. | A test hook deployment runs. A failing `verify` triggers `rollback`. | T2 |
 | T10 | Template CI | Run the lifecycle in CI on the empty template and on a test instance with one unit: `install`, `check`, `trial` (build only), `release` (dry run), `deploy` (test hook). | CI passes on both. | T1–T9 |
 | T11 | New instance bootstrap | Add `scripts/new-instance.sh`: create the instance repository, add the `template` remote, write `instance.yaml`, push. (GitHub does not allow a fork into the same organization, so the instance is a new repository with a `template` remote.) | One command creates a new instance repository that passes `make check`. | T2, T6 |
@@ -60,9 +63,11 @@ dependencies.
 ## Order
 
 ```
-C1, K1, K2, K3, T1          (parallel start)
+C1, K2, T1                  (parallel start)
+C1 → K3 → K4
+K2 → K1
 T2 → T3, T4, T5, T6, T9
-T3 + K2 + C1 → T7
+T3 + C1 + K2 + K4 → T7
 T3 + K1      → T8
 T2 + T6      → T11
 all T        → T10 → T12  → M1
@@ -96,3 +101,4 @@ Tracking issue: https://github.com/gradionhq/margince-template/issues/14
 | R1 | https://github.com/gradionhq/margince-release/issues/2 |
 | R2 | https://github.com/gradionhq/margince-d13-deploy/issues/37 |
 | R3 | https://github.com/gradionhq/margince-principles/issues/2 |
+| K4 | https://github.com/gradionhq/margince-constellation/issues/451 |

@@ -68,10 +68,14 @@ specification also defines the responsibility of each repository.
 | Propagation of template changes | Each instance is a fork of the template. Template changes are applied with `git merge template/main`. |
 | Propagation of core upgrades | The existing `make update-core REF=<tag>` command, restricted to tags. |
 | Image builds | Each instance builds its own images in its own CI. Constellation handles licensing and distribution only. |
+| Version scheme | `YYYY.edition`, as defined in `margince-constellation/specs/functional/02-versioning.md`. Test builds use year `1970` (`1970.1`, `1970.2`, …). |
+| Mainline core builds | Constellation builds core `main` on a schedule and records each build as a test release (`1970.N`) in the dist service. The build definition stays in core. |
+| Flavors | Each instance is registered in Constellation as a **flavor**, namespaced by vendor (for example `acme/margince`). Core is `margince/margince`. Licenses are issued per flavor. Instance images are published under the flavor namespace. |
+| Release verification | Every release, core or flavor, is verified by the Constellation release harness: a valid license, pullable containers, downloadable binaries, downloadable SBOMs. |
 | Source of the template tooling | The files of `margince-automation-world` (`scripts/`, `Makefile`, `.github/workflows/`, `.githooks/`, `config/`, supporting files) are copied into the template. `lint.sh` is taken from branch `chore/update-core` after it is merged. |
 | Template git history | The template starts with new git history. The history of `margince-automation-world` is not imported, because it contains the code of five client extensions, and every future client fork would inherit that code. The initial import commit records the source repository and commit of each copied file. |
 | `margince-release` | Archived. |
-| Constellation PR #421 | Closed. Its Go commands (`verdict`, `promote`, `notes`, `tag-sources`, `cleanup`) are reused in the template tooling where applicable. |
+| Constellation PR #421 | Closed. Its Go commands (`verdict`, `promote`, `notes`, `tag-sources`, `cleanup`) are reused in the Constellation mainline builds and in the template tooling where applicable. |
 | Deployment | Each client uses one deployment process. The template defines standard deployment steps. The instance provides configuration values and, where required, hook scripts. |
 
 ## 5. Repository Responsibilities
@@ -81,7 +85,7 @@ specification also defines the responsibility of each repository.
 | `margince/margince` (core) | Product source code; release tags; role image definitions (`Dockerfile`, `docker-bake.hcl`); desktop all-in-one build; `gen-composition`; extension SDK. | Any client-specific content. |
 | `margince-template` (new) | Standard directory layout; lifecycle commands; development environment; CI workflows; deployment interface; core version pin. The template is itself a functional instance without extensions, referred to as **Margince Default**. | Client-specific code. |
 | Client instance (fork of the template) | `instance.yaml`, `instance.mk`, `extensions/`, `config/`, `data/`, `deploy/`, `docs/client/`. | Modifications to template-owned files. Tooling changes are made in the template and merged into the instance. |
-| `margince-constellation` | Customer records; license issuance (trial and production); license-gated container registry and artifact downloads; `upgrade-cli`. | Instance composition or instance builds. |
+| `margince-constellation` | Customer records; flavors; license issuance per flavor (trial and production); scheduled mainline builds of core; the release harness; license-gated container registry and artifact downloads; `upgrade-cli`. | Instance composition or instance builds. |
 | `margince-demo-database` | Demo datasets. An instance references a dataset by name and version in `data/`. | — |
 | `margince-qc` | Acceptance tests against a specified build. Can target any instance. | — |
 | `margince-d13-deploy` | Deploys vanilla core (Margince Default) to District 13. Replaced by the `d13` adapter and the `deploy/` directory of an owning instance repository, then archived. The owning repository is an open decision. | — |
@@ -100,7 +104,7 @@ tooling directory remains `scripts/`.
 margince-template/                   (client forks use the same structure)
 ├── core/                  ◆ git submodule, pinned to a core tag
 ├── instance.yaml          ● instance metadata: name, core version, units,
-│                            deployment targets, license product
+│                            deployment targets, flavor
 ├── instance.mk            ● optional client-specific make targets
 ├── extensions/            ● client extension units (empty in the template)
 ├── config/                ● margince.yaml and per-environment overlays
@@ -136,14 +140,12 @@ Example (all values are illustrative):
 
 ```yaml
 name: acme                       # used in image names and the trial bundle name
-display_name: Incap              # used in user-facing text of the desktop bundle
-core: v0.0.2                     # must match the tag of the core/ submodule
+display_name: Acme               # used in user-facing text of the desktop bundle
+core: 2026.3                     # must match the tag of the core/ submodule
 units: [acme]                    # extensions/ entries to compose; empty means none
 data:
   dataset: margince-demo-database/acme@v1    # optional
-license:
-  product: margince-acme         # Constellation product for license issuance
-registry: registry.example.com/clients/acme
+flavor: acme/margince            # Constellation flavor: license product and image namespace
 deploy:
   staging:    { adapter: d13 }
   production: { adapter: d13 }
@@ -157,6 +159,11 @@ a required tool, so this adds no dependency.
 - `core` matches the tag of the `core/` submodule.
 - Each entry in `units` exists under `extensions/`.
 - Each environment under `deploy` has a matching `deploy/<env>/` directory.
+- `flavor` has the form `<vendor>/margince`.
+
+The image namespace is derived from `flavor`: `<registry>/<vendor>/margince-api`,
+`-web`, and `-worker`. The registry host is a template setting, not an
+instance setting.
 
 ### 6.3 `instance.mk`
 
@@ -273,7 +280,7 @@ These targets exist in `margince-automation-world` and are copied unchanged.
 5. Writes the bundle to `dist/trial/<name>-<version>-<platform>/`.
 
 The trial license is a license JWT issued by the Constellation licenser for the
-product in `license.product`. It has a limited validity period and is marked as
+flavor in `flavor`. It has a limited validity period and is marked as
 a trial license. The template requests it from the licenser API using an
 operator credential provided in the environment variable
 `MARGINCE_LICENSER_TOKEN`. The license is written to the bundle only. It is
@@ -283,8 +290,9 @@ The bundle runs in production mode. The client therefore evaluates the same
 configuration that is later deployed.
 
 Required Constellation changes: a trial license type (validity period and trial
-marker) and an issuance endpoint that accepts an operator credential. The
-details are defined in sub-project 4.
+marker) and an issuance endpoint that accepts an operator credential. Trial
+licenses are issued per flavor, so flavors must exist first. The details are
+defined in sub-project 4.
 
 ### 10.3 Build and Release (Goal 5)
 
@@ -295,16 +303,18 @@ The existing `release.yml` runs on `v*` tags. It runs `full-check.yml` and
 builds the macOS and Windows desktop bundles. The template adds the following
 jobs:
 
-1. **Images:** runs `make package` with `REPO=<registry>` and `VERSION=<v>`. This
-   produces `<registry>/<name>-api`, `<registry>/<name>-web`, and
-   `<registry>/<name>-worker` with the candidate tag `cand-<commit>`, for
-   multiple architectures. Each image has an OCI label with the core version.
+1. **Images:** runs `make package` with the flavor namespace and `VERSION=<v>`.
+   This produces `<registry>/<vendor>/margince-api`, `-web`, and `-worker` with
+   the candidate tag `cand-<commit>`, for multiple architectures. Each image has an OCI label with the core version.
 2. **Smoke test:** starts the three images with a temporary PostgreSQL and
    Redis instance and verifies that they start and respond.
 3. **Publish:** adds the tag `<v>` to the images in the Constellation registry
-   using the publisher identity, and generates release notes with the `notes`
-   command. The release notes list the core tag, the instance commit, and the
-   image digests.
+   using the publisher identity, records the release for the flavor in the dist
+   service, and generates release notes with the `notes` command. The release
+   notes list the core version, the instance commit, and the image digests.
+4. **Verify:** runs the Constellation release harness against the published
+   flavor release: a license for the flavor is valid, the containers can be
+   pulled with it, and the binaries and SBOMs can be downloaded.
 
 Images are tagged with the instance version only. The core version is recorded
 as a label, because multiple instance releases can use the same core version.
@@ -344,8 +354,8 @@ can be scaled independently.
 | Stage | Runtime mode | License |
 |---|---|---|
 | Development | `MARGINCE_ENV=dev` | Not required. |
-| Trial | Production | Trial license issued by the Constellation licenser and included in the bundle. |
-| Staging and production | Production | Production license issued at sign-off. Stored in the environment secret store and provided as `MARGINCE_LICENSE`. |
+| Trial | Production | Trial license for the flavor, issued by the Constellation licenser and included in the bundle. |
+| Staging and production | Production | Production license for the flavor, issued at sign-off. Stored in the environment secret store and provided as `MARGINCE_LICENSE`. |
 
 Licenses are never committed to a repository. `MARGINCE_LICENSE` overrides any
 `license.token` value in the instance configuration. The instance
@@ -353,24 +363,25 @@ configuration therefore does not define `license.token`.
 
 ## 11. Versioning (Goals 1 and 2)
 
-- **Core:** each release is a git tag. `make update-core` accepts tags only.
-- **Instance:** has an independent version. Releases are tagged
-  `v<major>.<minor>.<patch>` in the instance repository.
+The version scheme is `YYYY.edition`, as defined in
+`margince-constellation/specs/functional/02-versioning.md`.
+
+- **Core:** each release is a git tag in the form `YYYY.edition` (for example
+  `2026.3`). The git tag equals the version stamped into the images by
+  `docker-bake.hcl`. Mainline test builds use year `1970` (`1970.1`, `1970.2`,
+  …) and are published to the testing environment only. `make update-core`
+  accepts release tags only.
+- **Instance (flavor):** has an independent version. Releases are tagged
+  `v<major>.<minor>.<patch>` in the instance repository. The dist service
+  records each flavor release with this version and the core version it is
+  built on. Images are tagged with the instance version. The core version is
+  recorded as an OCI label.
 - **Template:** each instance records the last merged template commit in
   `.template-version`. The template tags its releases so that each merge
   references a tagged version.
 
-**Open decision: core version scheme.** Core currently uses two version
-schemes:
-
-- Git tags in the format `v0.0.x`.
-- `docker-bake.hcl` sets image versions in the Constellation `YYYY.edition`
-  format (for example `1970.<build>`) and pushes to
-  `registry.test.margince.com/margince`.
-
-The template treats the core version as a single string that must be a core git
-tag. Core must adopt one scheme, in which the git tag equals the version set in
-the images. This decision is required before sub-project 1 is planned.
+Current state: core git tags use `v0.0.x`. Core adopts `YYYY.edition` for git
+tags in sub-project 1.
 
 ## 12. Error Handling
 
@@ -413,16 +424,18 @@ The `margince-d13-deploy` deployment moves to the `d13` adapter and the
 
 The work is delivered as separate implementation plans in the following order:
 
-1. **Core versioning:** define the version scheme; release tags determine the
-   image version.
+1. **Core versioning and mainline builds:** core git tags use `YYYY.edition`
+   and equal the image version; Constellation builds core `main` on a schedule
+   as `1970.N` test releases; the release harness verifies each build.
 2. **Template foundation:** copy the tooling from `margince-automation-world`,
    generalize the scripts in Section 7, add `instance.yaml`, `instance.mk`,
    the unit skeleton, the drift check, and the template CI.
-3. **Build and release:** image, smoke test, and publish jobs in `release.yml`;
-   the Go CLI with the reused PR #421 commands; push to the Constellation
-   registry.
+3. **Flavors, build, and release:** Constellation flavors (management API,
+   vendor namespace, dynamic catalog through the event outbox, licenses per
+   flavor); image, smoke test, publish, and verify jobs in `release.yml`; the
+   Go CLI with the reused PR #421 commands.
 4. **Trial and licensing:** Constellation trial license type and issuance
-   endpoint; `make trial`.
+   endpoint per flavor; `make trial`. Starts after flavors exist.
 5. **Deployment:** the four-step deployment interface, the `hook` adapter, the
    `d13` adapter.
 6. **Retirement:** archive

@@ -28,7 +28,7 @@ and is pending review. The tooling described below is not implemented yet.
 
 ```
 core/            git submodule, pinned to a core tag
-instance.yaml    instance metadata: name, core version, units, deployment, license
+instance.yaml    instance metadata: name, core version, units, flavor, deployment
 instance.mk      optional client-specific make targets
 extensions/      client extension units (empty in the template)
 config/          margince.yaml and per-environment overlays
