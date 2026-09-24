@@ -33,7 +33,8 @@ TPL="$TMP/template"
 git init -q -b main "$TPL"
 cp -R "$SCRIPT_DIR" "$TPL/scripts"
 cp "$ROOT/.template-owned" "$TPL/.template-owned"
-printf 'help:\n\t@echo help\n' > "$TPL/Makefile"
+# The real Makefile: the make-level case below runs its new-instance recipe.
+cp "$ROOT/Makefile" "$TPL/Makefile"
 printf '# margince-template\n' > "$TPL/README.md"
 printf 'name: margince-default\ndisplay_name: Margince Default\ncore: v0.0.2\nflavor: margince/margince\n' > "$TPL/instance.yaml"
 git -C "$TPL" submodule add -q "$CORE_UP" core
@@ -111,6 +112,30 @@ if out="$(create NAME=acme-special DISPLAY_NAME="$special" DIR="$DIR3" 2>&1)"; t
   fi
 else
   fail "quotes a display name with #, : and \" so it round-trips exactly: $out"
+fi
+
+# --- make new-instance passes shell-special characters through untouched ---
+# The recipe once wrapped each variable in double quotes, so `"` ended the
+# string, a backtick ran a command and $5 expanded. Run the real target.
+DIR6="$TMP/margince-acme-make"
+special_make='Acme "EU" `x` $5'
+if out="$(make -s -C "$TPL" new-instance NAME=acme-make DISPLAY_NAME="$special_make" DIR="$DIR6" 2>&1)"; then
+  got="$(cli_get "$DIR6" display_name 2>&1)"
+  if [ "$got" = "$special_make" ]; then
+    ok "make new-instance passes a display name with \", \` and \$ through exactly"
+  else
+    fail "make new-instance passes a display name with \", \` and \$ through exactly: got $got"
+  fi
+else
+  fail "make new-instance passes a display name with \", \` and \$ through exactly: $out"
+fi
+DIR7="$TMP/margince-acme-apos"
+special_apos="Acme's Client"
+if out="$(make -s -C "$TPL" new-instance NAME=acme-apos DISPLAY_NAME="$special_apos" DIR="$DIR7" 2>&1)" \
+  && [ "$(cli_get "$DIR7" display_name 2>&1)" = "$special_apos" ]; then
+  ok "make new-instance passes a display name with a single quote through exactly"
+else
+  fail "make new-instance passes a display name with a single quote through exactly: $out"
 fi
 
 # --- refusals create nothing ---

@@ -233,9 +233,18 @@ ci: ## Everything check runs, plus the real-database and submodule lanes
 	@echo
 	@echo "ci: all lanes passed"
 
+## Every variable is passed single-quoted, from its unexpanded value: inside
+## double quotes a DISPLAY_NAME holding `"`, a backtick or `$` would be cut
+## short, run as a command, or expanded. Each `'` becomes '\'' (close, escaped
+## quote, reopen).
 new-instance: ## Create a client instance repository from this template (NAME=, DISPLAY_NAME=, VENDOR=, DIR=, PUSH=1 OWNER=)
-	@NAME="$(NAME)" DISPLAY_NAME="$(DISPLAY_NAME)" VENDOR="$(VENDOR)" DIR="$(DIR)" \
-		PUSH="$(PUSH)" OWNER="$(OWNER)" bash scripts/new-instance.sh
+	@NAME='$(subst ','\'',$(value NAME))' \
+		DISPLAY_NAME='$(subst ','\'',$(value DISPLAY_NAME))' \
+		VENDOR='$(subst ','\'',$(value VENDOR))' \
+		DIR='$(subst ','\'',$(value DIR))' \
+		PUSH='$(subst ','\'',$(value PUSH))' \
+		OWNER='$(subst ','\'',$(value OWNER))' \
+		bash scripts/new-instance.sh
 
 check-instance: ## instance.yaml is valid and names the tag core/ is at
 	@cd scripts/cli && GOWORK=off go run . check -file $(CURDIR)/instance.yaml -core $(CURDIR)/$(CORE)
