@@ -43,6 +43,10 @@ git -C "$TPL" remote add origin "$TMP/template-origin.git"
 TPL_SHA="$(git -C "$TPL" rev-parse HEAD)"
 
 create() { (cd "$TPL" && env "$@" bash scripts/new-instance.sh); }
+# cli_get <instance dir> <key> — one value from an instance's instance.yaml,
+# read through the same CLI the scripts use, so quoting/escaping in the file
+# is irrelevant to the assertion.
+cli_get() { (cd "$1/scripts/cli" && GOWORK=off go run . get -file "$1/instance.yaml" "$2"); }
 
 # --- a valid instance ---
 DIR="$TMP/margince-acme"
@@ -51,7 +55,7 @@ if [ "$(git -C "$DIR" rev-parse --abbrev-ref HEAD)" = "main" ]; then ok "the ins
 if [ "$(git -C "$DIR" remote get-url template)" = "$TMP/template-origin.git" ]; then ok "the template remote is the template's origin"; else fail "the template remote is the template's origin"; fi
 if git -C "$DIR" remote get-url origin >/dev/null 2>&1; then fail "has no origin before a push"; else ok "has no origin before a push"; fi
 if [ "$(tr -d '[:space:]' < "$DIR/.template-version")" = "$TPL_SHA" ]; then ok "records the template commit"; else fail "records the template commit"; fi
-if grep -qx 'flavor: acme/margince' "$DIR/instance.yaml" && grep -qx 'core: v0.0.2' "$DIR/instance.yaml" && grep -qx 'display_name: Acme' "$DIR/instance.yaml"; then ok "writes instance.yaml"; else fail "writes instance.yaml"; fi
+if grep -qx 'flavor: acme/margince' "$DIR/instance.yaml" && grep -qx 'core: v0.0.2' "$DIR/instance.yaml" && [ "$(cli_get "$DIR" display_name)" = "Acme" ]; then ok "writes instance.yaml"; else fail "writes instance.yaml"; fi
 if [ "$(git -C "$DIR/core" describe --tags --exact-match 2>/dev/null)" = "v0.0.2" ]; then ok "checks out core at the pinned tag"; else fail "checks out core at the pinned tag"; fi
 if [ -z "$(git -C "$DIR" status --porcelain)" ]; then ok "commits everything"; else fail "commits everything"; fi
 if bash "$DIR/scripts/check-template.sh" >/dev/null 2>&1; then ok "the new instance passes check-template"; else fail "the new instance passes check-template"; fi
@@ -61,6 +65,20 @@ if (cd "$DIR/scripts/cli" && GOWORK=off go run . check -file "$DIR/instance.yaml
 DIR2="$TMP/margince-acme-eu"
 create NAME=acme-eu DISPLAY_NAME="Acme EU" VENDOR=acme DIR="$DIR2" >/dev/null 2>&1 || true
 if grep -qx 'flavor: acme/margince' "$DIR2/instance.yaml" 2>/dev/null; then ok "VENDOR sets the flavor"; else fail "VENDOR sets the flavor"; fi
+
+# --- DISPLAY_NAME with YAML-special characters round-trips exactly ---
+DIR3="$TMP/margince-acme-special"
+special='Acme #1: Client "EU"'
+if out="$(create NAME=acme-special DISPLAY_NAME="$special" DIR="$DIR3" 2>&1)"; then
+  got="$(cli_get "$DIR3" display_name 2>&1)"
+  if [ "$got" = "$special" ]; then
+    ok "quotes a display name with #, : and \" so it round-trips exactly"
+  else
+    fail "quotes a display name with #, : and \" so it round-trips exactly: got $got"
+  fi
+else
+  fail "quotes a display name with #, : and \" so it round-trips exactly: $out"
+fi
 
 # --- refusals create nothing ---
 expect_refused() {
@@ -77,6 +95,25 @@ if (cd "$DIR" && NAME=other DISPLAY_NAME=O DIR="$TMP/x4" bash scripts/new-instan
   fail "refuses to run inside an instance"
 elif [ -e "$TMP/x4" ]; then fail "refuses to run inside an instance — it created a directory"
 else ok "refuses to run inside an instance"; fi
+
+# --- a half-created instance is removed when core cannot be fetched ---
+# A template whose core submodule points at a path that does not exist, so
+# `git submodule update --init` fails partway through (the same shape as core
+# being unreachable offline), after the clone and checkout already created
+# $dir on disk.
+TPL_BROKEN="$TMP/template-broken"
+cp -R "$TPL" "$TPL_BROKEN"
+git -C "$TPL_BROKEN" config -f .gitmodules submodule.core.url "$TMP/does-not-exist"
+git -C "$TPL_BROKEN" add .gitmodules
+git -C "$TPL_BROKEN" commit -q -m "point core at an unreachable url"
+DIR4="$TMP/margince-broken"
+if (cd "$TPL_BROKEN" && env NAME=broken DISPLAY_NAME=Broken DIR="$DIR4" bash scripts/new-instance.sh >/dev/null 2>&1); then
+  fail "removes a half-created instance when core cannot be fetched — it succeeded"
+elif [ -e "$DIR4" ]; then
+  fail "removes a half-created instance when core cannot be fetched — $DIR4 remains"
+else
+  ok "removes a half-created instance when core cannot be fetched"
+fi
 
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'

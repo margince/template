@@ -35,9 +35,28 @@ template_url="$(git remote get-url origin 2>/dev/null || printf '%s' "$ROOT")"
 
 # Validate the new instance.yaml with the same checker make check uses, before
 # anything exists on disk.
+#
+# display_name is written as a double-quoted YAML scalar: an unquoted value
+# starting a word with `#` or containing `: ` is either read back wrong (YAML
+# treats ` #` as a comment, so "Acme #1 Client" silently becomes "Acme") or
+# refused outright ("Acme: Special" does not parse as a plain scalar). Escape
+# backslash first, then the double quote, so both are safe inside the quotes.
+esc_display="${display//\\/\\\\}"
+esc_display="${esc_display//\"/\\\"}"
 candidate="$(mktemp)"
-trap 'rm -f "$candidate"' EXIT
-printf 'name: %s\ndisplay_name: %s\ncore: %s\nflavor: %s/margince\n' "$name" "$display" "$core_tag" "$vendor" > "$candidate"
+success=""
+cleanup() {
+  rm -f "$candidate"
+  # A partially cloned/checked-out instance is worse than none: it looks like
+  # a repository but is missing instance.yaml, .template-version or the
+  # commit that makes check-template pass. Remove it unless we reached the
+  # final commit — success is set only there, after the instance is whole.
+  if [ -z "$success" ] && [ -n "${dir:-}" ] && [ -e "$dir" ]; then
+    rm -rf "$dir"
+  fi
+}
+trap cleanup EXIT
+printf 'name: %s\ndisplay_name: "%s"\ncore: %s\nflavor: %s/margince\n' "$name" "$esc_display" "$core_tag" "$vendor" > "$candidate"
 (cd "$ROOT/scripts/cli" && GOWORK=off go run . check -file "$candidate" -core "$CORE") \
   || die "new-instance: the instance.yaml above would be invalid; fix NAME, DISPLAY_NAME or VENDOR"
 
@@ -61,6 +80,7 @@ EOF
 
 git -C "$dir" add instance.yaml .template-version README.md
 git -C "$dir" commit --quiet -m "chore: create instance $name from margince-template ${template_sha:0:12}"
+success=1
 echo "new-instance: created $dir (flavor $vendor/margince, core $core_tag)"
 
 if [ "${PUSH:-}" = "1" ]; then
