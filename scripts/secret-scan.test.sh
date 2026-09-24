@@ -2,14 +2,16 @@
 # secret-scan.test.sh — prove the secret gate still CATCHES.
 #
 # A scan that finds nothing looks identical whether the tree is clean or the
-# policy has been widened until it excuses everything. This is what tells the two
-# apart: for the scoped allowlist in .gitleaks.toml, plant a token of the rule it
-# targets, in a file its `paths` cover, on a line its `regexes` do NOT match, and
-# require the scan to FAIL.
+# policy has been widened until it excuses everything. This test tells the two
+# apart: it plants tokens into a copy of the tree and requires the scan to fail
+# where the policy does not excuse them.
 #
 # Planted into a COPY of the tree, never the real one. The scan itself reads a
 # `git archive HEAD` export, so a plant in the working tree would be invisible to
-# it anyway — the copy is exported, planted into, and scanned directly.
+# it anyway. The copy is exported, planted into, and scanned directly.
+#
+# The template ships with no units, so every plant goes into a synthetic file
+# under extensions/.
 #
 # Usage: bash scripts/secret-scan.test.sh
 set -euo pipefail
@@ -40,10 +42,16 @@ scan() {
   "$GITLEAKS" dir "$dir" --config "$ROOT/.gitleaks.toml" --redact --no-banner >/dev/null 2>&1
 }
 
-# A `generic-api-key` token. Kept in one place so a rule change is one edit, and
-# assembled rather than written whole so this file does not itself carry a
-# 32-hex-looking literal on a line the allowlist regex might one day cover.
-PLANTED_TOKEN="apiKey = \"$(printf 'a1b2c3d4e5f6a7b8' )$(printf 'c9d0e1f2a3b4c5d6')\""
+# plant <tree> <relative path> <line> — append a line to a file in the copy.
+plant() {
+  local file="$1/$2"
+  mkdir -p "$(dirname "$file")"
+  printf '\n// planted by scripts/secret-scan.test.sh\n%s\n' "$3" >> "$file"
+}
+
+# A `generic-api-key` token, assembled rather than written whole so this file
+# does not itself carry a 32-hex-looking literal.
+PLANTED_TOKEN="var planted = apiKey = \"$(printf 'a1b2c3d4e5f6a7b8')$(printf 'c9d0e1f2a3b4c5d6')\""
 
 # --- the tree as committed ---
 
@@ -52,48 +60,34 @@ if scan "$t"; then ok "the committed tree scans clean"; else
   fail "the committed tree scans clean — the gate is failing before any plant, so nothing below means anything"
 fi
 
-# --- THE CASE THIS FILE EXISTS FOR ---
-#
-# zalocrypto.go is excused for generic-api-key on lines matching the published
-# zcid constant, and for nothing else. A token on any OTHER line of that file
-# must still be caught. If this passes, the allowlist has become a file
-# exclusion: narrow the allowlist, never weaken this case.
-t="$TMP/scoped"; export_tree "$t"
-target="$t/extensions/zalo-personal/zalocrypto.go"
-[ -f "$target" ] || fail "extensions/zalo-personal/zalocrypto.go is not in the export — this case is scanning nothing"
-printf '\n// planted by scripts/secret-scan.test.sh\nvar planted = %s\n' "$PLANTED_TOKEN" >> "$target"
+# --- a token in unit source is caught ---
+
+t="$TMP/source"; export_tree "$t"
+plant "$t" "extensions/acme/client.go" "$PLANTED_TOKEN"
 if scan "$t"; then
-  fail "a planted token on an UNEXCUSED line of zalocrypto.go was not caught — the allowlist covers the whole file"
+  fail "a planted token in extensions/acme/client.go was not caught — the policy excuses unit source"
 else
-  ok "a planted token elsewhere in zalocrypto.go is still caught"
+  ok "a planted token in unit source is caught"
 fi
 
-# The other half of "scoped": the excused literal itself must stay excused, or
-# the exemption is not doing its job and the real file would fail the gate.
-t="$TMP/excused"; export_tree "$t"
-if scan "$t"; then ok "the published zcid constant stays excused"; else
-  fail "the published zcid constant is no longer excused — the allowlist stopped matching it"
+# --- the test-fixture exemption covers tests and nothing else ---
+
+t="$TMP/fixture"; export_tree "$t"
+plant "$t" "extensions/acme/client_test.go" "$PLANTED_TOKEN"
+if scan "$t"; then ok "a fabricated token in a _test.go fixture is excused"; else
+  fail "a token in a _test.go fixture was caught — the test-fixture allowlist stopped matching"
 fi
 
-# --- the allowlist must be bound to its RULE, not global ---
-#
-# Without targetRules an allowlist is global: gitleaks skips the file before it
-# reads a line, so a token of a DIFFERENT rule would pass too. Plant one.
-t="$TMP/otherrule"; export_tree "$t"
-target="$t/extensions/zalo-personal/zalocrypto.go"
-# ghp_ plus exactly 36 alphanumerics — the rule's own shape. A shorter string
-# is not a github-pat and would make this case pass by being unmatched rather
-# than by being allowlisted, which is the failure mode it exists to detect.
-printf '\n// planted by scripts/secret-scan.test.sh\nvar plantedPAT = "%s"\n' \
-  "ghp_$(printf '0123456789abcdefghij')$(printf '0123456789abcdef')" >> "$target"
+t="$TMP/near-fixture"; export_tree "$t"
+plant "$t" "extensions/acme/client_test_helpers.go" "$PLANTED_TOKEN"
 if scan "$t"; then
-  fail "a github-pat token in zalocrypto.go was not caught — the allowlist is global rather than bound to generic-api-key"
+  fail "a token in client_test_helpers.go was not caught — the test-fixture allowlist matches more than _test.go"
 else
-  ok "a token of a rule the allowlist does not target is still caught"
+  ok "a file that only contains _test in its name is still scanned"
 fi
 
 if [ "$FAILURES" -gt 0 ]; then
-  printf '\n%s case(s) failed — the exemption is wider than intended. Narrow .gitleaks.toml; do not weaken this test.\n' "$FAILURES" >&2
+  printf '\n%s case(s) failed — the policy is wider than intended. Narrow .gitleaks.toml; do not weaken this test.\n' "$FAILURES" >&2
   exit 1
 fi
 printf '\nall cases passed — the gate still catches\n'
