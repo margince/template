@@ -18,8 +18,8 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 .PHONY: help init config config-check config-sync hooks \
 	stage unstage compose watch new-unit u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
-	check check-composition build test test-extensions arch ext-imports \
-	check-ext-migrations check-manifests check-docs drift test-scripts secret-scan test-secret-scan \
+	check check-instance check-composition build test test-extensions arch ext-imports \
+	check-ext-migrations check-manifests check-docs drift test-scripts test-cli secret-scan test-secret-scan \
 	fe-install fe-test fe-test-ext fe-typecheck-composed fe-ds-gates fe-lint \
 	dev dev-fresh dev-stop dev-logs seed-dev seed-demo verify-demo run \
 	infra-up infra-down infra-logs infra-reset db-up migrate \
@@ -192,7 +192,7 @@ u-check: u ## One unit, plus the screen suites and the composed typecheck (NAME=
 ## that lane can never pass with ours present. Pass 1 therefore runs upstream's
 ## gate on a PRISTINE checkout (delegated wholesale, so no copy of its gate list
 ## lives here to go stale); pass 2 runs the gates that can see our units.
-check: toolcheck test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
+check: check-instance toolcheck test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
 	@echo "== pass 1: upstream's own gate, units unstaged"
 	@$(MAKE) unstage
 	@$(MAKE) -C $(CORE) check
@@ -232,6 +232,12 @@ ci: ## Everything check runs, plus the real-database and submodule lanes
 	@bash scripts/check-core-clean.sh
 	@echo
 	@echo "ci: all lanes passed"
+
+check-instance: ## instance.yaml is valid and names the tag core/ is at
+	@cd scripts/cli && GOWORK=off go run . check -file $(CURDIR)/instance.yaml -core $(CURDIR)/$(CORE)
+
+test-cli: ## The template CLI's own tests
+	@cd scripts/cli && GOWORK=off go vet ./... && GOWORK=off go test ./...
 
 ## The composition is generated, so "it compiles" is not evidence on its own —
 ## this is the gate that proves the tree can be rebuilt.
@@ -332,6 +338,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/desktop-kit.test.sh
 	@bash scripts/workflow-wiring.test.sh
 	@bash scripts/desktop-arch.test.sh
+	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores
 ## .gitignore, and this checkout holds core/ plus staged copies.

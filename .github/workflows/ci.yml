@@ -138,6 +138,9 @@ jobs:
       - name: Documented make targets exist
         run: make check-docs
 
+      - name: instance.yaml is valid
+        run: make check-instance
+
       ## The staging lane's own tests. Synthetic trees, no submodule, ~1s — and
       ## the gate most likely to catch a regression in the scripts every other
       ## step here depends on.
