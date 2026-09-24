@@ -192,7 +192,7 @@ u-check: u ## One unit, plus the screen suites and the composed typecheck (NAME=
 ## that lane can never pass with ours present. Pass 1 therefore runs upstream's
 ## gate on a PRISTINE checkout (delegated wholesale, so no copy of its gate list
 ## lives here to go stale); pass 2 runs the gates that can see our units.
-check: check-instance toolcheck test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
+check: toolcheck check-instance test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
 	@echo "== pass 1: upstream's own gate, units unstaged"
 	@$(MAKE) unstage
 	@$(MAKE) -C $(CORE) check

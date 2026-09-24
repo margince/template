@@ -43,6 +43,13 @@ jobs:
           go-version-file: core/backend/go.mod
           cache-dependency-path: core/backend/go.sum
 
+      ## The first gate step, right after the Go setup it needs and before the
+      ## node/pnpm setup and the build steps below: a bad instance.yaml fails
+      ## in seconds and says nothing about the composed tree, so nothing else
+      ## here should have to run first to find that out.
+      - name: instance.yaml is valid
+        run: make check-instance
+
       ## Node and pnpm, because `make lint` runs biome over extensions/ and the
       ## composer resolves a pnpm workspace. The composed frontend SUITES are not
       ## here — they moved to full-check.yml — but the toolchain is still needed.
@@ -137,9 +144,6 @@ jobs:
 
       - name: Documented make targets exist
         run: make check-docs
-
-      - name: instance.yaml is valid
-        run: make check-instance
 
       ## The staging lane's own tests. Synthetic trees, no submodule, ~1s — and
       ## the gate most likely to catch a regression in the scripts every other

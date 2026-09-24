@@ -39,6 +39,13 @@ jobs:
           go-version-file: core/backend/go.mod
           cache-dependency-path: core/backend/go.sum
 
+      ## The first gate step, right after the Go setup it needs and before the
+      ## node/pnpm setup and the build steps below: a bad instance.yaml fails
+      ## in seconds and says nothing about the composed tree, so nothing else
+      ## here should have to run first to find that out.
+      - name: instance.yaml is valid
+        run: make check-instance
+
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 11
