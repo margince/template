@@ -39,5 +39,25 @@ else
   fail "refuses a redefined check target and names it: $out"
 fi
 
+repo="$(fresh_repo)"
+printf 'acme-lab:\n    echo lab\n' > "$repo/instance.mk"
+if out="$(bash "$repo/scripts/check-instance-mk.sh" 2>&1)"; then
+  fail "refuses a missing-tab recipe line"
+elif printf '%s' "$out" | grep -qi "separator"; then
+  ok "refuses a missing-tab recipe line"
+else
+  fail "refuses a missing-tab recipe line: $out"
+fi
+
+repo="$(fresh_repo)"
+printf 'check::\n\t@echo x\n' > "$repo/instance.mk"
+if out="$(bash "$repo/scripts/check-instance-mk.sh" 2>&1)"; then
+  fail "refuses a check:: colon-type conflict"
+elif printf '%s' "$out" | grep -q "check"; then
+  ok "refuses a check:: colon-type conflict"
+else
+  fail "refuses a check:: colon-type conflict: $out"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'
