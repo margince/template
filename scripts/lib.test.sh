@@ -182,6 +182,13 @@ printf 'edited\n' > "$repo/tracked.txt"
 
 # --- rewrite_staged_paths ---
 
+#
+# "Ours" is whatever directory exists under $SRC_EXT. The template ships with no
+# units, so these cases point SRC_EXT at synthetic units and restore it after.
+SAVED_SRC_EXT="$SRC_EXT"
+SRC_EXT="$TMP/rewrite-src-ext"
+mkdir -p "$SRC_EXT/acme-sync" "$SRC_EXT/acme-portal"
+
 expect_rewrite() {
   local label="$1" input="$2" want="$3" got
   got="$(printf '%s\n' "$input" | rewrite_staged_paths)"
@@ -191,12 +198,12 @@ expect_rewrite() {
 }
 
 expect_rewrite "rewrites an absolute staged path for one of our units" \
-  "$ROOT/core/extensions/zalo-oa/send.go:41: bad import" \
-  "$ROOT/extensions/zalo-oa/send.go:41: bad import"
+  "$ROOT/core/extensions/acme-sync/send.go:41: bad import" \
+  "$ROOT/extensions/acme-sync/send.go:41: bad import"
 
 expect_rewrite "rewrites an absolute staged frontend path" \
-  "  --> $ROOT/core/extensions/dispact-connector/frontend/screen.tsx" \
-  "  --> $ROOT/extensions/dispact-connector/frontend/screen.tsx"
+  "  --> $ROOT/core/extensions/acme-portal/frontend/screen.tsx" \
+  "  --> $ROOT/extensions/acme-portal/frontend/screen.tsx"
 
 # core's OWN units are not ours. Redirecting one would send a developer looking
 # for a file this repository does not have.
@@ -212,14 +219,16 @@ expect_rewrite "leaves unrelated core paths alone" \
 # root, so it must be left exactly as it is. This is the case whose absence let
 # the first draft of this filter pass while doing nothing.
 expect_rewrite "leaves a core-relative path untouched" \
-  "extensions/zalo-oa/send.go:41: bad import" \
-  "extensions/zalo-oa/send.go:41: bad import"
+  "extensions/acme-sync/send.go:41: bad import" \
+  "extensions/acme-sync/send.go:41: bad import"
 
 # A path with a SPACE in it, which is what the args array rather than an
 # unquoted expansion buys.
 expect_rewrite "survives a path containing a space" \
-  "$ROOT/core/extensions/zalo-oa/a file.go:1: x" \
-  "$ROOT/extensions/zalo-oa/a file.go:1: x"
+  "$ROOT/core/extensions/acme-sync/a file.go:1: x" \
+  "$ROOT/extensions/acme-sync/a file.go:1: x"
+
+SRC_EXT="$SAVED_SRC_EXT"
 
 # --- rewrite_file_in_place ---
 #
