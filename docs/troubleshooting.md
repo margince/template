@@ -302,7 +302,7 @@ git checkout HEAD -- core        # if the bad pointer is already committed
 git commit core -m "core: restore the pinned commit"
 ```
 
-If your seam is merged upstream, bump to it properly instead: `make update-core`.
+If your seam is merged upstream, bump to it properly instead: `make update-core REF=<tag>`.
 
 ### `core-check-pin: SKIPPED — cannot resolve origin/main or the pinned object.`
 
@@ -313,9 +313,11 @@ clone missing the object — so it says so rather than passing silently
 
 ### `make update-core` refuses to run
 
-It protects three states: `core/` on a contribution branch, uncommitted work, or
-commits upstream does not have. `make core-status` says which one applies. See
-[contributing-to-core.md](contributing-to-core.md).
+It protects three states — `core/` on a contribution branch, uncommitted work,
+or commits upstream does not have — and it also refuses a `REF` that is not a
+core release tag: instances pin releases only. `make core-status` says which
+of the first three applies; `git -C core tag --list 'v*'` lists the release
+tags. See [contributing-to-core.md](contributing-to-core.md).
 
 ## The desktop build
 
@@ -324,7 +326,7 @@ commits upstream does not have. `make core-status` says which one applies. See
 Fixed upstream in core `50f57116`, and gone from this repo with it: core's
 `build-app.sh` installs the composed pnpm workspace itself now and refuses the
 build if the composer did not produce one. If you see this on an older pin, the
-cause is that missing install — `make update-core`, or use `make desktop`, which
+cause is that missing install — `make update-core REF=<tag>`, or use `make desktop`, which
 carried the install itself until the pin moved.
 
 ### `the installation folder is too deeply nested: the database socket path would be N bytes`
@@ -513,7 +515,8 @@ server mint project keys and refuse a caller-supplied one, and
 `backend/tools/seed-demo/surfaces.go` still sends `key`. `make seed-demo` fails
 the same way on the dev stack at this pin. It stops the run, so the phases after
 `projects` do not happen. The fix belongs upstream — `make core-branch`,
-`make core-pr` — or in a later `make update-core`.
+`make core-pr` — or in a later `make update-core REF=<tag>`, once a release
+carries it.
 
 ### A database client cannot connect to the desktop app
 

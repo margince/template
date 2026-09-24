@@ -336,6 +336,7 @@ fmt: ## Format extensions/ in place (gofmt -w, biome safe fixes)
 test-scripts: ## The staging scripts' own tests
 	@bash scripts/lib.test.sh
 	@bash scripts/new-unit.test.sh
+	@bash scripts/update-core.test.sh
 	@bash scripts/toolcheck.test.sh
 	@bash scripts/core-contrib.test.sh
 	@bash scripts/preflight.test.sh
@@ -728,25 +729,14 @@ core-check: ## Upstream's merge gate over core/, units unstaged
 	@$(MAKE) -C $(CORE) check
 
 ## The bump is a reviewable commit here: it is the only way core/ ever changes,
-## and a composed build must pass before it lands. config-check runs after,
-## because a new core often means new settings in its examples.
-##
-## GUARDED since the contribution lanes landed. This used to run `git checkout
-## -q origin/main` unconditionally, which detaches over a contribution branch
-## and strands detached commits in the reflog without a word. REF= pins the
-## move to a reviewed tag or sha instead of always taking the tip of main.
-update-core: ## Fast-forward core/ to upstream (REF=<sha|tag|branch> to pin)
-	@bash scripts/core-contrib.sh guard-update
-	@# guard-update has already fetched; refetching here would be a second
-	@# network round trip for a ref the guard just judged against.
-	@# --detach because REF= accepts a BRANCH name too: a plain checkout of one
-	@# would leave core/ on an attached local branch, after which every later
-	@# update-core refuses ("on branch main, moving would abandon it") — the
-	@# guard firing on a state this target created.
-	git -C $(CORE) checkout -q --detach $(if $(REF),$(REF),origin/main)
-	@echo "core/ moved to $$(git -C $(CORE) rev-parse --short HEAD)"
+## and a composed build must pass before it lands. config-check and
+## check-instance run after: a new core often needs new settings, and
+## instance.yaml must name the tag core/ is now at.
+update-core: ## Move core/ to a core release tag and record it in instance.yaml (REF=<tag>)
+	@bash scripts/update-core.sh "$(REF)"
 	@$(MAKE) config
 	@$(MAKE) config-check
+	@$(MAKE) check-instance
 	@echo "run 'make check' before committing the bump"
 
 clean: unstage ## Unstage and drop upstream's build output

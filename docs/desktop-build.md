@@ -590,7 +590,8 @@ above and both contributed from here (`make core-branch`, `make core-pr`):
   the way to the same local disk. **The desktop lanes here assume it**: it is
   committed and pushed on `core/`'s `feat/blobstore-filesystem-provider` branch
   and not yet merged, so a bundle built from the pinned core answers 501 on every
-  attachment until `make update-core` picks it up.
+  attachment until a core release tag includes it and `make update-core
+  REF=<tag>` picks it up.
 - **The demo seeder sends a read-only `key` to `POST /v1/projects`**, so every
   seed stops at the projects phase — `make seed-demo` on the dev stack too, not
   only the desktop lane. Core made the server mint project keys (`1da94847`) and
