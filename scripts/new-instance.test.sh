@@ -61,6 +61,39 @@ if [ -z "$(git -C "$DIR" status --porcelain)" ]; then ok "commits everything"; e
 if bash "$DIR/scripts/check-template.sh" >/dev/null 2>&1; then ok "the new instance passes check-template"; else fail "the new instance passes check-template"; fi
 if (cd "$DIR/scripts/cli" && GOWORK=off go run . check -file "$DIR/instance.yaml" -core "$DIR/core" >/dev/null 2>&1); then ok "the new instance passes check-instance"; else fail "the new instance passes check-instance"; fi
 
+# --- core is dissociated from the template's checkout ---
+# Without --dissociate, core/'s objects depend on the template's own core
+# checkout via objects/info/alternates, so the instance's core/ silently stops
+# working (or worse, corrupts) if the template checkout is ever removed.
+git_dir="$(cd "$DIR/core" && git rev-parse --git-dir)"
+case "$git_dir" in
+  /*) alternates="$git_dir/objects/info/alternates" ;;
+  *)  alternates="$DIR/core/$git_dir/objects/info/alternates" ;;
+esac
+if [ -e "$alternates" ]; then fail "core is dissociated from the template checkout"; else ok "core is dissociated from the template checkout"; fi
+
+# --- a HEAD that is not on origin/main is flagged, not refused ---
+# An unrelated commit stands in for origin/main, so HEAD is not its ancestor.
+unrelated="$(git -C "$TPL" commit-tree -m unrelated "$(git -C "$TPL" rev-parse 'HEAD^{tree}')")"
+git -C "$TPL" update-ref refs/remotes/origin/main "$unrelated"
+DIR5="$TMP/margince-offmain"
+if out="$(create NAME=offmain DISPLAY_NAME=Off DIR="$DIR5" 2>&1)"; then
+  if printf '%s\n' "$out" | grep -q "new-instance: HEAD (.*) is not on origin/main; the instance will contain unmerged template commits"; then
+    ok "warns when HEAD is not on origin/main"
+  else
+    fail "warns when HEAD is not on origin/main: $out"
+  fi
+else
+  fail "warns when HEAD is not on origin/main — it refused: $out"
+fi
+git -C "$TPL" update-ref refs/remotes/origin/main "$TPL_SHA"
+if out="$(create NAME=onmain DISPLAY_NAME=On DIR="$TMP/margince-onmain" 2>&1)" && ! printf '%s\n' "$out" | grep -q 'is not on origin/main'; then
+  ok "does not warn when HEAD is on origin/main"
+else
+  fail "does not warn when HEAD is on origin/main: $out"
+fi
+git -C "$TPL" update-ref -d refs/remotes/origin/main
+
 # --- VENDOR sets the flavor ---
 DIR2="$TMP/margince-acme-eu"
 create NAME=acme-eu DISPLAY_NAME="Acme EU" VENDOR=acme DIR="$DIR2" >/dev/null 2>&1 || true

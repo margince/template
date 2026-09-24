@@ -40,6 +40,14 @@ core_tag="$(instance_get core)"
 template_sha="$(git rev-parse HEAD)"
 template_url="$(git remote get-url origin 2>/dev/null || printf '%s' "$ROOT")"
 
+# Informational, not a refusal: an instance created off a branch is still a
+# usable instance, but it will carry commits origin/main does not have, which
+# is worth flagging before it is baked into a new repository's history.
+if git rev-parse -q --verify refs/remotes/origin/main >/dev/null \
+  && ! git merge-base --is-ancestor HEAD origin/main; then
+  echo "new-instance: HEAD ($(git rev-parse --short HEAD)) is not on origin/main; the instance will contain unmerged template commits"
+fi
+
 # Validate the new instance.yaml with the same checker make check uses, before
 # anything exists on disk.
 #
@@ -71,7 +79,7 @@ git clone --quiet --no-checkout "$ROOT" "$dir"
 git -C "$dir" remote remove origin
 git -C "$dir" remote add template "$template_url"
 git -C "$dir" checkout --quiet -B main "$template_sha"
-git -C "$dir" submodule update --quiet --init --reference "$CORE" core
+git -C "$dir" submodule update --quiet --init --reference "$CORE" --dissociate core
 
 cp "$candidate" "$dir/instance.yaml"
 printf '%s\n' "$template_sha" > "$dir/.template-version"
