@@ -130,10 +130,24 @@ margince-template/                   (client forks use the same structure)
 
 ### 6.1 Drift Check
 
-The file `.template-version` records the template commit that was last merged
-into the instance. The command `make check-template` fails if any
-template-owned path differs from that commit. `make check` includes
-`make check-template`.
+`.template-owned` lists the template-owned paths, one git pathspec per line.
+`make check-template` reads this list from the commit named in
+`.template-version`, not from the instance's working tree, so an instance
+cannot remove a path from the list by editing it locally.
+
+`.template-version` holds one commit id: the template commit that was last
+merged into the instance. `make check-template` fails if any
+`.template-owned` path differs from that commit — an edit, a removal, or an
+untracked or newly added file inside an owned directory all count as drift.
+`make check` includes `make check-template`.
+
+The template itself carries no `.template-version`: it is the source of
+template-owned paths, so there is nothing to compare it with, and
+`make check-template` reports this and exits 0.
+
+`make template-sync` merges the template's `main` into the instance and
+updates `.template-version` to the merged commit, which is how an instance
+picks up a template-owned change before `make check-template` next runs.
 
 ### 6.2 `instance.yaml`
 
@@ -179,9 +193,12 @@ core: v0.0.2
 flavor: margince/margince
 ```
 
-The image namespace is derived from `flavor`: `<registry>/<vendor>/margince-api`,
-`-web`, and `-worker`. The registry host is a template setting, not an
-instance setting.
+The image namespace is derived from `flavor`: `<registry>/<flavor>` when a
+registry is supplied, `<flavor>` otherwise. Core's `docker-bake.hcl` appends
+`/api`, `/web`, and `/worker` to that namespace, so an instance's images are
+`<registry>/<flavor>/api`, `/web`, and `/worker` — for example
+`myregistry.example.com/acme/margince/api`. The registry host is supplied at
+build time (`REGISTRY=<host> make package`), not stored in `instance.yaml`.
 
 ### 6.3 `instance.mk`
 
@@ -266,6 +283,7 @@ against the template itself to verify the template.
 | Command | Function | Status |
 |---|---|---|
 | `make install` | Verifies required tools, checks out core, installs dependencies, git hooks, and configuration. | Existing |
+| `make new-instance NAME=<n> DISPLAY_NAME=<d>` | Creates a client instance repository from the template (`VENDOR=`, `DIR=`, `PUSH=1 OWNER=`). | Existing |
 | `make dev` | Starts infrastructure services and runs `api`, `worker`, and `web` with the instance units composed. | Existing |
 | `make new-unit NAME=<n>` | Creates an extension in `extensions/<n>` from `scripts/unit-skeleton/`. | Existing, changed |
 | `make check-instance` | Validates `instance.yaml` (Section 6.2). | New |
@@ -275,10 +293,11 @@ against the template itself to verify the template.
 | `make package VERSION=<v>` | Builds the `api`, `web`, and `worker` images with the instance units. | Existing, changed |
 | `make desktop VERSION=<v>` | Builds the desktop bundle with the instance units. | Existing, changed |
 | `make trial` | Runs `make desktop` and adds configuration, dataset, and a trial license. See Section 10.2. | New |
-| `make update-core REF=<tag>` | Updates the core submodule. Changed to accept tags only and to update `instance.yaml`. | Existing, changed |
+| `make update-core REF=<tag>` | Moves the core submodule to a release tag and records the tag in `instance.yaml`. | Existing, changed |
 | `make release VERSION=<v>` | Verifies the working tree and `make check`, then pushes the tag `v<v>`. | New |
 | `make deploy ENV=<env> VERSION=<v>` | Deploys the specified images to the environment defined in `deploy/<env>/`. | New |
-| `make check-template` | Drift check. | New |
+| `make template-sync` | Merges the template's `main` into the instance and records the merged commit in `.template-version`. | Existing |
+| `make check-template` | Drift check: template-owned paths match `.template-version`, and `instance.mk` only adds targets. | Existing |
 
 ## 10. Workflows
 
@@ -332,7 +351,7 @@ builds the macOS and Windows desktop bundles. The template adds the following
 jobs:
 
 1. **Images:** runs `make package` with the flavor namespace and `VERSION=<v>`.
-   This produces `<registry>/<vendor>/margince-api`, `-web`, and `-worker` with
+   This produces `<registry>/<flavor>/api`, `/web`, and `/worker` with
    the candidate tag `cand-<commit>`, for multiple architectures. Each image has an OCI label with the core version.
 2. **Smoke test:** starts the three images with a temporary PostgreSQL and
    Redis instance and verifies that they start and respond.
