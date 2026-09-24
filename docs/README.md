@@ -11,7 +11,7 @@
 | Directory | Content |
 |---|---|
 | `docs/superpowers/specs/` | Design specifications. One file per design, named `YYYY-MM-DD-<topic>-design.md`. |
-| `docs/superpowers/plans/` | Implementation plans. One file per sub-project, named `YYYY-MM-DD-<topic>.md`. |
+| `docs/superpowers/plans/` | Implementation plans and the [issue breakdown](superpowers/plans/2026-09-24-issue-breakdown.md). |
 | `docs/client/` | Instance-owned. Client-specific documentation in a client fork. Empty in the template. |
 
 ## Planned guides

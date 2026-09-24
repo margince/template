@@ -1,0 +1,71 @@
+# Issue Breakdown
+
+Source: [design specification](../specs/2026-09-24-client-instance-template-design.md).
+
+**Target:** a new Margince instance can be created, developed, trialled,
+released, and deployed using only the template. This is milestone **M1**.
+Milestone **M2** migrates the existing instances and retires old repositories.
+
+Each issue lists the repository, the scope, the completion criterion, and the
+dependencies.
+
+## M1 — Ready for a new instance
+
+### margince/margince (core)
+
+| ID | Title | Scope | Done when | Depends on |
+|---|---|---|---|---|
+| C1 | One version scheme | Choose `v0.0.x` or `YYYY.edition`. Make `release-tag.yml` and `docker-bake.hcl` use the same value. | Tag `<v>` produces images stamped with version `<v>`. | — |
+
+### gradionhq/margince-constellation
+
+| ID | Title | Scope | Done when | Depends on |
+|---|---|---|---|---|
+| K1 | Trial license | Add a trial license type (validity period, trial marker) and an issuance endpoint that accepts an operator credential. | An operator credential can obtain a trial JWT for a product. Core accepts it in production mode. | — |
+| K2 | Instance registry access | Define the registry namespace for instance images. Grant push to the publisher identity and pull to licensed customers per product. | An instance CI can push `<ns>/<name>-api`. A customer license can pull it. | — |
+| K3 | Close PR #421 | Close the PR. List the Go commands to reuse in T7 (`notes`, `cleanup`, `promote`). | PR closed with a reference to T7. | — |
+
+### gradionhq/margince-template
+
+| ID | Title | Scope | Done when | Depends on |
+|---|---|---|---|---|
+| T1 | Import tooling | Copy `scripts/`, `Makefile`, `.github/`, `.githooks/`, `config/`, and supporting files from `margince-automation-world`. Take `lint.sh` from `margince-gradion`. Remove all extensions and `zalo-lab`. Record source commits in the commit message. | `make install && make check` pass with no extensions. | — |
+| T2 | `instance.yaml` and CLI | Add `instance.yaml` and `scripts/cli` (Go) to read and validate it. Add validation to `make check`. | `make check` fails on an invalid `instance.yaml`. | T1 |
+| T3 | Generalize scripts | `package.sh` reads name and registry from `instance.yaml`. `new-unit.sh` uses `scripts/unit-skeleton/`. `desktop.sh` and `build-info.sh` use `display_name`. Update tests. | No script contains "gradion" or "automation-world". `make test-scripts` passes. | T2 |
+| T4 | `instance.mk` | Add `-include instance.mk` and a check that it does not redefine template targets. | A redefined target fails `make check`. | T1 |
+| T5 | Core pin by tag | `make update-core` accepts tags only and updates `instance.yaml`. `make check` verifies the submodule matches `instance.yaml`. | A branch ref is rejected. A mismatch fails `make check`. | T2, C1 |
+| T6 | Drift check | Add `.template-version` and `make check-template`. | Editing a template-owned file fails `make check`. | T1 |
+| T7 | Release | Add `make release`. Extend `release.yml` with image build (candidate tag), smoke test, and publish. Port `notes` and `cleanup` into `scripts/cli`. | Tag `v<v>` publishes three role images and release notes to the Constellation registry. | T3, C1, K2, K3 |
+| T8 | Trial | Add `make trial`: desktop build, production config, dataset, trial license from `scripts/trial-license.sh`. | `make trial` produces a bundle that starts in production mode on macOS. | T3, K1 |
+| T9 | Deploy contract and `hook` adapter | Add `make deploy`, `deploy.yml`, and the four steps (`preflight`, `apply`, `verify`, `rollback`) with the `hook` adapter. | A test hook deployment runs. A failing `verify` triggers `rollback`. | T2 |
+| T10 | Template CI | Run the lifecycle in CI on the empty template and on a test instance with one unit: `install`, `check`, `trial` (build only), `release` (dry run), `deploy` (test hook). | CI passes on both. | T1–T9 |
+| T11 | New instance bootstrap | Add `scripts/new-instance.sh`: create the instance repository, add the `template` remote, write `instance.yaml`, push. (GitHub does not allow a fork into the same organization, so the instance is a new repository with a `template` remote.) | One command creates a new instance repository that passes `make check`. | T2, T6 |
+| T12 | Guides | Write the guides listed in `docs/README.md`. | Each guide exists and `check-docs` passes. | T1–T11 |
+
+**M1 is complete** when a new instance created with T11 runs `make dev`,
+`make trial`, `make release`, and `make deploy` successfully.
+
+## M2 — Migrate and retire
+
+| ID | Repository | Title | Scope | Done when | Depends on |
+|---|---|---|---|---|---|
+| D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging. | T9 |
+| I1 | margince-automation-world | Migrate | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml`. | `make check` and `make check-template` pass. | M1 |
+| I2 | margince-gradion | Migrate | Merge the template. Move `margince-d13-deploy` content into `deploy/`. | Staging deploys with the `d13` adapter. | M1, D1 |
+| I3 | incap | Migrate | Merge the template. Add `instance.yaml`. | `make check` passes. | M1 |
+| I4 | afs | Migrate | Merge the template. Add `instance.yaml`. | `make check` passes. | M1 |
+| R1 | margince-release | Archive | Archive the repository. | Archived. | T7 |
+| R2 | margince-d13-deploy | Archive | Archive the repository. | Archived. | I2 |
+| R3 | margince-principles | Update references | Replace references to `margince-release` with `margince-template` and `margince-constellation`. | No reference to `margince-release` remains. | R1 |
+
+## Order
+
+```
+C1, K1, K2, K3, T1          (parallel start)
+T2 → T3, T4, T5, T6, T9
+T3 + K2 + C1 → T7
+T3 + K1      → T8
+T2 + T6      → T11
+all T        → T10 → T12  → M1
+M1 → I1, I3, I4 ; D1 → I2 → R2 ; T7 → R1 → R3
+```
