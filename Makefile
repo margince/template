@@ -769,6 +769,7 @@ clean: unstage ## Unstage and drop upstream's build output
 # ──────────────────────────── instance.mk ─────────────────────────────
 
 ## Targets only this instance needs. instance.mk is instance-owned and
-## optional. It may add targets; it must not redefine a template target
-## (make check-template refuses that).
+## optional. It may add targets; it must not redefine a template target, and
+## it may assign only variables named INSTANCE_* (make check-template refuses
+## both).
 -include instance.mk

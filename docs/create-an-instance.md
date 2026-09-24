@@ -127,6 +127,12 @@ refuses an `instance.mk` that redefines a template target (make's own
 that stops `make` from reading the Makefile at all (for example, a recipe
 line missing its leading tab).
 
+`instance.mk` may assign only variables whose names start with `INSTANCE_`
+(for example `INSTANCE_LAB_DIR := lab`). An assignment to any other variable,
+such as `CORE := elsewhere` or `override VERSION = 1`, would change what the
+template's targets do, so `scripts/check-instance-mk.sh` refuses it and names
+the variable.
+
 ## 8. Image names
 
 ```sh

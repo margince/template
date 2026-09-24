@@ -33,7 +33,7 @@ repo="$(fresh_repo)"
 printf 'check:\n\t@echo skipped\n' > "$repo/instance.mk"
 if out="$(bash "$repo/scripts/check-instance-mk.sh" 2>&1)"; then
   fail "refuses a redefined check target"
-elif printf '%s' "$out" | grep -q "check"; then
+elif printf '%s' "$out" | grep -qE "target [\`']check'"; then
   ok "refuses a redefined check target and names it"
 else
   fail "refuses a redefined check target and names it: $out"
@@ -53,10 +53,36 @@ repo="$(fresh_repo)"
 printf 'check::\n\t@echo x\n' > "$repo/instance.mk"
 if out="$(bash "$repo/scripts/check-instance-mk.sh" 2>&1)"; then
   fail "refuses a check:: colon-type conflict"
-elif printf '%s' "$out" | grep -q "check"; then
+elif printf '%s' "$out" | grep -qE "target file [\`']check' has both : and :: entries"; then
+  # Make 3.81 quotes the name as `check', Make 4.x as 'check'.
   ok "refuses a check:: colon-type conflict"
 else
   fail "refuses a check:: colon-type conflict: $out"
+fi
+
+# --- instance.mk sets only INSTANCE_* variables ---
+repo="$(fresh_repo)"
+printf 'INSTANCE_LAB_DIR := x\nacme-lab:\n\t@echo $(INSTANCE_LAB_DIR)\n' > "$repo/instance.mk"
+if out="$(bash "$repo/scripts/check-instance-mk.sh" 2>&1)"; then ok "passes an INSTANCE_* variable"; else fail "passes an INSTANCE_* variable: $out"; fi
+
+repo="$(fresh_repo)"
+printf 'CORE := elsewhere\n' > "$repo/instance.mk"
+if out="$(bash "$repo/scripts/check-instance-mk.sh" 2>&1)"; then
+  fail "refuses CORE := elsewhere"
+elif printf '%s\n' "$out" | grep -qx '  CORE'; then
+  ok "refuses CORE := elsewhere and names it"
+else
+  fail "refuses CORE := elsewhere and names it: $out"
+fi
+
+repo="$(fresh_repo)"
+printf 'override VERSION = 1\n' > "$repo/instance.mk"
+if out="$(bash "$repo/scripts/check-instance-mk.sh" 2>&1)"; then
+  fail "refuses override VERSION = 1"
+elif printf '%s\n' "$out" | grep -qx '  VERSION'; then
+  ok "refuses override VERSION = 1 and names it"
+else
+  fail "refuses override VERSION = 1 and names it: $out"
 fi
 
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
