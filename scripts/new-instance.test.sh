@@ -91,6 +91,7 @@ expect_refused "refuses a missing name" "$TMP/x1" DISPLAY_NAME=X
 expect_refused "refuses an invalid name" "$TMP/x2" NAME=Acme DISPLAY_NAME=X
 expect_refused "refuses a missing display name" "$TMP/x3" NAME=acme2
 expect_refused "refuses an existing directory" "$DIR" NAME=acme DISPLAY_NAME=Acme
+expect_refused "refuses a multi-line display name" "$TMP/x5" NAME=multiline DISPLAY_NAME=$'Acme\nClient'
 if (cd "$DIR" && NAME=other DISPLAY_NAME=O DIR="$TMP/x4" bash scripts/new-instance.sh >/dev/null 2>&1); then
   fail "refuses to run inside an instance"
 elif [ -e "$TMP/x4" ]; then fail "refuses to run inside an instance — it created a directory"

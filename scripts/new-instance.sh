@@ -26,6 +26,13 @@ owner="${OWNER:-gradionhq}"
 [ ! -f .template-version ] || die "new-instance: this is an instance; run make new-instance in margince-template"
 [ -n "$name" ] || die "new-instance: pass NAME=<name>, e.g. make new-instance NAME=acme DISPLAY_NAME=Acme"
 [ -n "$display" ] || die "new-instance: pass DISPLAY_NAME=<text>, e.g. DISPLAY_NAME=\"Acme\""
+# Checked here, before quoting: inside a double-quoted YAML scalar a raw
+# newline is folded to a space by the parser, so cli check's single-line rule
+# never sees it back out. Refuse it here instead of writing "Acme Client" from
+# "Acme\nClient" and silently losing the line break.
+case "$display" in
+  *$'\n'*|*$'\r'*) die "new-instance: DISPLAY_NAME must be one line" ;;
+esac
 [ ! -e "$dir" ] || die "new-instance: $dir already exists"
 [ -z "$(git status --porcelain)" ] || die "new-instance: commit or discard the template's local changes first"
 
