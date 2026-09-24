@@ -1,0 +1,624 @@
+# Build the Windows desktop bundle and publish it as a downloadable artifact.
+#
+# A COPY of core/.github/workflows/desktop-windows.yml — see the sibling
+# desktop-macos.yml for why it must be a copy and not a reference.
+#
+# WHY THIS LANE EXISTS AT ALL. The Windows bundle cannot be built anywhere else:
+# pgvector has no build system other than nmake against MSVC, and the event bus
+# needs the MSYS2 toolchain. `make desktop-win` is not a lane this repository can
+# run on a developer's Mac, which is why the Makefile offers only
+# `desktop-win-kit DIR=` — stamp a folder built somewhere else. THIS runner is
+# that somewhere else, and until it is green the Windows half of the product has
+# never been built from this repository.
+#
+# WHAT DIFFERS FROM CORE'S. Core runs the PowerShell script directly, because
+# core has nothing to stage. We must compose our units into the submodule first
+# and stamp the demo-data loader afterwards, and both are bash Make recipes.
+# Makefile:9 is `SHELL := /usr/bin/env bash`, which a native Windows make.exe
+# cannot resolve — so Make runs inside MSYS2, which is already on the runner for
+# the Redis build below and which provides a real /usr/bin/env, bash and GNU
+# make. MSYS2_PATH_TYPE=inherit keeps the Windows Go, Node and pnpm on PATH
+# inside that shell.
+name: desktop-windows
+
+on:
+  # NO pull_request trigger, deliberately — see the sibling desktop-macos.yml for
+  # the full argument. In short: this lane downloads a 310 MB PostgreSQL archive
+  # and compiles Redis, ~17 minutes billed at twice a Linux minute, and the
+  # bundles belong to the release lane — a `v*` tag — rather
+  # than to every pull request that happens to move the core pointer. A pull request runs what a merge runs: the
+  # light gate.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build
+        required: false
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build
+        required: false
+        type: string
+      version:
+        description: >-
+          Names the artifact, the zip AND the build info inside the folder, when
+          a release lane asked for this build. Defaults to the commit, which is
+          what an ad-hoc build should call itself.
+        required: false
+        type: string
+    secrets:
+      DEMO_DATASET_DEPLOY_KEY:
+        description: >-
+          Read access to the private demo dataset. A reusable workflow inherits
+          NOTHING from its caller, so a release lane that does not pass this
+          builds an EMPTY folder and stays green -- the dataset check reads an
+          empty key, reports unavailable, and every seeding step skips. That is
+          the correct behaviour for a fork with no key and was the wrong one for
+          every release cut before this. Optional so the fork case still works.
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  MSYS2_ROOT: C:\msys64
+  # Without this, an MSYS2 login shell rebuilds PATH from its own profile and
+  # loses the Go, Node and pnpm the setup actions just installed.
+  MSYS2_PATH_TYPE: inherit
+
+jobs:
+  build:
+    name: build the portable Windows folder
+    runs-on: windows-latest
+    # A download, an MSVC compile, an MSYS2 compile, a Go build and a frontend
+    # build. Generous, because a timeout here is indistinguishable from a hang in
+    # a lane nobody has watched before.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || '' }}
+          submodules: recursive
+          persist-credentials: false
+
+      # Both commits are measured HERE, on a fresh checkout, and handed to the
+      # kit — rather than left for it to read off the tree it finds. By the time
+      # the kit runs, the build may have modified the tree itself: the Windows
+      # lane's build-windows.ps1 regenerates the manifests of core's own units,
+      # which marks core/ dirty AND, through the gitlink, this repository with
+      # it. Read there, every Windows bundle carried `-dirty` on both commits,
+      # about sources nobody had touched — and a marker that fires on every
+      # build is one nobody reads.
+      - name: Resolve the commits that were actually built
+        id: built
+        shell: bash
+        run: |
+          {
+            echo "sha=$(git rev-parse HEAD)"
+            echo "repo7=$(git rev-parse --short=7 HEAD)"
+            echo "core7=$(git -C core rev-parse --short=7 HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: core/backend/go.mod
+          cache-dependency-path: core/backend/go.sum
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: core/pnpm-lock.yaml
+
+      # Copied from core's lane. The runner ships MSYS2, but with the mingw
+      # toolchains rather than the POSIX-emulating MSYS one Redis needs — mingw
+      # targets the native Win32 API, which is exactly what Redis cannot be built
+      # against. `make` is added here because the staging recipes below need a
+      # GNU make that understands /usr/bin/env; core's lane needs no make at all.
+      - name: Install the MSYS2 build toolchain
+        shell: cmd
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm base-devel gcc make"
+
+      # This lane is unproven — it is the first time this repository's bash Make
+      # recipes have run on Windows. When it breaks, the break is almost always
+      # a toolchain the MSYS2 shell cannot see, so say what it can see BEFORE the
+      # step that needs it, rather than leaving a reader to infer it from a
+      # compiler error four steps later.
+      - name: What the MSYS2 shell can see
+        shell: cmd
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "cd '%CD:\=/%' && echo PWD=$(pwd) && make --version | head -1 && go version && node --version && pnpm --version && git --version"
+
+      # Our units into core/extensions/, then upstream's composer over them.
+      # Inside MSYS2 for the reason in this file's header.
+      - name: Compose our units into core
+        shell: cmd
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "cd '%CD:\=/%' && make compose"
+
+      - name: Build the bundle
+        shell: pwsh
+        working-directory: core
+        run: .\desktop\build\build-windows.ps1
+
+      # The seeder is the one half that cross-builds (pure Go, CGO_ENABLED=0), so
+      # this stamps the demo-data loader into the folder the PowerShell just
+      # assembled. `make desktop` does this for macOS automatically; on Windows it
+      # is a separate lane because the folder is built by a script this Makefile
+      # does not drive.
+      #
+      # MARGINCE_ALLOW_DIRTY_CORE=1 is required HERE and nowhere else in this
+      # lane, and the reason is worth stating so nobody removes it as paranoia.
+      #
+      # `desktop-win-kit` depends on `compose`, which depends on `stage`, and
+      # staging refuses while core/ has modified tracked files. By this point in
+      # the job core/ IS dirty — build-windows.ps1 regenerates the manifests of
+      # CORE'S OWN units (extensions/de, notes, relay-probe, yogi) as a side
+      # effect of building. Composing was clean two steps ago; the build is what
+      # dirtied it.
+      #
+      # The guard exists to stop staging from clobbering work someone is doing
+      # inside the submodule. It cannot happen here: staging writes only OUR
+      # units into core/extensions/, and the four dirty files belong to core.
+      # Nothing is lost, and the flag is CLAUDE.md's documented escape hatch.
+      #
+      # Prefixed on the one command, never exported — an exported flag would
+      # leave the guard off for the rest of the job.
+      #
+      # The macOS lane needs no equivalent: `make desktop` composes, builds and
+      # stamps in one target, and core's macOS build does not leave the manifests
+      # modified. That asymmetry is core's, not ours, and is worth reporting
+      # upstream rather than working around a second time.
+      #
+      # VERSION reaches the kit through the ENVIRONMENT rather than the command
+      # string. The login shell inherits it, so `$VERSION` expands inside bash —
+      # and an expression interpolated into this doubly-nested quoting instead
+      # would be one cmd metacharacter away from being unquotable. It names what
+      # the folder calls itself, and it is the SAME string the zip below carries,
+      # so an unzipped folder and the file it came from cannot disagree.
+      # BEFORE the stamp, for the reason the macOS lane moves it before the
+      # build: upstream #4732 took the dataset loader out of core, so the kit
+      # builds the seeder FROM this checkout. Stamped without it, the folder
+      # carries no loader — and the seed step below drives the loader inside
+      # the folder, so it would refuse.
+      - name: Can the demo dataset be reached?
+        id: dataset
+        shell: bash
+        env:
+          KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no DEMO_DATASET_DEPLOY_KEY — the folder ships empty and keeps its demo loader"
+          fi
+
+      - name: Check out the demo dataset
+        if: steps.dataset.outputs.available == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gradionhq/margince-demo-database
+          ssh-key: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+          path: .dataset
+          persist-credentials: false
+
+      # The dataset is checked out with NO ref, so every build takes whatever its
+      # default branch was at that moment -- deliberately, so a bundle ships the
+      # freshest demo rather than a historical one. That makes this the only
+      # chance to record WHICH data went in: by the time the kit re-stamps the
+      # seeded folder the rows are inside a Postgres cluster, where no commit is
+      # recoverable. Read it here or the bundle can never say.
+      - name: Resolve the demo dataset commit
+        id: dataset_sha
+        if: steps.dataset.outputs.available == 'true'
+        shell: bash
+        run: echo "sha7=$(git -C .dataset rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Seeded IN PLACE, unlike macOS. The socket-path limit that forces the
+      # macOS lane to install a copy somewhere short is a unix-socket rule, and
+      # this platform has no unix socket.
+      #
+      # Setup.cmd runs FIRST and is not incidental: it writes margince.yaml
+      # before the first start, and the currency it chooses is the difference
+      # between a seed that completes and one that dies at the FX phase having
+      # already written most of the dataset.
+      - name: Stamp the demo-data loader and the build info into the folder
+        shell: cmd
+        env:
+          VERSION: ${{ inputs.version || steps.built.outputs.sha }}
+          MARGINCE_BUILD_REPO_SHA: ${{ steps.built.outputs.repo7 }}
+          MARGINCE_BUILD_CORE_SHA: ${{ steps.built.outputs.core7 }}
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "cd '%CD:\=/%' && MARGINCE_ALLOW_DIRTY_CORE=1 make desktop-win-kit DIR=core/build/desktop/margince-windows VERSION=$VERSION DATASET=.dataset"
+
+      # ─────────────────────── the folder arrives with data ───────────────────
+      #
+      # Skipped without DEMO_DATASET_DEPLOY_KEY, exactly like the macOS lane, and
+      # the folder then ships empty with its demo loader still in it.
+      #
+      # Windows differs from macOS in two ways that shape every step below, both
+      # from desktop/launcher/postgres_windows.go: there is no unix socket, so
+      # the database is loopback TCP with a real password; and its port is
+      # EPHEMERAL, recorded only in the running cluster's postmaster.pid. So the
+      # credential pass cannot reuse the launcher's port — it starts the cluster
+      # itself, on a port it chose.
+      - name: Seed the folder
+        if: steps.dataset.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $PWD 'core\build\desktop\margince-windows'
+          $env:MARGINCE_KIT_INTERACTIVE = '0'
+          & "$folder\Setup.cmd" --no-prompt
+          if ($LASTEXITCODE -ne 0) { throw "Setup.cmd exited $LASTEXITCODE" }
+
+          Start-Process -FilePath "$folder\margince.exe" -WorkingDirectory $folder `
+            -RedirectStandardOutput "$PWD\win-run.log" -RedirectStandardError "$PWD\win-run.err"
+
+          $up = $false
+          foreach ($i in 1..90) {
+            Start-Sleep -Seconds 3
+            try {
+              Invoke-WebRequest -Uri 'http://127.0.0.1:8800/' -UseBasicParsing -TimeoutSec 5 | Out-Null
+              $up = $true; break
+            } catch { }
+          }
+          if (-not $up) { Get-Content "$PWD\win-run.log","$PWD\win-run.err" -EA SilentlyContinue; throw 'the app never answered on 8800' }
+
+          & "$folder\Load Demo Data.cmd" --dataset "$PWD\.dataset"
+          if ($LASTEXITCODE -ne 0) { throw "the loader exited $LASTEXITCODE" }
+
+      # The launcher has no Ctrl-C to send it from here, so the cluster is
+      # stopped by its own pg_ctl instead. That is the part that matters: what
+      # ships is the cluster's files, and -m fast checkpoints them.
+      - name: Stop it cleanly
+        if: steps.dataset.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $folder = Join-Path $PWD 'core\build\desktop\margince-windows'
+          Get-Process margince -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+          Get-Process valkey-server -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+          Get-Process api,worker -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+          & "$folder\runtime\pgsql\bin\pg_ctl.exe" -D "$folder\data\pg" -m fast -w stop
+          Start-Sleep -Seconds 3
+
+      # The same two edits the macOS lane makes, and wrong without either — see
+      # its comment for why credential_ref must go back to NULL.
+      - name: Leave the credentials openable by whoever downloads it
+        if: steps.dataset.outputs.available == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $PWD 'core\build\desktop\margince-windows'
+          $bin = "$folder\runtime\pgsql\bin"
+          $port = 55432
+          & "$bin\pg_ctl.exe" -D "$folder\data\pg" -o "-p $port -c listen_addresses=127.0.0.1" -w start
+          $env:PGPASSWORD = (Get-Content "$folder\data\db-margince_owner-password" -Raw).Trim()
+          $dsn = "postgres://margince_owner@127.0.0.1:$port/margince"
+          # -d, and never the connection string as a positional word. This is
+          # the lane that proves why: PostgreSQL ships its own getopt_long on
+          # Windows and it does NOT permute, so option parsing stops at the
+          # first non-option argument. A leading DSN makes psql take `-v` for
+          # the USERNAME and report everything after it as
+          # "extra command-line argument ... ignored" — the update never runs,
+          # psql exits 0 for having connected, and the only symptom is the
+          # count below coming back empty. The macOS lane spells it the same
+          # way so neither can drift back.
+          & "$bin\psql.exe" -d $dsn -v ON_ERROR_STOP=1 -c "update capture_connection set credential_ref = null where credential_ref is not null;"
+          if ($LASTEXITCODE -ne 0) { throw 'clearing credential_ref failed' }
+          $left = & "$bin\psql.exe" -d $dsn -At -c "select count(*) from capture_connection where credential_ref is not null;"
+          if ($LASTEXITCODE -ne 0) { throw 'counting the sealed connections failed' }
+          # An empty answer is a FAILURE, not a zero. That is what psql returns
+          # when it ignored the -c it was handed, and reading it as "none left"
+          # would ship a folder whose demo mailbox is sealed under a key that
+          # exists only on this runner.
+          $left = "$left".Trim()
+          if ($left -eq '') { throw 'psql returned no count — check that it parsed its arguments' }
+          if ($left -ne '0') { throw "$left connection(s) still sealed under this runner key" }
+          & "$bin\pg_ctl.exe" -D "$folder\data\pg" -m fast -w stop
+          Set-Content -LiteralPath "$folder\data\admin-password" -Value 'demo-password-123' -NoNewline
+          Remove-Item -Recurse -Force "$folder\data\logs" -EA SilentlyContinue
+          # margince.yaml must NOT ship, which is what the macOS lane does by
+          # accident of building elsewhere and copying only data/ back. Here the
+          # file exists because this lane runs Setup.cmd in place to seed — and
+          # Setup never overwrites an existing one.
+          #
+          # Shipping it costs the downloader their model binding. seeds.ai_routing
+          # lives in this file; their Setup would say "margince.yaml is already
+          # here — kept", the binding would have nowhere to be written, and the
+          # AI surfaces would answer from the offline fake while macOS came up
+          # bound from the same gesture. Two platforms, one product.
+          #
+          # Safe because its write-once fields are already SPENT: the
+          # workspace was created a few steps above, so base_currency and
+          # bootstrap_admin have been consumed. Setup writes the same values
+          # again (EUR, admin@demo.test), so the file a recipient generates
+          # agrees with the database it finds.
+          Remove-Item -LiteralPath "$folder\margince.yaml" -Force -EA SilentlyContinue
+          Get-ChildItem "$folder\data" | ForEach-Object { Write-Host "  $($_.Name)" }
+
+      - name: Retire the loader a seeded folder does not need
+        if: steps.dataset.outputs.available == 'true'
+        shell: cmd
+        env:
+          VERSION: ${{ inputs.version || steps.built.outputs.sha }}
+          MARGINCE_BUILD_REPO_SHA: ${{ steps.built.outputs.repo7 }}
+          MARGINCE_BUILD_CORE_SHA: ${{ steps.built.outputs.core7 }}
+          # Only set on THIS stamp, not the one during `make desktop` above.
+          # That folder has no demo data, and build-info reports it as `none`;
+          # this one does, so an unset value here would read `unknown` and say
+          # so, rather than quietly claiming the bundle ships nothing.
+          MARGINCE_BUILD_DATASET_SHA: ${{ steps.dataset_sha.outputs.sha7 }}
+        run: |
+          C:\msys64\usr\bin\bash.exe -lc "cd '%CD:\=/%' && MARGINCE_ALLOW_DIRTY_CORE=1 make desktop-win-kit DIR=core/build/desktop/margince-windows VERSION=$VERSION SEEDED=1"
+
+      # The only place the shipped PowerShell is held to a real Windows parser.
+      # Both scripts run on a machine nobody here has: they are stamped from a
+      # macOS host for a platform the local lanes cannot execute, so a syntax
+      # error would otherwise reach a downloader as the first thing that happens
+      # when they double-click. ParseFile does not RUN either script — it proves
+      # only that Windows PowerShell can read them — which is the half that can
+      # be checked without a database, a browser and a Google app.
+      #
+      # `powershell`, NOT `pwsh`: the shims invoke Windows PowerShell 5.1, which
+      # is the one every Windows box has and the one these files will actually be
+      # read by. Parsing them with 7 would check an engine no recipient runs.
+      - name: The shipped PowerShell parses on Windows
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem core/build/desktop/margince-windows/runtime -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors -and $errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "FAIL $($_.Name)"
+              $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
+            } else {
+              Write-Host "ok   $($_.Name)"
+            }
+          }
+          if ($failed) { throw 'shipped PowerShell does not parse' }
+
+      # Parsing is HALF the check, and the missing half is how v0.0.1-rc.1
+      # shipped a folder that could not start. setup.ps1 parsed perfectly and
+      # wrote a margince.env beginning with a UTF-8 byte-order mark, because
+      # `Set-Content -Encoding UTF8` adds one on 5.1. The launcher reads the mark
+      # as part of line 1, its leading-"#" test misses, and the app refuses with
+      # "expected KEY=value" against its own template.
+      #
+      # So RUN the script and read back what it wrote. It needs nothing this job
+      # lacks — no database, no browser, no Google app: it writes two files and
+      # generates two keys. That half was always checkable.
+      #
+      # Against a COPY. The folder about to be zipped must ship UNCONFIGURED:
+      # margince.yaml is write-once and bootstraps the workspace, and the two
+      # keys are per-installation secrets that must not be the same in every
+      # download.
+      #
+      # `powershell` rather than `pwsh` is load-bearing here, not just
+      # consistent: 7's UTF8 is BOM-less, so it would have passed the broken
+      # script.
+      - name: Setup writes files the launcher can read
+        shell: powershell
+        env:
+          MARGINCE_KIT_INTERACTIVE: '0'
+        run: |
+          # PURE ASCII BELOW, and it is not a style preference. Actions writes
+          # this block to a temp .ps1 with NO byte-order mark, and 5.1 reads an
+          # unmarked .ps1 as the ANSI codepage -- the same default this step
+          # exists to police. An em-dash arrives as three cp1252 characters
+          # ending in a smart quote, which CLOSES the string it sits in and the
+          # whole file stops parsing. scripts/desktop-kit.test.sh gates it.
+          $probe = Join-Path $env:RUNNER_TEMP 'kit-probe'
+          if (Test-Path $probe) { Remove-Item -Recurse -Force $probe }
+          New-Item -ItemType Directory -Path "$probe\runtime" | Out-Null
+          $built = 'core\build\desktop\margince-windows'
+          Copy-Item "$built\runtime\setup.ps1" "$probe\runtime\setup.ps1"
+          # The stamped launcher template: the file setup.ps1 edits in place,
+          # and the one whose line 1 the shipped release corrupted.
+          Copy-Item "$built\margince.env" $probe
+
+          $envPath = Join-Path $probe 'margince.env'
+
+          # The template's em-dashes are the read side of the same fix, and the
+          # half a BOM check cannot see. Dropping the mark on write obliges every
+          # read to name its encoding, because 5.1 decodes an unmarked file as
+          # the ANSI codepage -- so a read-modify-write would turn each dash into
+          # three characters and leave a file the launcher still accepts and a
+          # human can no longer read. Counted, not hardcoded: the template is
+          # upstream's and its prose may change.
+          # Spelled [char]0x2014 because this block must stay ASCII; see above.
+          $emDash = [string][char]0x2014
+          $dashesBefore = ([regex]::Matches([System.IO.File]::ReadAllText($envPath), $emDash)).Count
+          Write-Host "     the stamped template carries $dashesBefore em-dash(es)"
+
+          function Assert-DashesIntact([string]$What) {
+            $now = ([regex]::Matches([System.IO.File]::ReadAllText($envPath), $emDash)).Count
+            if ($now -ne $dashesBefore) {
+              throw "$What mangled the template's prose: $dashesBefore em-dash(es) became $now. A read did not name its encoding."
+            }
+            Write-Host "ok   $What kept all $now em-dash(es)"
+          }
+
+          function Assert-NoBom([string]$Path) {
+            $bytes = [System.IO.File]::ReadAllBytes($Path)
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+                $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "$(Split-Path -Leaf $Path) begins with a UTF-8 BOM: the launcher will not start"
+            }
+          }
+
+          # The launcher's own rule, from desktop\launcher\envfile.go: every line
+          # is blank, a comment, or KEY=value, and anything else is a refusal to
+          # start rather than a skipped line.
+          function Assert-LauncherReadable([string]$Path) {
+            $n = 0
+            foreach ($raw in [System.IO.File]::ReadAllLines($Path)) {
+              $n++
+              $line = $raw.Trim()
+              if ($line -eq '' -or $line.StartsWith('#')) { continue }
+              $line = $line -replace '^export ', ''
+              if ($line -notmatch '=') { throw "margince.env line ${n}: the launcher would refuse $raw" }
+              if (($line -split '=', 2)[0].Trim() -eq '') { throw "margince.env line ${n}: no name before '='" }
+            }
+            Write-Host "ok   margince.env parses the way the launcher parses it ($n lines)"
+          }
+
+          & "$probe\runtime\setup.ps1" --no-prompt
+
+          foreach ($name in 'margince.env', 'margince.yaml') {
+            $path = Join-Path $probe $name
+            if (-not (Test-Path $path)) { throw "setup.ps1 did not write $name" }
+            Assert-NoBom $path
+            Write-Host "ok   $name has no BOM"
+          }
+          Assert-LauncherReadable $envPath
+          Assert-DashesIntact 'Setup'
+
+          # Prove the keys landed UNcommented, not merely that the file parses:
+          # writing them before the first start is why setup exists at all.
+          $envLines = [System.IO.File]::ReadAllLines($envPath)
+          foreach ($key in 'MARGINCE_KEYVAULT_ROOT_KEY',
+                           'MARGINCE_CONNECTOR_STATE_KEY',
+                           'MARGINCE_PUBLIC_BASE_URL') {
+            $pattern = "^\s*" + [regex]::Escape($key) + "=\S"
+            if (-not ($envLines | Where-Object { $_ -match $pattern })) {
+              throw "setup.ps1 left $key unset"
+            }
+            Write-Host "ok   $key is set"
+          }
+
+          # The repair path, for everyone who already ran the broken release.
+          # Re-running Setup is the fix we tell them to use, and it cannot work
+          # through Set-EnvKey: that keeps an existing value and rewrites nothing.
+          [System.IO.File]::WriteAllBytes($envPath,
+            [byte[]](@(0xEF, 0xBB, 0xBF) + [System.IO.File]::ReadAllBytes($envPath)))
+          & "$probe\runtime\setup.ps1" --no-prompt
+          Assert-NoBom $envPath
+          Assert-LauncherReadable $envPath
+          Assert-DashesIntact 'the repair'
+          Write-Host 'ok   a second run repairs a margince.env an earlier release corrupted'
+
+      # The menu the step above cannot reach. --no-prompt is the only path CI
+      # exercised, and it is the path that asks nothing -- so the branch that
+      # decides WHICH vendor's variable a pasted key lands in shipped unproven,
+      # on the one engine no developer checkout here can run.
+      #
+      # A grep cannot separate the two failures that matter: a menu that reads
+      # "2" and writes OPENAI_COMPATIBLE_API_KEY mentions both names and passes
+      # every source-level gate, while leaving a folder whose AI surfaces are
+      # still on the offline fake and a key stored under a name nothing reads.
+      # Only reading the file back tells them apart.
+      #
+      # Answers arrive through a REDIRECTED stdin, from cmd, because Read-Host on
+      # 5.1 reads the console rather than a PowerShell pipeline -- piping into
+      # the script would set $input and leave every prompt unanswered. If the
+      # redirect ever stops feeding Read-Host, the assertions below fail: the key
+      # simply does not land. That is deliberate, and it is why this cannot pass
+      # falsely.
+      #
+      # MARGINCE_KIT_INTERACTIVE is NOT set here, unlike the step above: '0' is
+      # what turns the prompting off, so inheriting it would test nothing.
+      - name: Setup asks for a provider and writes the one it was told
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          # PURE ASCII, for the reason the step above gives at length.
+          $built = 'core\build\desktop\margince-windows'
+
+          # answers: the menu choice, the key, then the two Google prompts left
+          # blank. The trailing blank also answers Finish's "press Return", which
+          # is live here because this run is an interactive one.
+          function Invoke-SetupWithAnswers([string]$dir, [string[]]$answers) {
+            if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+            New-Item -ItemType Directory -Path "$dir\runtime" | Out-Null
+            Copy-Item "$built\runtime\setup.ps1" "$dir\runtime\setup.ps1"
+            Copy-Item "$built\margince.env" $dir
+            $answerFile = Join-Path $dir 'answers.txt'
+            [System.IO.File]::WriteAllLines($answerFile, $answers,
+              (New-Object System.Text.UTF8Encoding($false)))
+            cmd /c "powershell -NoProfile -ExecutionPolicy Bypass -File ""$dir\runtime\setup.ps1"" < ""$answerFile"""
+          }
+
+          # Reads the UNcommented value only, which is the whole question: the
+          # stamped template carries every one of these keys as a comment.
+          function Get-Set([string]$dir, [string]$key) {
+            $pattern = "^\s*" + [regex]::Escape($key) + "=(\S.*)$"
+            $hit = [System.IO.File]::ReadAllLines((Join-Path $dir 'margince.env')) |
+              Where-Object { $_ -match $pattern } | Select-Object -Last 1
+            if ($hit -and $hit -match $pattern) { return $matches[1].Trim() }
+            return ''
+          }
+
+          function Assert-Picked([string]$label, [string]$answer, [string]$key,
+                                 [string]$value, [string]$other) {
+            $dir = Join-Path $env:RUNNER_TEMP "kit-menu-$label"
+            Invoke-SetupWithAnswers $dir @($answer, $value, '', '', '')
+            $got = Get-Set $dir $key
+            $otherGot = Get-Set $dir $other
+            if ($got -ne $value) {
+              throw "answering '$answer' left $key='$got', wanted '$value'. Whoever picked that provider gets an installation still running on the offline fake."
+            }
+            if ($otherGot) {
+              throw "answering '$answer' ALSO set $other='$otherGot'. Setup asks for one key and must write one."
+            }
+            Write-Host "ok   '$answer' sets $key and leaves $other alone"
+          }
+
+          Assert-Picked 'openrouter' '1' 'OPENAI_COMPATIBLE_API_KEY' 'sk-or-CITEST' 'GEMINI_API_KEY'
+          Assert-Picked 'gemini' '2' 'GEMINI_API_KEY' 'AIzaCITEST' 'OPENAI_COMPATIBLE_API_KEY'
+
+          # A bare Return is a SUPPORTED answer, not a degraded one: the folder
+          # still starts and Settings -> AI can bind a provider later. What must
+          # never happen is a vendor variable filled from an answer naming none.
+          $skip = Join-Path $env:RUNNER_TEMP 'kit-menu-skip'
+          Invoke-SetupWithAnswers $skip @('', '', '', '')
+          foreach ($key in 'OPENAI_COMPATIBLE_API_KEY', 'GEMINI_API_KEY') {
+            $left = Get-Set $skip $key
+            if ($left) { throw "a skipped menu still set $key='$left'" }
+          }
+          Write-Host 'ok   a bare Return leaves both provider keys unset'
+
+      # Naming the folder inside keeps the download self-describing: it expands to
+      # `margince-windows/` rather than scattering into whatever directory the
+      # user unzipped from.
+      - name: Zip the folder
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version || steps.built.outputs.sha }}
+        run: |
+          Compress-Archive -Path core/build/desktop/margince-windows `
+            -DestinationPath "margince-windows-$env:VERSION.zip"
+
+      - name: Publish the portable folder
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: margince-windows-${{ inputs.version || steps.built.outputs.sha }}
+          path: margince-windows-${{ inputs.version || steps.built.outputs.sha }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      # On failure the build logs are the only evidence, and the launcher writes
+      # nothing yet because it has not run. Uploading what the scripts staged
+      # makes a partial build inspectable instead of gone.
+      - name: Publish the staging tree on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-on-failure-windows-${{ steps.built.outputs.sha }}
+          path: |
+            core/build/desktop/.stage-windows/pgsql/bin
+            core/build/desktop/.stage-windows/bus
+            core/build/desktop/.stage-windows/bin
+          if-no-files-found: warn
+          retention-days: 3

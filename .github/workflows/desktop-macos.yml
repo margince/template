@@ -1,0 +1,404 @@
+# Build the macOS desktop bundle and publish it as a downloadable artifact.
+#
+# A COPY of core/.github/workflows/desktop-macos.yml, not a reference: GitHub
+# resolves `uses:` against workflows in THIS repository's .github/workflows only,
+# so a file inside the core/ submodule is invisible to it. Core's version is the
+# authority on how this bundle is built — when it changes, this file should be
+# re-derived from it rather than patched blind.
+#
+# What differs from core's, and only this:
+#   1. checkout takes the submodule,
+#   2. the toolchain paths live under core/,
+#   3. the build is `make desktop`, which in THIS repo means compose (our units
+#      staged) -> core's three stages -> desktop-mirror -> desktop-kit,
+#   4. the folder is zipped with ditto rather than tarred,
+#   5. the failure-artifact paths gain the core/ prefix, and
+#   6. an `arch` input picks the runner, so one lane builds both the Apple
+#      silicon folder and the Intel one. Core builds whatever its runner is.
+#      If core ever grows the same input, THIS is the difference to drop.
+#
+# Why ditto and not `zip`: actions/upload-artifact drops the executable bit, so
+# uploading the tree directly hands a macOS user a `margince` and a
+# `Start Margince.command` they cannot run and no reason why. Core solves that
+# with tar.gz; ditto's zip keeps both the mode and the ad-hoc Mach-O signatures
+# `make desktop` applies, and a zip is the friendlier thing to hand a downloader.
+name: desktop-macos
+
+on:
+  # NO pull_request trigger, deliberately.
+  #
+  # This lane bills at ten times a Linux minute and takes ~7 minutes, so a single
+  # triggered pull request costs roughly 75 Linux-equivalent minutes against ~4
+  # for the light gate — and `synchronize` charges that again on every push to
+  # the branch.
+  #
+  # It was briefly path-scoped the way core scopes its own, including on the
+  # `core` submodule pointer so that a bump got a real bundle build before merge.
+  # Core does that because core has no other gate; here the release lane IS the
+  # gate, and every core bump would have paid the full price. A pull request now
+  # runs exactly what a merge to main runs: the light gate, and nothing else.
+  #
+  # The bundles belong to the release lane: a `v*` tag pushed to release.yml.
+  # If one breaks, that is where it surfaces — a deliberate act somebody is
+  # already watching.
+  #
+  # On demand, once this workflow is on the default branch — GitHub resolves a
+  # dispatch against the default branch only. This is how you prove the lane
+  # without cutting a release.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build
+        required: false
+      arch:
+        description: Which Mac the folder is for
+        required: false
+        default: apple-silicon
+        type: choice
+        options:
+          - apple-silicon
+          - intel
+  # Called by release.yml, so every downloadable bundle is built by THIS lane
+  # and not by a second copy of it.
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build
+        required: false
+        type: string
+      version:
+        description: >-
+          Names the artifact, the zip AND the build info inside the folder, when
+          a release lane asked for this build. Defaults to the commit, which is
+          what an ad-hoc build should call itself.
+        required: false
+        type: string
+      arch:
+        description: >-
+          apple-silicon or intel. Selects the runner, and with it everything in
+          the folder: the Go halves build native and PostgreSQL, pgvector and
+          Valkey are compiled from source ON the runner, so the bundle is
+          whatever machine built it. `type: string` and not `choice` because
+          workflow_call does not accept a choice; the dispatch form above holds
+          the enumeration, and scripts/desktop-arch.test.sh holds every caller
+          to it.
+        required: false
+        default: apple-silicon
+        type: string
+    secrets:
+      DEMO_DATASET_DEPLOY_KEY:
+        description: >-
+          Read access to the private demo dataset. A reusable workflow inherits
+          NOTHING from its caller, so a release lane that does not pass this
+          builds an EMPTY folder and stays green -- the dataset check reads an
+          empty key, reports unavailable, and every seeding step skips. That is
+          the correct behaviour for a fork with no key and was the wrong one for
+          every release cut before this. Optional so the fork case still works.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build the portable macOS folder (${{ inputs.arch || 'apple-silicon' }})
+    # macos-latest is Apple silicon. macos-15-intel is the last x86_64 image
+    # GitHub will offer — it retires in August 2027 (actions/runner-images#13027)
+    # — and when it does, this lane fails for that reason and not for one in
+    # this repository.
+    #
+    # The label lives HERE rather than at the call sites, so that two callers
+    # and a dispatch form do not each have to know which one is the Intel one,
+    # and so `macos-latest` keeps meaning what it means today rather than being
+    # pinned in passing.
+    runs-on: ${{ inputs.arch == 'intel' && 'macos-15-intel' || 'macos-latest' }}
+    # PostgreSQL and pgvector compile from source here (~5 minutes), then Valkey,
+    # then the Go roles and the composed frontend.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Empty on a pull_request, where checkout's own default (the PR merge
+          # ref) is what should be built.
+          ref: ${{ inputs.ref || '' }}
+          submodules: recursive
+          persist-credentials: false
+
+      # github.sha is the commit the workflow was DISPATCHED against, not what
+      # checkout just selected. With inputs.ref those differ, and an artifact
+      # named after a commit it was not built from is a build nobody can trace.
+      # Both commits are measured HERE, on a fresh checkout, and handed to the
+      # kit — rather than left for it to read off the tree it finds. By the time
+      # the kit runs, the build may have modified the tree itself: the Windows
+      # lane's build-windows.ps1 regenerates the manifests of core's own units,
+      # which marks core/ dirty AND, through the gitlink, this repository with
+      # it. Read there, every Windows bundle carried `-dirty` on both commits,
+      # about sources nobody had touched — and a marker that fires on every
+      # build is one nobody reads.
+      - name: Resolve the commits that were actually built
+        id: built
+        shell: bash
+        run: |
+          {
+            echo "sha=$(git rev-parse HEAD)"
+            echo "repo7=$(git rev-parse --short=7 HEAD)"
+            echo "core7=$(git -C core rev-parse --short=7 HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: core/backend/go.mod
+          cache-dependency-path: core/backend/go.sum
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          # Core's root lockfile, not frontend/: it is a root pnpm workspace so a
+          # unit's frontend layer can join it.
+          cache-dependency-path: core/pnpm-lock.yaml
+
+      # `make desktop` composes first, so the folder is built from a tree with
+      # our units staged in it, then mirrors the result out of the submodule to
+      # ./build/desktop/margince and stamps the demo-data loader into it.
+      # VERSION is the SAME string the zip below is named with, so the folder a
+      # user unzips and the file they downloaded cannot name different builds.
+      # Under a dispatch that string is the commit, which is what an ad-hoc build
+      # should call itself; a release lane passes its tag.
+      # BEFORE the build, and that is a change forced by upstream #4732: the
+      # dataset loader left core and lives in the dataset repository now, so
+      # `make desktop` builds the seeder FROM this checkout. Checked out after
+      # the build, as it was, the folder is stamped with no loader — and
+      # `make desktop-seed` then refuses, because it drives the loader inside
+      # the installation rather than keeping a seeding path of its own.
+      #
+      # A build with no dataset still works and still ships: the kit says so
+      # and leaves the loader out, which is the shape every seeded bundle has
+      # anyway. What it cannot do is seed itself afterwards.
+      - name: Can the demo dataset be reached?
+        id: dataset
+        shell: bash
+        env:
+          KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no DEMO_DATASET_DEPLOY_KEY — the folder ships empty and keeps its demo loader"
+          fi
+
+      - name: Check out the demo dataset
+        if: steps.dataset.outputs.available == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gradionhq/margince-demo-database
+          ssh-key: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+          path: .dataset
+          persist-credentials: false
+
+      # The dataset is checked out with NO ref, so every build takes whatever its
+      # default branch was at that moment -- deliberately, so a bundle ships the
+      # freshest demo rather than a historical one. That makes this the only
+      # chance to record WHICH data went in: by the time the kit re-stamps the
+      # seeded folder the rows are inside a Postgres cluster, where no commit is
+      # recoverable. Read it here or the bundle can never say.
+      - name: Resolve the demo dataset commit
+        id: dataset_sha
+        if: steps.dataset.outputs.available == 'true'
+        shell: bash
+        run: echo "sha7=$(git -C .dataset rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Installed to a SHORT path rather than seeded where it was built. macOS
+      # caps a unix socket at 103 bytes and the launcher appends 27 to the
+      # installation root; the workspace path leaves 102 of the 103, which works
+      # only until this repository is renamed by one character. $HOME/mg leaves
+      # sixty.
+      - name: Build the bundle
+        env:
+          VERSION: ${{ inputs.version || steps.built.outputs.sha }}
+          MARGINCE_BUILD_REPO_SHA: ${{ steps.built.outputs.repo7 }}
+          MARGINCE_BUILD_CORE_SHA: ${{ steps.built.outputs.core7 }}
+        # DATASET names where the seeder's SOURCE is, not where the data is.
+        # Empty when the dataset could not be reached, which build_seeder reads
+        # as "ship no loader" rather than as a failure.
+        run: |
+          if [ "${{ steps.dataset.outputs.available }}" = "true" ]; then
+            make desktop VERSION="$VERSION" DATASET="$PWD/.dataset"
+          else
+            make desktop VERSION="$VERSION"
+          fi
+
+      # The one failure this lane could otherwise SHIP: a folder built on the
+      # wrong runner and named for the right one. It would download, unzip, and
+      # die on `./margince` with "Bad CPU type in executable" — which is the bug
+      # this arch input exists to end, published under the name that promises it
+      # was fixed.
+      #
+      # `lipo -archs` on the launcher alone, because build-dist.sh has already
+      # proved every other binary in the folder agrees with it.
+      - name: The folder is for the Mac it says it is
+        shell: bash
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          case "$ARCH" in
+            apple-silicon) want=arm64 ;;
+            intel)         want=x86_64 ;;
+            *) echo "::error::unknown arch '$ARCH' — the runs-on mapping and this case must offer the same set"; exit 1 ;;
+          esac
+          got="$(lipo -archs build/desktop/margince/margince)"
+          if [ "$got" != "$want" ]; then
+            echo "::error::asked for $ARCH ($want) but the launcher is $got"
+            exit 1
+          fi
+          echo "the folder is $ARCH ($got)"
+
+      # ─────────────────────── the folder arrives with data ───────────────────
+      #
+      # Everything below is SKIPPED without DEMO_DATASET_DEPLOY_KEY, and the
+      # folder then ships empty exactly as it did before, with its demo loader
+      # still in it. The secret is what turns this on; nothing else changes.
+      #
+      # Read-only deploy key rather than a token: the dataset is one private
+      # repository and this needs to clone it and nothing else.
+      - name: Seed a copy of the folder
+        if: steps.dataset.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          make desktop-install DESKTOP_DEST="$HOME/mg"
+          make desktop-run DESKTOP_DEST="$HOME/mg" > "$HOME/run.log" 2>&1 &
+          for _ in $(seq 1 90); do
+            sleep 3
+            grep -q "is running at" "$HOME/run.log" && break
+            grep -q "could not start" "$HOME/run.log" && { cat "$HOME/run.log"; exit 1; }
+          done
+          grep -q "is running at" "$HOME/run.log" || { cat "$HOME/run.log"; exit 1; }
+          make desktop-seed DESKTOP_DEST="$HOME/mg" DATASET="$PWD/.dataset"
+
+      # A clean shutdown, because what ships is the cluster's files. A database
+      # killed mid-checkpoint recovers on the recipient's first start, which is a
+      # recovery nobody asked for on a folder that is supposed to just open.
+      - name: Stop it cleanly
+        if: steps.dataset.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pid="$(pgrep -f "$HOME/mg/margince" | head -1 || true)"
+          [ -n "$pid" ] && kill -INT "$pid"
+          for _ in $(seq 1 40); do sleep 1; pgrep -f "$HOME/mg/margince" >/dev/null || break; done
+          "$HOME/mg/runtime/pgsql/bin/pg_ctl" -D "$HOME/mg/data/pg" -m fast stop 2>/dev/null || true
+          grep -q "has stopped" "$HOME/run.log" || echo "::warning::the launcher did not report a clean stop"
+
+      # TWO edits, and the build is wrong without either.
+      #
+      # credential_ref back to NULL: BackfillCredentials seals the demo mailbox
+      # payloads into the vault on every boot, and the boot above did it under
+      # THIS runner's keyvault key. Shipped sealed, they could only be opened by
+      # shipping that key too — one key shared by every recipient. Cleared, the
+      # payload is still in `auth` and the recipient's first start re-seals it
+      # under the key their own setup script generated. Verified: seven
+      # connections, sealed under a second key with no error and no data loss.
+      #
+      # admin-password to the seeded value: the launcher prints "see
+      # data/admin-password" on every start, and after a seed that file records
+      # the password the seeder REPLACED. A folder that arrives with data has one
+      # true password, and this is the file that is supposed to hold it.
+      - name: Leave the credentials openable by whoever downloads it
+        if: steps.dataset.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$HOME/mg/runtime/pgsql/bin/pg_ctl" -D "$HOME/mg/data/pg" -o "-k $HOME/mg/data/sockets -c listen_addresses=" -w start
+          # -d rather than the connection string as a positional word. It reads
+          # the same either way HERE, and the Windows lane is why it is spelled
+          # this way in both: PostgreSQL ships its own getopt_long there and it
+          # does not permute, so a leading DSN makes psql take `-v` for the
+          # USERNAME and ignore every argument after it — silently, exiting 0.
+          "$HOME/mg/runtime/pgsql/bin/psql" -d "postgres://margince_owner@/margince?host=$HOME/mg/data/sockets" \
+            -v ON_ERROR_STOP=1 -c "update capture_connection set credential_ref = null where credential_ref is not null;"
+          left="$("$HOME/mg/runtime/pgsql/bin/psql" -d "postgres://margince_owner@/margince?host=$HOME/mg/data/sockets" \
+            -At -c "select count(*) from capture_connection where credential_ref is not null;")"
+          # Empty is a failure, not a zero: it is what psql answers when it
+          # ignored the -c, and reading it as "none left" ships a folder whose
+          # demo mailbox is sealed under a key only this runner has.
+          [ -n "$left" ] || { echo "::error::psql returned no count — check that it parsed its arguments"; exit 1; }
+          [ "$left" = "0" ] || { echo "::error::$left connection(s) still sealed under this runner key"; exit 1; }
+          "$HOME/mg/runtime/pgsql/bin/pg_ctl" -D "$HOME/mg/data/pg" -m fast -w stop
+          printf 'demo-password-123' > "$HOME/mg/data/admin-password"
+
+      # sockets/ and logs/ stay behind: one is a live endpoint that means nothing
+      # off this machine, the other is this runner's build noise in a folder a
+      # person will read for their OWN errors.
+      - name: Put the seeded data into the folder that ships
+        if: steps.dataset.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build/desktop/margince/data/pg build/desktop/margince/data/blobs
+          cp -Rp "$HOME/mg/data/pg" build/desktop/margince/data/pg
+          [ -d "$HOME/mg/data/blobs" ] && cp -Rp "$HOME/mg/data/blobs" build/desktop/margince/data/blobs
+          cp -p "$HOME/mg/data/admin-password" build/desktop/margince/data/admin-password
+          chmod 700 build/desktop/margince/data
+          rm -rf build/desktop/margince/data/sockets build/desktop/margince/data/logs
+          du -sh build/desktop/margince/data/pg
+
+      # Re-stamped rather than edited in place: the kit is the one thing that
+      # knows what a folder of each kind contains, so a seeded folder is made by
+      # telling it so, not by deleting files here and hoping the README agrees.
+      # It takes the loader, the seeder it drives and the data/demo signpost out,
+      # and swaps the README's "load the demo data" instructions for what a
+      # reader of THIS folder actually needs.
+      - name: Retire the loader a seeded folder does not need
+        if: steps.dataset.outputs.available == 'true'
+        env:
+          VERSION: ${{ inputs.version || steps.built.outputs.sha }}
+          MARGINCE_BUILD_REPO_SHA: ${{ steps.built.outputs.repo7 }}
+          MARGINCE_BUILD_CORE_SHA: ${{ steps.built.outputs.core7 }}
+          # Only set on THIS stamp, not the one during `make desktop` above.
+          # That folder has no demo data, and build-info reports it as `none`;
+          # this one does, so an unset value here would read `unknown` and say
+          # so, rather than quietly claiming the bundle ships nothing.
+          MARGINCE_BUILD_DATASET_SHA: ${{ steps.dataset_sha.outputs.sha7 }}
+        run: make desktop-kit SEEDED=1 VERSION="$VERSION"
+
+      - name: Zip the folder, preserving modes and signatures
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version || steps.built.outputs.sha }}
+          ARCH: ${{ inputs.arch }}
+        run: ditto -c -k --keepParent build/desktop/margince "margince-macos-${ARCH}-${VERSION}.zip"
+
+      - name: Publish the portable folder
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: margince-macos-${{ inputs.arch }}-${{ inputs.version || steps.built.outputs.sha }}
+          path: margince-macos-${{ inputs.arch }}-${{ inputs.version || steps.built.outputs.sha }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      # On failure the staged tree is the only evidence of how far it got. The
+      # compiled PostgreSQL is large, so only the parts that answer questions
+      # travel.
+      - name: Publish the staging tree on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # The arch is in the name because two macOS jobs now run on one
+          # release, and upload-artifact refuses a name a sibling job already
+          # took — a second failure would then be reported as an upload error.
+          name: staging-on-failure-macos-${{ inputs.arch }}-${{ steps.built.outputs.sha }}
+          path: |
+            core/build/desktop/.stage/pgsql/bin
+            core/build/desktop/.stage/pgsql/share/extension
+            core/build/desktop/.stage/valkey
+            core/build/desktop/.stage/bin
+          if-no-files-found: warn
+          retention-days: 3

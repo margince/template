@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# The staging lane's tests, plus the submodule pin, before a push rather than in
+# CI.
+#
+# Scoped deliberately: the synthetic-tree shell tests need no submodule and
+# finish in about a second, and the pin check is one fetch. The composed gates
+# (compose, build, check-composition) are minutes and belong in `make check` and
+# CI, not in everyone's push. A hook slow enough to skip is a hook that gets
+# skipped.
+#
+# The pin check is here, and not only in CI, because it is the one failure CI can
+# be GREEN on: a contribution-branch commit that `make core-pr` already pushed is
+# fetchable, so CI checks it out happily while main pins an unmerged branch. By
+# the time that breaks — the PR squashed, rebased or closed — the commit that
+# caused it is far behind. Before the push is the last cheap moment to catch it.
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+if ! make test-scripts; then
+  echo >&2
+  echo "pre-push: the staging lane's tests fail — push blocked." >&2
+  echo "Run 'make test-scripts' to reproduce. Override with --no-verify only if" >&2
+  echo "you know the failure is unrelated to what you are pushing." >&2
+  exit 1
+fi
+
+if ! make core-check-pin; then
+  echo >&2
+  echo "pre-push: core/ is pinned to a commit upstream has not merged." >&2
+  echo "Pushing this would put that pointer on the branch. See the fix above." >&2
+  echo "Override with --no-verify only if you are pushing this deliberately." >&2
+  exit 1
+fi
