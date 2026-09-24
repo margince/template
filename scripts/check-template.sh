@@ -46,7 +46,10 @@ changed="$(git diff --name-only "$want" -- "${paths[@]}")"
 added="$(git ls-files --others --exclude-standard -- "${paths[@]}")"
 if [ -n "$changed$added" ]; then
   echo "check-template: template-owned paths differ from template commit ${want:0:12}:" >&2
-  printf '%s\n' $changed $added | sort -u | sed 's/^/  /' >&2
+  {
+    if [ -n "$changed" ]; then printf '%s\n' "$changed"; fi
+    if [ -n "$added" ]; then printf '%s\n' "$added"; fi
+  } | sort -u | sed 's/^/  /' >&2
   echo "Make the change in margince-template, then run make template-sync here." >&2
   exit 1
 fi

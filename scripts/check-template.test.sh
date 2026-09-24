@@ -78,5 +78,17 @@ if check "$inst"; then fail "a malformed .template-version fails"; else ok "a ma
 inst="$(fresh_instance)"; printf '%s\n' "0123456789012345678901234567890123456789" > "$inst/.template-version"
 if check "$inst"; then fail "an unknown template commit fails"; else ok "an unknown template commit fails"; fi
 
+# --- a path with a space is not word-split or glob-expanded in the listing ---
+inst="$(fresh_instance)"; printf 'x\n' > "$inst/scripts/with space.sh"
+set +e
+err="$(bash "$inst/scripts/check-template.sh" 2>&1 >/dev/null)"
+status=$?
+set -e
+if [ "$status" -ne 0 ] && printf '%s\n' "$err" | grep -qF 'scripts/with space.sh'; then
+  ok "an untracked file with a space in its name fails, listed on one line"
+else
+  fail "an untracked file with a space in its name fails, listed on one line: status=$status output=$err"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'
