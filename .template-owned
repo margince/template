@@ -1,0 +1,14 @@
+# Paths the template owns (design Section 6). An instance never edits them;
+# changes come from margince-template through `make template-sync`.
+# One git pathspec per line. scripts/check-template.sh reads this file from the
+# template commit named in .template-version, not from the working tree.
+Makefile
+scripts/
+.github/workflows/
+.githooks/
+.gitleaks.toml
+.gitignore
+.template-owned
+AGENTS.md
+CLAUDE.md
+:(glob)docs/*.md

@@ -18,7 +18,7 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 .PHONY: help init config config-check config-sync hooks \
 	stage unstage compose watch new-unit u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
-	check check-instance check-composition build test test-extensions arch ext-imports \
+	check check-instance check-template template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli secret-scan test-secret-scan \
 	fe-install fe-test fe-test-ext fe-typecheck-composed fe-ds-gates fe-lint \
 	dev dev-fresh dev-stop dev-logs seed-dev seed-demo verify-demo run \
@@ -192,7 +192,7 @@ u-check: u ## One unit, plus the screen suites and the composed typecheck (NAME=
 ## that lane can never pass with ours present. Pass 1 therefore runs upstream's
 ## gate on a PRISTINE checkout (delegated wholesale, so no copy of its gate list
 ## lives here to go stale); pass 2 runs the gates that can see our units.
-check: toolcheck check-instance test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
+check: toolcheck check-instance check-template test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
 	@echo "== pass 1: upstream's own gate, units unstaged"
 	@$(MAKE) unstage
 	@$(MAKE) -C $(CORE) check
@@ -235,6 +235,13 @@ ci: ## Everything check runs, plus the real-database and submodule lanes
 
 check-instance: ## instance.yaml is valid and names the tag core/ is at
 	@cd scripts/cli && GOWORK=off go run . check -file $(CURDIR)/instance.yaml -core $(CURDIR)/$(CORE)
+
+check-template: ## Template-owned paths match the template commit this instance merged; instance.mk only adds targets
+	@bash scripts/check-instance-mk.sh
+	@bash scripts/check-template.sh
+
+template-sync: ## Merge margince-template's main into this instance and record it in .template-version
+	@bash scripts/template-sync.sh
 
 test-cli: ## The template CLI's own tests
 	@cd scripts/cli && GOWORK=off go vet ./... && GOWORK=off go test ./...
@@ -346,6 +353,8 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/workflow-wiring.test.sh
 	@bash scripts/desktop-arch.test.sh
 	@bash scripts/check-instance-mk.test.sh
+	@bash scripts/check-template.test.sh
+	@bash scripts/template-sync.test.sh
 	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores
