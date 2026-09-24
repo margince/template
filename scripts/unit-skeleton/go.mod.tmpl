@@ -1,0 +1,8 @@
+// The __NAME__ unit. Its own Go module, as every stable-tier unit is.
+//
+// The module path is not fetchable and is not meant to be: an enabled
+// extension resolves through the composed workspace that gen-composition
+// writes (build/composition/go.work), never through a module proxy.
+module margince.instance/extensions/__NAME__
+
+go 1.26.6

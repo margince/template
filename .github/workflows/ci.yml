@@ -1,0 +1,189 @@
+# The light gate: what runs on the way to main.
+#
+# Everything here runs against core + our staged units, because the vanilla core
+# is already proven by upstream's own CI and the only thing this repo can break
+# is the composition.
+#
+# This job used to be the WHOLE gate, run identically on every pull request and
+# again on every push to main — including two lanes that arm a Postgres cluster
+# and two that install the composed frontend workspace from scratch. A one-line
+# doc edit paid for a database, and a squash merge re-ran on main the identical
+# job that had just passed on the pull request, against the same tree.
+#
+# Those four steps now live in full-check.yml, which the release lane calls and
+# which is a superset of this one. Nothing is lost, it is deferred: a green run here says
+# the composition is sound, NOT that the tree is releasable. `make ci` locally is
+# still the full thing.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  composed:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions are pinned by SHA, as upstream pins them: a mutable tag on a
+      # workflow that can read our source is a supply-chain hole.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: core/backend/go.mod
+          cache-dependency-path: core/backend/go.sum
+
+      ## The first gate step, right after the Go setup it needs and before the
+      ## node/pnpm setup and the build steps below: a bad instance.yaml fails
+      ## in seconds and says nothing about the composed tree, so nothing else
+      ## here should have to run first to find that out.
+      - name: instance.yaml is valid
+        run: make check-instance
+
+      ## Node and pnpm, because `make lint` runs biome over extensions/ and the
+      ## composer resolves a pnpm workspace. The composed frontend SUITES are not
+      ## here — they moved to full-check.yml — but the toolchain is still needed.
+      ## Pinned by SHA and versioned exactly as core's own _lane-frontend.yml pins
+      ## them — a lane that installed a different pnpm than upstream's would
+      ## resolve a different tree and stop predicting CI.
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: core/pnpm-lock.yaml
+
+      ## The reproducibility gate first: if a clean regeneration does not
+      ## reproduce the composition byte-for-byte, every result after it is
+      ## describing a tree nobody can rebuild.
+      - name: Composition is reproducible
+        run: make check-composition
+
+      ## The manifests committed here must match what the composer derives from
+      ## the source. A stale manifest understates a unit's risk tiers, which is
+      ## the one thing an operator reads before enabling it.
+      ##
+      ## The same gate developers run, so a green local run means a green step
+      ## here. It also catches a manifest that is merely UNTRACKED, which a plain
+      ## `git diff` cannot see and which is the normal state of a new unit.
+      - name: Manifests are in sync
+        run: |
+          make compose
+          make check-manifests
+
+      - name: Composed build
+        run: make build
+
+      - name: Extension self-test lanes
+        run: make test-extensions
+
+      ## The architecture fitness tests over the composed tree.
+      ## extensions_arch_test.go reaches our staged units from here and from
+      ## nowhere else, so without this step the import boundary is proven for
+      ## core's units only.
+      ##
+      ## `make arch` rather than `make test`: core's full suite includes
+      ## TestEveryEnabledExtensionIsTracked, which asserts every unit under
+      ## extensions/ is tracked by CORE — false by construction for a staged
+      ## unit. The Makefile comment carries the full argument.
+      - name: Arch fitness over the composed tree
+        run: make arch
+
+      ## The cheap policy gates, last among the composed steps because they are
+      ## seconds and a failure here is unambiguous.
+      - name: Unit import allowlist
+        run: make ext-imports
+
+      ## HERE and not in the full gate: these are shell greps over the
+      ## composed tree — no pnpm install, no vitest — and the person who can act
+      ## on "this screen hard-codes a colour" is the one opening the pull
+      ## request. A design-system violation found at release time is found by
+      ## somebody else, days later.
+      - name: Design-system gates over our units' screens
+        run: make fe-ds-gates
+
+      ## `make lint` needs the pinned Go gate binaries, which nothing else in
+      ## this job installs -- `make init` is a developer lane, not a CI one.
+      ## Delegated to core's own `tools` target rather than a lint action, so the
+      ## golangci-lint version is the one core pins and not a second pin here to
+      ## drift from it. Cached on GOLANGCI_LINT_VERSION so this is a no-op after
+      ## the first run on a given pin.
+      - name: Cache Go gate binaries
+        id: gate-tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/go/bin
+          key: gate-tools-${{ runner.os }}-${{ hashFiles('core/backend/Makefile') }}
+
+      - name: Install the pinned Go gate binaries
+        if: steps.gate-tools.outputs.cache-hit != 'true'
+        run: make core-backend-tools
+
+      ## These were in `make check` and NOT here, so a lint violation in
+      ## extensions/ could reach main with CI green. Core's own lint and gofmt
+      ## lanes cannot cover our units -- they enumerate with `git ls-files`,
+      ## which lists only what core tracks, so a staged copy is invisible to
+      ## them. That is what scripts/lint.sh exists for.
+      - name: Lint and format (extensions)
+        run: make lint
+
+      - name: Generated artifacts match their sources
+        run: make drift
+
+      - name: Documented make targets exist
+        run: make check-docs
+
+      ## The staging lane's own tests. Synthetic trees, no submodule, ~1s — and
+      ## the gate most likely to catch a regression in the scripts every other
+      ## step here depends on.
+      - name: Staging script tests
+        run: make test-scripts
+
+      ## WHICH commit core/ is pinned to, which no other step asks. The steps
+      ## below assert the submodule is unmodified — true of a pointer to an
+      ## unmerged contribution branch as well, and if that branch was pushed the
+      ## whole run is green while main pins something upstream never merged.
+      - name: core/ is pinned to a merged upstream commit
+        run: make core-check-pin
+
+      ## The submodule must come out of a full build untouched — no tracked
+      ## modifications AND no staged residue. The assertions live in
+      ## scripts/check-core-clean.sh so `make ci` runs the same ones; inline
+      ## here, they were a gate CI had and no developer could.
+      - name: core/ has no modifications and no staged residue
+        run: |
+          make unstage
+          bash scripts/check-core-clean.sh
+
+  ## A separate job: it needs no submodule and no toolchain, so it reports in
+  ## under a minute rather than behind the composed build.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+
+      ## The scan reads a `git archive HEAD` export, so it needs the commit and
+      ## nothing else — not the submodule, not node_modules, not a build.
+      - name: No hardcoded credential reaches main
+        run: make secret-scan
+
+      ## And the gate must still catch: a scan that finds nothing looks the same
+      ## whether the tree is clean or the policy was widened until it excuses
+      ## everything.
+      - name: The secret gate still catches
+        run: make test-secret-scan

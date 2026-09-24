@@ -9,7 +9,9 @@ repository.
   `README.md` first.
 - The design is in `docs/superpowers/specs/2026-09-24-client-instance-template-design.md`.
   Do not implement anything that contradicts it. Propose a spec change instead.
-- The repository is in the design phase. No tooling is implemented yet.
+- The foundation is in place: the template works as Margince Default (no
+  extensions). Trial, release, and deployment are planned (see
+  docs/superpowers/plans/2026-09-24-issue-breakdown.md).
 
 ## Rules
 

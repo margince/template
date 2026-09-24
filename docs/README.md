@@ -14,15 +14,16 @@
 | `docs/superpowers/plans/` | The [issue breakdown](superpowers/plans/2026-09-24-issue-breakdown.md) and implementation plans: [template foundation (T1, T2)](superpowers/plans/2026-09-24-template-foundation.md). |
 | `docs/client/` | Instance-owned. Client-specific documentation in a client fork. Empty in the template. |
 
-## Planned guides
+## Guides
 
-The following guides are written as part of the implementation (sub-project 2
-and later). They do not exist yet.
+| Guide | Content |
+|---|---|
+| [Adding an extension](adding-an-extension.md) | Create and test a unit. |
+| [Contributing to core](contributing-to-core.md) | Send a change to `margince/margince`. |
+| [Desktop build](desktop-build.md) | Build and run the desktop bundle. |
+| [Release](release.md) | The current release workflow. |
+| [Troubleshooting](troubleshooting.md) | Known problems and fixes. |
+| [Glossary](glossary.md) | Terms. |
 
-- Create a new client instance
-- Develop an extension
-- Build a trial bundle
-- Release an instance
-- Deploy an instance
-- Upgrade core
-- Merge template changes into an instance
+Planned: create a new instance, trial, deploy, upgrade core, merge template
+changes.

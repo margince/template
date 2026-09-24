@@ -1,0 +1,221 @@
+# The release lane: a semver tag in, a finished release out.
+#
+# The ONLY lane that cuts a downloadable build, and one gesture starts it:
+#
+#   git tag -a v0.3.0 -m "..." && git push origin v0.3.0
+#
+# The tag says which shelf it lands on. A plain v0.3.0 ships; a suffixed
+# v0.3.0-rc.1 publishes as a pre-release, so a build meant for testing does not
+# become the download the release page offers by default. That is what retired
+# the separate pre-release lane this repository used to carry: it answered "does
+# this tree still build" against a tag that named nothing, which an -rc tag
+# answers without a second workflow, a manual publish and a promotion to guard.
+#
+# An unverified release cannot exist here, because CI is the only thing that
+# creates one and it creates it AFTER the gate. Prevention, rather than a
+# complaint after the fact — and nothing here fires a `release` event, since a
+# release created with CI's own GITHUB_TOKEN does not, so there is no way for
+# this lane to retrigger anything, itself included.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+## Serialize, never cancel: by the publish job this workflow is creating a
+## release and uploading assets to it, and a killed run leaves that half done.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ## Resolve and VALIDATE before spending ~20 minutes of runner time. Both
+  ## checks below fail in seconds and say what to do instead.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      ref: ${{ steps.v.outputs.ref }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          submodules: recursive
+          persist-credentials: false
+          ## The ancestry check below needs main, and a tag push checks out one
+          ## commit by default.
+          fetch-depth: 0
+
+      - name: The tag is a version, and it is on main
+        id: v
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          ## This tag IS the version. It names the build, the two zips and the
+          ## release, and it is what a user quotes in a bug report — nothing
+          ## derives it, so nothing catches a malformed one later. It is checked
+          ## here, and a v0.3 or a v0.3.0.1 is refused rather than shipped.
+          if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "release: $TAG is not a release version." >&2
+            echo "  Expected vMAJOR.MINOR.PATCH, optionally -rc.1 / -beta.2." >&2
+            echo "  Delete the tag, and push one that names a version." >&2
+            exit 1
+          fi
+
+          ## A release built from a commit that is not on main is a release
+          ## nobody reviewed. The light gate runs on main, core-check-pin runs in
+          ## it, and neither has seen a commit that never merged.
+          ##
+          ## origin/main is asserted SEPARATELY from the ancestry it feeds. The
+          ## checkout above is credential-less by the time this step runs, so
+          ## nothing here can fetch what is missing — and `merge-base` against a
+          ## ref that does not exist fails exactly like a tag off main does. One
+          ## message per cause, or a fetch-depth regression reads as "your tag is
+          ## not on main" and sends somebody to re-merge work that is merged.
+          if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+            echo "release: origin/main is not in this checkout." >&2
+            echo "  The ancestry check cannot run, so this refuses rather than" >&2
+            echo "  passing blind. Check the checkout step's fetch-depth." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "release: $TAG does not point at a commit on main." >&2
+            echo "  Merge the work first, then tag the merge commit." >&2
+            exit 1
+          fi
+
+          ## A tag with a pre-release suffix publishes as a pre-release, so
+          ## v0.3.0-rc.1 does not become the download the release page offers by
+          ## default. One tag grammar, two shelves.
+          prerelease=false
+          case "$TAG" in *-*) prerelease=true ;; esac
+
+          {
+            echo "version=${TAG}"
+            echo "ref=$(git rev-parse HEAD)"
+            echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
+          echo "release: building ${TAG} (prerelease=${prerelease})" >> "$GITHUB_STEP_SUMMARY"
+
+  full-check:
+    needs: version
+    uses: ./.github/workflows/full-check.yml
+    with:
+      ref: ${{ needs.version.outputs.ref }}
+
+  ## Reusable lanes, called rather than copied, so the bundle a release ships is
+  ## built by the same workflow a manual dispatch exercises. They gate on
+  ## full-check deliberately: macOS minutes bill at ten times a Linux minute, and
+  ## compiling PostgreSQL for a tree that fails lint is an expensive way to find
+  ## that out.
+  desktop-macos-apple-silicon:
+    needs: [version, full-check]
+    uses: ./.github/workflows/desktop-macos.yml
+    with:
+      ref: ${{ needs.version.outputs.ref }}
+      version: ${{ needs.version.outputs.version }}
+      arch: apple-silicon
+    secrets:
+      DEMO_DATASET_DEPLOY_KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+
+  ## The SAME lane, on an Intel runner. A macOS bundle is whatever machine built
+  ## it, so this is the only way an Intel Mac gets a folder that starts at all.
+  ##
+  ## Gated on the Apple-silicon build rather than merely on full-check, which is
+  ## the argument above applied once more: paying for a second macOS job — ten
+  ## times a Linux minute — for a tree whose first macOS job just failed buys
+  ## nothing. It is also the job with an end date. GitHub retires x86_64 on
+  ## Actions in August 2027, so this is the one that will eventually fail for a
+  ## reason outside this repository, and it should be the one that fails last.
+  desktop-macos-intel:
+    needs: [version, full-check, desktop-macos-apple-silicon]
+    uses: ./.github/workflows/desktop-macos.yml
+    with:
+      ref: ${{ needs.version.outputs.ref }}
+      version: ${{ needs.version.outputs.version }}
+      arch: intel
+    secrets:
+      DEMO_DATASET_DEPLOY_KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+
+  desktop-windows:
+    needs: [version, full-check]
+    uses: ./.github/workflows/desktop-windows.yml
+    with:
+      ref: ${{ needs.version.outputs.ref }}
+      version: ${{ needs.version.outputs.version }}
+    secrets:
+      DEMO_DATASET_DEPLOY_KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+
+  ## The release is created HERE, in one call, with all three bundles already in
+  ## hand. There is no window in which the tag has a release that carries no
+  ## download — which is the whole reason this lane exists rather than a person
+  ## publishing first and CI catching up. A release that carries SOME of them is
+  ## the same failure in a smaller size: the reader of the release page cannot
+  ## tell a folder that is missing from one that was never built for their Mac.
+  publish:
+    needs: [version, full-check, desktop-macos-apple-silicon, desktop-macos-intel, desktop-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: margince-macos-apple-silicon-${{ needs.version.outputs.version }}
+          path: dist
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: margince-macos-intel-${{ needs.version.outputs.version }}
+          path: dist
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: margince-windows-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Show what will be attached
+        shell: bash
+        run: ls -l dist
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ## gh resolves the target repo from -R, then GH_REPO, then the git
+          ## remote of the cwd. It does NOT read Actions' GITHUB_REPOSITORY, and
+          ## this job never checks out.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          ## Idempotent on a re-run: a release may already exist if the publish
+          ## step failed after creating it. Uploading with --clobber into the
+          ## existing one is the recovery, rather than a red run nobody can
+          ## clear without deleting the release by hand.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release: $TAG already exists — replacing its assets"
+            gh release upload "$TAG" dist/*.zip --clobber
+          else
+            ## Spelled as a conditional rather than `[ … ] && args+=(…)`. The
+            ## AND-list form is safe here — `set -e` ignores a failing command
+            ## that is not the last of an AND-OR list — but "safe once you
+            ## re-derive that rule" is not what the last step before publishing
+            ## should ask of a reader.
+            args=(--title "$TAG" --generate-notes --verify-tag)
+            if [ "$PRERELEASE" = true ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" "${args[@]}" dist/*.zip
+          fi
+
+          echo "release: published $TAG" >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$TAG" --json assets -q '.assets[].name' >> "$GITHUB_STEP_SUMMARY"
