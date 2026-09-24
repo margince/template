@@ -10,17 +10,16 @@ A Margince client runs an *instance*. An instance consists of the upstream core
 product, the client's extensions, configuration, data, and a deployment
 definition.
 
-Four instance repositories currently exist: `incap`, `afs`, `margince-gradion`,
-and `margince-automation-world`. They are inconsistent:
+Three instance repositories currently exist: `incap`, `afs`, and
+`margince-automation-world`. (`gradionhq/margince-gradion` is the former name of
+`margince-automation-world`.) They are inconsistent:
 
 - `incap` and `afs` provide approximately 12 make targets.
-- `margince-gradion` and `margince-automation-world` provide approximately 70
-  documented make targets, including a development stack, desktop builds,
-  secret scanning, role image builds, and release workflows.
-- `margince-automation-world` is a copy of `margince-gradion`. The two
-  repositories share git history, have identical Makefiles, and contain the
-  same five extensions. Their `scripts/` directories differ in one file
-  (`lint.sh`), where the `margince-gradion` version is newer.
+- `margince-automation-world` provides approximately 70 documented make
+  targets, including a development stack, desktop builds, secret scanning, role
+  image builds, and release workflows. It contains five extensions.
+- A newer `lint.sh` (uses the pinned `craft` binary) exists on the unpushed
+  local branch `chore/update-core` of `margince-automation-world`.
 
 Related responsibilities are spread across other repositories:
 
@@ -68,7 +67,7 @@ specification also defines the responsibility of each repository.
 | Propagation of template changes | Each instance is a fork of the template. Template changes are applied with `git merge template/main`. |
 | Propagation of core upgrades | The existing `make update-core REF=<tag>` command, restricted to tags. |
 | Image builds | Each instance builds its own images in its own CI. Constellation handles licensing and distribution only. |
-| Source of the template tooling | The files of `margince-automation-world` (`scripts/`, `Makefile`, `.github/workflows/`, `.githooks/`, `config/`, supporting files) are copied into the template. `lint.sh` is taken from `margince-gradion`. |
+| Source of the template tooling | The files of `margince-automation-world` (`scripts/`, `Makefile`, `.github/workflows/`, `.githooks/`, `config/`, supporting files) are copied into the template. `lint.sh` is taken from branch `chore/update-core` after it is merged. |
 | Template git history | The template starts with new git history. The history of `margince-automation-world` is not imported, because it contains the code of five client extensions, and every future client fork would inherit that code. The initial import commit records the source repository and commit of each copied file. |
 | `margince-release` | Archived. |
 | Constellation PR #421 | Closed. Its Go commands (`verdict`, `promote`, `notes`, `tag-sources`, `cleanup`) are reused in the template tooling where applicable. |
@@ -84,7 +83,7 @@ specification also defines the responsibility of each repository.
 | `margince-constellation` | Customer records; license issuance (trial and production); license-gated container registry and artifact downloads; `upgrade-cli`. | Instance composition or instance builds. |
 | `margince-demo-database` | Demo datasets. An instance references a dataset by name and version in `data/`. | — |
 | `margince-qc` | Acceptance tests against a specified build. Can target any instance. | — |
-| `margince-d13-deploy` | Moved into `margince-gradion/deploy/`, then archived. | — |
+| `margince-d13-deploy` | Deploys vanilla core (Margince Default) to District 13. Replaced by the `d13` adapter and the `deploy/` directory of an owning instance repository, then archived. The owning repository is an open decision. | — |
 | `margince-release` | — | Archived. |
 
 ## 6. Template Structure and Path Ownership
@@ -186,7 +185,7 @@ and the action taken when it is copied into the template. Each script keeps its
 | `gowork.sh`, `tsconfig-editor.sh` | Generate editor workspace files | Keep |
 | `test-integration-ext.sh` | Integration tests for units | Keep |
 | `desktop-kit/` | Desktop bundle launcher files | Keep |
-| `lint.sh` | Lint unit code | Replace with the `margince-gradion` version (uses the pinned `craft` binary) |
+| `lint.sh` | Lint unit code | Replace with the version on branch `chore/update-core` (uses the pinned `craft` binary) |
 | `package.sh` | Build `api`, `web`, `worker` images with units | Generalize: read the image name and registry from `instance.yaml`; rename labels `com.gradion.*` to `com.margince.instance.*` |
 | `new-unit.sh` | Create a new unit | Generalize: copy from `scripts/unit-skeleton/` instead of `extensions/gradion` |
 | `desktop.sh`, `build-info.sh` | Build, install, and inspect the desktop bundle | Generalize: take the client name in user-facing text from `display_name` in `instance.yaml` |
@@ -414,9 +413,10 @@ Migration order:
 1. `margince-automation-world`. Its tooling is the source of the template, so
    the first merge has the fewest conflicts. Its `zalo-lab` target moves to
    `instance.mk`.
-2. `margince-gradion`, including the move of `margince-d13-deploy` into
-   `deploy/` as the first use of the `d13` adapter.
-3. `incap` and `afs`. These receive the full tooling set for the first time.
+2. `incap` and `afs`. These receive the full tooling set for the first time.
+
+The `margince-d13-deploy` deployment moves to the `d13` adapter and the
+`deploy/` directory of its owning instance repository (open decision).
 
 ## 15. Sub-Projects
 
@@ -434,7 +434,7 @@ The work is delivered as separate implementation plans in the following order:
    endpoint; `make trial`.
 5. **Deployment:** the four-step deployment interface, the `hook` adapter, the
    `d13` adapter.
-6. **Migration and retirement:** migrate the four instances; archive
+6. **Migration and retirement:** migrate the three instances; archive
    `margince-release` and `margince-d13-deploy`; close PR #421.
 
 ## 16. Rejected Alternatives

@@ -6,6 +6,8 @@ Source: [design specification](../specs/2026-09-24-client-instance-template-desi
 released, and deployed using only the template. This is milestone **M1**.
 Milestone **M2** migrates the existing instances and retires old repositories.
 
+`gradionhq/margince-gradion` is the former name of `margince-automation-world`, so there are three instances.
+
 Each issue lists the repository, the scope, the completion criterion, and the
 dependencies.
 
@@ -29,7 +31,7 @@ dependencies.
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
-| T1 | Import tooling | Copy `scripts/`, `Makefile`, `.github/`, `.githooks/`, `config/`, and supporting files from `margince-automation-world`. Take `lint.sh` from `margince-gradion`. Remove all extensions and `zalo-lab`. Record source commits in the commit message. | `make install && make check` pass with no extensions. | — |
+| T1 | Import tooling | Copy `scripts/`, `Makefile`, `.github/`, `.githooks/`, `config/`, and supporting files from `margince-automation-world`. Take `lint.sh` from branch `chore/update-core` of `margince-automation-world`. Remove all extensions and `zalo-lab`. Record source commits in the commit message. | `make install && make check` pass with no extensions. | — |
 | T2 | `instance.yaml` and CLI | Add `instance.yaml` and `scripts/cli` (Go) to read and validate it. Add validation to `make check`. | `make check` fails on an invalid `instance.yaml`. | T1 |
 | T3 | Generalize scripts | `package.sh` reads name and registry from `instance.yaml`. `new-unit.sh` uses `scripts/unit-skeleton/`. `desktop.sh` and `build-info.sh` use `display_name`. Update tests. | No script contains "gradion" or "automation-world". `make test-scripts` passes. | T2 |
 | T4 | `instance.mk` | Add `-include instance.mk` and a check that it does not redefine template targets. | A redefined target fails `make check`. | T1 |
@@ -49,13 +51,12 @@ dependencies.
 
 | ID | Repository | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|---|
-| D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging. | T9 |
+| D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. It currently deploys vanilla core; the owning instance repository is an open decision. | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging. | T9 |
 | I1 | margince-automation-world | Migrate | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml`. | `make check` and `make check-template` pass. | M1 |
-| I2 | margince-gradion | Migrate | Merge the template. Move `margince-d13-deploy` content into `deploy/`. | Staging deploys with the `d13` adapter. | M1, D1 |
 | I3 | incap | Migrate | Merge the template. Add `instance.yaml`. | `make check` passes. | M1 |
 | I4 | afs | Migrate | Merge the template. Add `instance.yaml`. | `make check` passes. | M1 |
 | R1 | margince-release | Archive | Archive the repository. | Archived. | T7 |
-| R2 | margince-d13-deploy | Archive | Archive the repository. | Archived. | I2 |
+| R2 | margince-d13-deploy | Archive | Archive the repository. | Archived. | D1 |
 | R3 | margince-principles | Update references | Replace references to `margince-release` with `margince-template` and `margince-constellation`. | No reference to `margince-release` remains. | R1 |
 
 ## Order
@@ -67,5 +68,35 @@ T3 + K2 + C1 → T7
 T3 + K1      → T8
 T2 + T6      → T11
 all T        → T10 → T12  → M1
-M1 → I1, I3, I4 ; D1 → I2 → R2 ; T7 → R1 → R3
+M1 → I1, I3, I4 ; D1 → R2 ; T7 → R1 → R3
 ```
+
+## GitHub issues
+
+Tracking issue: https://github.com/gradionhq/margince-template/issues/14
+
+| ID | Issue |
+|---|---|
+| C1 | https://github.com/margince/margince/issues/6120 |
+| K1 | https://github.com/gradionhq/margince-constellation/issues/448 |
+| K2 | https://github.com/gradionhq/margince-constellation/issues/449 |
+| K3 | https://github.com/gradionhq/margince-constellation/issues/450 |
+| T1 | https://github.com/gradionhq/margince-template/issues/1 |
+| T2 | https://github.com/gradionhq/margince-template/issues/2 |
+| T3 | https://github.com/gradionhq/margince-template/issues/3 |
+| T4 | https://github.com/gradionhq/margince-template/issues/4 |
+| T5 | https://github.com/gradionhq/margince-template/issues/5 |
+| T6 | https://github.com/gradionhq/margince-template/issues/6 |
+| T7 | https://github.com/gradionhq/margince-template/issues/7 |
+| T8 | https://github.com/gradionhq/margince-template/issues/8 |
+| T9 | https://github.com/gradionhq/margince-template/issues/9 |
+| T10 | https://github.com/gradionhq/margince-template/issues/10 |
+| T11 | https://github.com/gradionhq/margince-template/issues/11 |
+| T12 | https://github.com/gradionhq/margince-template/issues/12 |
+| D1 | https://github.com/gradionhq/margince-template/issues/13 |
+| I1 | https://github.com/gradionhq/margince-automation-world/issues/60 |
+| I3 | https://github.com/margince/incap/issues/1 |
+| I4 | https://github.com/margince/afs/issues/1 |
+| R1 | https://github.com/gradionhq/margince-release/issues/2 |
+| R2 | https://github.com/gradionhq/margince-d13-deploy/issues/37 |
+| R3 | https://github.com/gradionhq/margince-principles/issues/2 |
