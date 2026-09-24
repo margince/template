@@ -4,6 +4,10 @@ Source: [design specification](../specs/2026-09-24-client-instance-template-desi
 
 The Constellation issues (C1, K1–K4) include the proposal for mainline builds, a release harness, flavors, and trials. Trials start after flavors exist.
 
+Versions: core releases are `v0.0.x` tags; hourly mainline builds use build version `1970.N`.
+
+Implementation plan for T1 and T2: [template foundation](2026-09-24-template-foundation.md).
+
 **Target:** a new Margince instance can be created, developed, trialled,
 released, and deployed using only the template. This is milestone **M1**.
 Milestone **M2** retires old repositories. Existing instances (`incap`, `afs`) are not migrated; the template applies to new instances only.
@@ -19,14 +23,14 @@ dependencies.
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
-| C1 | Release tags use the YYYY.edition version scheme | Release git tags currently use `v0.0.x`, while `docker-bake.hcl` stamps images with the `YYYY.edition` scheme. Use `YYYY.edition` (for example `2026.3`) for release tags, and make `release-tag.yml` and `docker-bake.hcl` use the same value. Test builds use year `1970`. | Pushing release tag `<v>` produces images stamped with version `<v>`. | — |
+| C1 | Release images carry the v0.0.x release tag | Release git tags stay `v0.0.x`. For a release tag, `docker-bake.hcl` must stamp the images with the same version (today it stamps `1970.<build>`). The `1970.N` build version stays for scheduled mainline builds. | Pushing release tag `v0.0.<n>` produces images stamped with version `v0.0.<n>`. A scheduled build still produces `1970.<build>`. | — |
 
 ### gradionhq/margince-constellation
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
 | K2 | Flavors: vendor-namespaced products with dynamic catalog and licenses | Add flavors to the dist service. A flavor is namespaced by vendor: `margince/margince` is core, `<vendor>/margince` is a client instance. Add management APIs to create flavors. Make the static `MARGINCE_AUTH_CATALOG` dynamic through the event outbox, so that a new flavor can be licensed immediately. Grant push to the publisher identity for the flavor image namespace. | Creating a flavor through the API allows issuing a license for it, pushing `<vendor>/margince-api`, `-web`, `-worker` with the publisher identity, and pulling them with the license. | — |
-| K3 | Mainline builds of core | Build core `main` on a schedule (for example hourly) and record each build as a test release `1970.N` in the dist service, published to testing. The build definition stays in core (`docker-bake.hcl`, desktop build). Reuse the Go commands from PR #421 (`verdict`, `promote`, `notes`, `cleanup`) and close PR #421. | A new `1970.N` release appears in testing after each scheduled run. PR #421 is closed. | C1 |
+| K3 | Hourly mainline builds of core | Build core `main` hourly with build version `1970.N` and record each build in the dist service, published to testing. The build definition stays in core (`docker-bake.hcl`, desktop build). Release versions remain core's `v0.0.x` tags. Reuse the Go commands from PR #421 (`verdict`, `promote`, `notes`, `cleanup`) and close PR #421. | A new `1970.N` build appears in testing after each hourly run. PR #421 is closed. | C1 |
 | K4 | Release harness | After each release (mainline core build or flavor release), verify: a license for the product is valid, the containers can be pulled with it, the binaries can be downloaded, the SBOMs can be downloaded. Provide it as a command that instance CI can also run. | The harness runs after every mainline build and fails the run on any failed check. | K3 |
 | K1 | Trial license per flavor | Add a trial license type (validity period, trial marker) and an issuance endpoint that accepts an operator credential. Trial licenses are issued per flavor. Used by `make trial` in instance repositories. | An operator credential can obtain a trial JWT for a flavor. Core accepts it in production mode. | K2 |
 
@@ -34,11 +38,11 @@ dependencies.
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
-| T1 | Import tooling | Copy `scripts/`, `Makefile`, `.github/`, `.githooks/`, `config/`, and supporting files from `margince-automation-world`. Take `lint.sh` from branch `chore/update-core` of `margince-automation-world`. Remove all extensions and `zalo-lab`. Record source commits in the commit message. | `make install && make check` pass with no extensions. | — |
-| T2 | instance.yaml and CLI | Add `instance.yaml` (including `flavor: <vendor>/margince`) and a Go CLI in `scripts/cli` that reads and validates it. Add the validation to `make check`. | `make check` fails on an invalid `instance.yaml`. | T1 |
-| T3 | Remove client-specific values from scripts | `package.sh` derives the image namespace from `flavor` in `instance.yaml`. `new-unit.sh` uses `scripts/unit-skeleton/`. `desktop.sh` and `build-info.sh` use `display_name`. Update the tests. | No script contains "gradion" or "automation-world". `make test-scripts` passes. | T2 |
+| T1 | Import tooling from margince-automation-world | Copy the tooling from `margince-automation-world` `644ee45` and pin core at `v0.0.2`. Fix what depends on that instance's extensions: `lint.sh` (pinned craft binary), `lib.test.sh` (synthetic units), `secret-scan.test.sh` and `.gitleaks.toml` (no client allowlist), `new-unit.sh` (neutral `scripts/unit-skeleton/`, with `new-unit.test.sh`), `Makefile` and `.gitignore` (no `zalo-lab`), tooling docs without client references, README commands that exist. Plan: `docs/superpowers/plans/2026-09-24-template-foundation.md`, Tasks 1–5. | `make install`, `make check`, `make ci`, `make dev`, and `make new-unit` + `make u` work on a fresh clone. CI is green. | — |
+| T2 | instance.yaml and CLI | Add `instance.yaml` (`name`, `display_name`, `core`, `flavor`; unknown keys refused) and a Go CLI in `scripts/cli` (run with `GOWORK=off`). `make check-instance` validates the file and that `core` is a tag at `core/` HEAD. Part of `make check` and CI. Plan Task 6. | `make check` fails on an invalid `instance.yaml` or a core mismatch, naming each problem. | T1 |
+| T3 | Remove client-specific values from release and desktop scripts | `package.sh` derives the image namespace from `flavor` in `instance.yaml` and uses neutral labels. `desktop.sh` and `build-info.sh` use `display_name`. Update the tests. | No script contains "gradion" or "automation-world" except the demo dataset repository name. `make test-scripts` passes. | T2 |
 | T4 | `instance.mk` | Add `-include instance.mk` and a check that it does not redefine template targets. | A redefined target fails `make check`. | T1 |
-| T5 | Core pin by tag | `make update-core` accepts tags only and updates `instance.yaml`. `make check` verifies the submodule matches `instance.yaml`. | A branch ref is rejected. A mismatch fails `make check`. | T2, C1 |
+| T5 | Core pin by tag | `make update-core` accepts release tags only and updates `core` in `instance.yaml`. | A branch ref or commit is rejected. After `make update-core REF=<tag>`, `make check-instance` passes. | T2 |
 | T6 | Drift check | Add `.template-version` and `make check-template`. | Editing a template-owned file fails `make check`. | T1 |
 | T7 | Release workflow | Add `make release`. Extend `release.yml` with image build (candidate tag), smoke test, publish to the flavor namespace, record the flavor release in the dist service, and run the release harness. Port `notes` and `cleanup` from PR #421 into `scripts/cli`. | Tag `v<v>` publishes three role images and release notes for the flavor, and the release harness passes. | T3, C1, K2, K4 |
 | T8 | Laptop trial build | Add `make trial`: desktop build, production configuration, dataset, and a trial license for the flavor from `scripts/trial-license.sh`. | `make trial` produces a bundle that starts in production mode on macOS. | T3, K1 |

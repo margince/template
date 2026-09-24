@@ -1,7 +1,7 @@
 # Client Instance Template — Design Specification
 
 - **Date:** 2026-09-24
-- **Status:** Draft, pending review
+- **Status:** Approved for the foundation (T1, T2); later sections may change
 - **Repository:** `gradionhq/margince-template`
 
 ## 1. Background
@@ -19,8 +19,9 @@ template. They are inconsistent:
 - `margince-automation-world` provides approximately 70 documented make
   targets, including a development stack, desktop builds, secret scanning, role
   image builds, and release workflows. It contains five extensions.
-- A newer `lint.sh` (uses the pinned `craft` binary) exists on the unpushed
-  local branch `chore/update-core` of `margince-automation-world`.
+- Its `main` pins a core commit from before core moved the `craft` tool out of
+  `cli/craft`. `scripts/lint.sh` needs a small change to run against core
+  `v0.0.2` (see Section 7).
 
 Related responsibilities are spread across other repositories:
 
@@ -68,11 +69,11 @@ specification also defines the responsibility of each repository.
 | Propagation of template changes | Each instance is a fork of the template. Template changes are applied with `git merge template/main`. |
 | Propagation of core upgrades | The existing `make update-core REF=<tag>` command, restricted to tags. |
 | Image builds | Each instance builds its own images in its own CI. Constellation handles licensing and distribution only. |
-| Version scheme | `YYYY.edition`, as defined in `margince-constellation/specs/functional/02-versioning.md`. Test builds use year `1970` (`1970.1`, `1970.2`, …). |
-| Mainline core builds | Constellation builds core `main` on a schedule and records each build as a test release (`1970.N`) in the dist service. The build definition stays in core. |
+| Version scheme | Release versions are git tags: core `v0.0.x`, instances `v<major>.<minor>.<patch>`. Hourly mainline builds carry a build version in the Constellation `YYYY.edition` format with year `1970` (`1970.1`, `1970.2`, …). See Section 11. |
+| Mainline core builds | Constellation builds core `main` on a schedule and records each build as a test build (`1970.N`) in the dist service. The build definition stays in core. |
 | Flavors | Each instance is registered in Constellation as a **flavor**, namespaced by vendor (for example `acme/margince`). Core is `margince/margince`. Licenses are issued per flavor. Instance images are published under the flavor namespace. |
 | Release verification | Every release, core or flavor, is verified by the Constellation release harness: a valid license, pullable containers, downloadable binaries, downloadable SBOMs. |
-| Source of the template tooling | The files of `margince-automation-world` (`scripts/`, `Makefile`, `.github/workflows/`, `.githooks/`, `config/`, supporting files) are copied into the template. `lint.sh` is taken from branch `chore/update-core` after it is merged. |
+| Source of the template tooling | The files of `margince-automation-world` (`scripts/`, `Makefile`, `.github/workflows/`, `.githooks/`, `.gitignore`, `.gitleaks.toml`, tooling docs) are copied into the template from `origin/main` commit `644ee45`. `config/` is not copied: it is not tracked there, and `make config` generates it from core's examples. |
 | Template git history | The template starts with new git history. The history of `margince-automation-world` is not imported, because it contains the code of five client extensions, and every future client fork would inherit that code. The initial import commit records the source repository and commit of each copied file. |
 | `margince-release` | Archived. |
 | Constellation PR #421 | Closed. Its Go commands (`verdict`, `promote`, `notes`, `tag-sources`, `cleanup`) are reused in the Constellation mainline builds and in the template tooling where applicable. |
@@ -103,7 +104,7 @@ tooling directory remains `scripts/`.
 ```
 margince-template/                   (client forks use the same structure)
 ├── core/                  ◆ git submodule, pinned to a core tag
-├── instance.yaml          ● instance metadata: name, core version, units,
+├── instance.yaml          ● instance metadata: name, core version,
 │                            deployment targets, flavor
 ├── instance.mk            ● optional client-specific make targets
 ├── extensions/            ● client extension units (empty in the template)
@@ -141,8 +142,7 @@ Example (all values are illustrative):
 ```yaml
 name: acme                       # used in image names and the trial bundle name
 display_name: Acme               # used in user-facing text of the desktop bundle
-core: 2026.3                     # must match the tag of the core/ submodule
-units: [acme]                    # extensions/ entries to compose; empty means none
+core: v0.0.2                     # must match the tag of the core/ submodule
 data:
   dataset: margince-demo-database/acme@v1    # optional
 flavor: acme/margince            # Constellation flavor: license product and image namespace
@@ -151,15 +151,33 @@ deploy:
   production: { adapter: d13 }
 ```
 
-Scripts read `instance.yaml` through the Go CLI (`scripts/cli`). Go is already
-a required tool, so this adds no dependency.
+There is no `units` key. A directory under `extensions/` is an enabled unit,
+as in the existing tooling (`scripts/stage.sh`). A second list would duplicate
+that and could disagree with it.
 
-`make check` validates the following:
+Scripts read `instance.yaml` through the Go CLI (`scripts/cli`), run with
+`GOWORK=off` because the editor `go.work` at the repository root does not list
+it. Go is already a required tool, so this adds no dependency.
 
-- `core` matches the tag of the `core/` submodule.
-- Each entry in `units` exists under `extensions/`.
-- Each environment under `deploy` has a matching `deploy/<env>/` directory.
+`make check-instance` (part of `make check`) validates the following:
+
+- `name` matches `^[a-z0-9]+(-[a-z0-9]+)*$` and has at most 32 characters.
+- `display_name` is present and is one line.
+- `core` is one of the tags that point at `core/` HEAD.
 - `flavor` has the form `<vendor>/margince`.
+- No unknown key is present.
+- Each environment under `deploy` has a matching `deploy/<env>/` directory
+  (added with the `deploy` key in T9).
+
+Sections are added to the schema by the issue that uses them: `data` (T8),
+`deploy` (T9). The template's own file is:
+
+```yaml
+name: margince-default
+display_name: Margince Default
+core: v0.0.2
+flavor: margince/margince
+```
 
 The image namespace is derived from `flavor`: `<registry>/<vendor>/margince-api`,
 `-web`, and `-worker`. The registry host is a template setting, not an
@@ -181,6 +199,7 @@ and the action taken when it is copied into the template. Each script keeps its
 | Script | Function | Action |
 |---|---|---|
 | `lib.sh` | Shared shell functions | Keep |
+| `lib.test.sh` | Tests for `lib.sh` | Change: the path-rewrite cases create synthetic units instead of assuming `zalo-oa` and `dispact-connector` exist |
 | `stage.sh`, `unstage.sh` | Copy units into `core/extensions/` and remove them | Keep |
 | `sync-manifests.sh`, `check-manifests.sh` | Keep unit manifests committed and current | Keep |
 | `check-core-clean.sh` | Verify `core/` is unmodified after a build | Keep |
@@ -190,12 +209,13 @@ and the action taken when it is copied into the template. Each script keeps its
 | `core-contrib.sh` | Create branches and pull requests for core contributions | Keep |
 | `fe-ds-gates.sh`, `fmt.sh` | Design-system gates and formatting for unit code | Keep |
 | `gitleaks-pin.sh`, `secret-scan.sh` | Pinned secret scanner | Keep |
+| `secret-scan.test.sh`, `.gitleaks.toml` | Prove the secret policy still catches | Change: remove the `zalo-personal` allowlist; the test plants tokens into synthetic files |
 | `gowork.sh`, `tsconfig-editor.sh` | Generate editor workspace files | Keep |
 | `test-integration-ext.sh` | Integration tests for units | Keep |
 | `desktop-kit/` | Desktop bundle launcher files | Keep |
-| `lint.sh` | Lint unit code | Replace with the version on branch `chore/update-core` (uses the pinned `craft` binary) |
+| `lint.sh` | Lint unit code | Change: run craft through `core/scripts/craft-pin.sh`; core `v0.0.2` has no `cli/craft` |
 | `package.sh` | Build `api`, `web`, `worker` images with units | Generalize: read the image name and registry from `instance.yaml`; rename labels `com.gradion.*` to `com.margince.instance.*` |
-| `new-unit.sh` | Create a new unit | Generalize: copy from `scripts/unit-skeleton/` instead of `extensions/gradion` |
+| `new-unit.sh` | Create a new unit | Change (T1): render `scripts/unit-skeleton/*.tmpl` instead of copying `extensions/gradion`; add `new-unit.test.sh` |
 | `desktop.sh`, `build-info.sh` | Build, install, and inspect the desktop bundle | Generalize: take the client name in user-facing text from `display_name` in `instance.yaml` |
 
 The `Makefile` is copied with the following changes:
@@ -204,7 +224,13 @@ The `Makefile` is copied with the following changes:
 - The `zalo-lab` target is removed. It moves to `instance.mk` in
   `margince-automation-world`.
 - The `new-unit` description refers to `scripts/unit-skeleton/`.
-- The new targets in Section 8 are added.
+- The new targets in Section 9 are added.
+
+`.gitignore` loses the `.zalolab/` rule. The tooling docs (`adding-an-extension`,
+`contributing-to-core`, `desktop-build`, `glossary`, `release`,
+`troubleshooting`) are copied and their client references replaced. Every
+`make <target>` named in `README.md`, `CLAUDE.md`, or `docs/*.md` must exist,
+because `scripts/check-docs.sh` enforces it.
 
 New components that do not exist in `margince-automation-world`:
 
@@ -241,7 +267,9 @@ against the template itself to verify the template.
 |---|---|---|
 | `make install` | Verifies required tools, checks out core, installs dependencies, git hooks, and configuration. | Existing |
 | `make dev` | Starts infrastructure services and runs `api`, `worker`, and `web` with the instance units composed. | Existing |
-| `make new-unit NAME=<n>` | Creates an extension in `extensions/<n>` from `scripts/unit-skeleton/` and adds it to `instance.yaml`. | Existing, changed |
+| `make new-unit NAME=<n>` | Creates an extension in `extensions/<n>` from `scripts/unit-skeleton/`. | Existing, changed |
+| `make check-instance` | Validates `instance.yaml` (Section 6.2). | New |
+| `make test-cli` | Runs the Go CLI tests. Part of `make test-scripts`. | New |
 | `make check` | Full gate: core checks, composition, unit tests, linters, secret scanning. Adds `instance.yaml` validation and `check-template`. | Existing, changed |
 | `make ci` | `make check` plus integration tests against a real database and submodule checks. | Existing |
 | `make package VERSION=<v>` | Builds the `api`, `web`, and `worker` images with the instance units. | Existing, changed |
@@ -363,25 +391,16 @@ configuration therefore does not define `license.token`.
 
 ## 11. Versioning (Goals 1 and 2)
 
-The version scheme is `YYYY.edition`, as defined in
-`margince-constellation/specs/functional/02-versioning.md`.
+| Version | Format | Used for |
+|---|---|---|
+| Core release | git tag `v0.0.x` (for example `v0.0.2`) | What instances pin. `make update-core` accepts release tags only. The version stamped into the release images by `docker-bake.hcl` equals the tag. |
+| Core build | `1970.N` (Constellation `YYYY.edition` format) | Hourly mainline builds of core `main` in Constellation, published to testing only. Not pinned by instances. |
+| Instance release | git tag `v<major>.<minor>.<patch>` in the instance repository | Image tags of the instance. The core release it is built on is recorded as an OCI label and in the dist service. |
+| Template | template commit in `.template-version`; template release tags | The template version an instance last merged. |
 
-- **Core:** each release is a git tag in the form `YYYY.edition` (for example
-  `2026.3`). The git tag equals the version stamped into the images by
-  `docker-bake.hcl`. Mainline test builds use year `1970` (`1970.1`, `1970.2`,
-  …) and are published to the testing environment only. `make update-core`
-  accepts release tags only.
-- **Instance (flavor):** has an independent version. Releases are tagged
-  `v<major>.<minor>.<patch>` in the instance repository. The dist service
-  records each flavor release with this version and the core version it is
-  built on. Images are tagged with the instance version. The core version is
-  recorded as an OCI label.
-- **Template:** each instance records the last merged template commit in
-  `.template-version`. The template tags its releases so that each merge
-  references a tagged version.
-
-Current state: core git tags use `v0.0.x`. Core adopts `YYYY.edition` for git
-tags in sub-project 1.
+Current state: core has release tags `v0.0.1` and `v0.0.2`, and `docker-bake.hcl`
+stamps `1970.<build>`. Sub-project 1 makes the release images carry the release
+tag and keeps `1970.N` for hourly builds.
 
 ## 12. Error Handling
 
@@ -424,9 +443,9 @@ The `margince-d13-deploy` deployment moves to the `d13` adapter and the
 
 The work is delivered as separate implementation plans in the following order:
 
-1. **Core versioning and mainline builds:** core git tags use `YYYY.edition`
-   and equal the image version; Constellation builds core `main` on a schedule
-   as `1970.N` test releases; the release harness verifies each build.
+1. **Core versioning and mainline builds:** core release tags stay `v0.0.x`
+   and equal the release image version; Constellation builds core `main` hourly
+   with build version `1970.N`; the release harness verifies each build.
 2. **Template foundation:** copy the tooling from `margince-automation-world`,
    generalize the scripts in Section 7, add `instance.yaml`, `instance.mk`,
    the unit skeleton, the drift check, and the template CI.

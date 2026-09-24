@@ -4,14 +4,14 @@
 
 | Document | Content |
 |---|---|
-| [Client instance template — design](superpowers/specs/2026-09-24-client-instance-template-design.md) | Goals, repository responsibilities, structure, script reuse, workflows, migration, and sub-projects. Status: pending review. |
+| [Client instance template — design](superpowers/specs/2026-09-24-client-instance-template-design.md) | Goals, repository responsibilities, structure, script reuse, workflows, migration, and sub-projects. Status: approved for the foundation (T1, T2). |
 
 ## Directory layout
 
 | Directory | Content |
 |---|---|
 | `docs/superpowers/specs/` | Design specifications. One file per design, named `YYYY-MM-DD-<topic>-design.md`. |
-| `docs/superpowers/plans/` | Implementation plans and the [issue breakdown](superpowers/plans/2026-09-24-issue-breakdown.md). |
+| `docs/superpowers/plans/` | The [issue breakdown](superpowers/plans/2026-09-24-issue-breakdown.md) and implementation plans: [template foundation (T1, T2)](superpowers/plans/2026-09-24-template-foundation.md). |
 | `docs/client/` | Instance-owned. Client-specific documentation in a client fork. Empty in the template. |
 
 ## Planned guides
