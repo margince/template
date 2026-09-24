@@ -79,6 +79,23 @@ else
   ok "refuses an existing unit"
 fi
 
+# --- a render that fails partway through leaves nothing behind ---
+#
+# Validation cannot catch this one: the name is fine, and the failure is a
+# missing template discovered only once rendering is under way, after
+# extensions/<name> already exists. The ERR trap around render() is what
+# cleans this up, not the up-front checks above.
+
+repo="$(fresh_repo)"
+rm "$repo/scripts/unit-skeleton/unit_test.go.tmpl"
+if out="$(bash "$repo/scripts/new-unit.sh" acme-sync 2>&1)"; then
+  fail "a failed render — it succeeded: $out"
+elif [ -n "$(ls -A "$repo/extensions")" ]; then
+  fail "a failed render — it left extensions/acme-sync behind"
+else
+  ok "a failed render leaves no partial unit"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%s case(s) failed\n' "$FAILURES" >&2
   exit 1

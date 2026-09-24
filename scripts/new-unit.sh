@@ -7,7 +7,7 @@
 # unit the next compose tries to enable.
 #
 # Usage: bash scripts/new-unit.sh <name>   (or: make new-unit NAME=<name>)
-set -euo pipefail
+set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 name="${1:-}"
@@ -42,6 +42,12 @@ SKELETON="$ROOT/scripts/unit-skeleton"
 # Render every template into the new unit. The manifest is DERIVED and not
 # rendered here: the next compose writes it.
 mkdir -p "$SRC_EXT/$name"
+# A failure partway through rendering (a missing or unreadable template) must
+# not leave a partial unit behind: presence under extensions/ IS the
+# enablement (see the file header), so a half-written directory here is a
+# unit the next compose tries to enable. `set -E` above makes this trap fire
+# even when render, not the top level, is where the failure happens.
+trap 'rm -rf "$SRC_EXT/$name"' ERR
 render() {
   local src="$1" dest="$2"
   cp "$src" "$dest"
@@ -50,11 +56,14 @@ render() {
 render "$SKELETON/go.mod.tmpl"       "$SRC_EXT/$name/go.mod"
 render "$SKELETON/unit.go.tmpl"      "$SRC_EXT/$name/$pkg.go"
 render "$SKELETON/unit_test.go.tmpl" "$SRC_EXT/$name/${pkg}_test.go"
+trap - ERR
 
 echo "new-unit: created extensions/$name (package $pkg)"
 echo
 echo "next:"
 echo "  \$EDITOR extensions/$name/$pkg.go   # declare what it does"
+echo "  make compose                        # writes extensions/$name/manifest.generated.json"
+echo "  git add extensions/$name"
 echo "  make u NAME=$name                   # its tests + the policy gates"
 echo
 echo "The manifest is generated: 'make compose' writes"
