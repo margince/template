@@ -35,6 +35,21 @@ instance_get() {
   (cd "$ROOT/scripts/cli" && GOWORK=off go run . get -file "${INSTANCE_FILE:-$ROOT/instance.yaml}" "$1")
 }
 
+# image_repo — the REPO this instance's role images are named under.
+#
+# core's docker-bake.hcl names the images ${REPO}/api, ${REPO}/web and
+# ${REPO}/worker. The instance's flavor (<vendor>/margince) is the namespace;
+# REGISTRY, when set, is the registry host in front of it.
+image_repo() {
+  local flavor
+  flavor="$(instance_get flavor)"
+  if [ -n "${REGISTRY:-}" ]; then
+    printf '%s/%s\n' "${REGISTRY%/}" "$flavor"
+  else
+    printf '%s\n' "$flavor"
+  fi
+}
+
 # The managed block in the submodule's info/exclude. Staged units are untracked
 # content in core/, which would otherwise make this repo report the submodule as
 # dirty on every build and train everyone to ignore that signal.

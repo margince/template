@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# package.sh — build this installation's role images, with our units inside.
+# package.sh — build this instance's role images, with our units inside.
 #
 # The images come out of CORE's Dockerfile and docker-bake.hcl, which is the
 # point: the three role images (api, worker, web) are upstream's build, and our
@@ -8,7 +8,7 @@
 # them in. There is no second build definition here to drift from upstream's.
 #
 # WHAT IDENTIFIES THE ARTIFACT is this repository's commit, not core's. A core
-# SHA names the upstream half; an installation image is core PLUS a unit set
+# SHA names the upstream half; an instance image is core PLUS a unit set
 # PLUS a submodule pointer, and only this repo's commit names all three. The
 # core SHA rides along as a label so the pair is readable off the image.
 #
@@ -21,7 +21,8 @@ require_core
 command -v docker >/dev/null || die "package: docker is not installed"
 docker buildx version >/dev/null 2>&1 || die "package: docker buildx is required (it drives core's bake file)"
 
-REPO="${REPO:-margince-automation-world}"
+REPO="${REPO:-$(image_repo)}"
+instance_name="$(instance_get name)"
 ROLE="${ROLE:-}"
 
 revision="$(git -C "$ROOT" rev-parse HEAD)"
@@ -49,7 +50,7 @@ fi
 # The unit set going in, named before a long build rather than discovered after.
 units="$(source_units | tr '\n' ' ')"
 printf 'package: %s/{api,worker,web}:%s\n' "$REPO" "$VERSION"
-printf '  installation %s\n' "$revision"
+printf '  instance      %s\n' "$revision"
 printf '  core         %s\n' "$core_revision"
 printf '  units        %s\n' "${units:-none}"
 printf '\n'
@@ -60,9 +61,10 @@ printf '\n'
 cd "$CORE"
 REPO="$REPO" VERSION="$VERSION" MARGINCE_BUILD_REVISION="$revision" \
   docker buildx bake \
-    --set "*.labels.com.gradion.installation.revision=$revision" \
-    --set "*.labels.com.gradion.core.revision=$core_revision" \
-    --set "*.labels.com.gradion.units=${units% }" \
+    --set "*.labels.com.margince.instance.name=$instance_name" \
+    --set "*.labels.com.margince.instance.revision=$revision" \
+    --set "*.labels.com.margince.core.revision=$core_revision" \
+    --set "*.labels.com.margince.instance.units=${units% }" \
     ${ROLE:+"$ROLE"}
 
 printf '\npackage: built. Inspect what went in:\n'

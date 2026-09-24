@@ -333,6 +333,15 @@ if [ "$(instance_get flavor)" = "acme/margince" ]; then ok "instance_get reads t
 if instance_get units >/dev/null 2>&1; then fail "instance_get refuses an unknown key"; else ok "instance_get refuses an unknown key"; fi
 unset INSTANCE_FILE
 
+# --- image_repo ---
+
+INSTANCE_FILE="$TMP/instance.yaml"
+unset REGISTRY
+if [ "$(image_repo)" = "acme/margince" ]; then ok "image_repo is the flavor without a registry"; else fail "image_repo is the flavor without a registry"; fi
+if [ "$(REGISTRY=registry.example.com image_repo)" = "registry.example.com/acme/margince" ]; then ok "image_repo prefixes the registry"; else fail "image_repo prefixes the registry"; fi
+if [ "$(REGISTRY=registry.example.com/ image_repo)" = "registry.example.com/acme/margince" ]; then ok "image_repo drops a trailing slash"; else fail "image_repo drops a trailing slash"; fi
+unset INSTANCE_FILE
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%s case(s) failed\n' "$FAILURES" >&2
   exit 1
