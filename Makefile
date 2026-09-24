@@ -16,7 +16,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit u u-fe u-check \
+	stage unstage compose watch new-unit new-instance u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli secret-scan test-secret-scan \
@@ -233,6 +233,10 @@ ci: ## Everything check runs, plus the real-database and submodule lanes
 	@echo
 	@echo "ci: all lanes passed"
 
+new-instance: ## Create a client instance repository from this template (NAME=, DISPLAY_NAME=, VENDOR=, DIR=, PUSH=1 OWNER=)
+	@NAME="$(NAME)" DISPLAY_NAME="$(DISPLAY_NAME)" VENDOR="$(VENDOR)" DIR="$(DIR)" \
+		PUSH="$(PUSH)" OWNER="$(OWNER)" bash scripts/new-instance.sh
+
 check-instance: ## instance.yaml is valid and names the tag core/ is at
 	@cd scripts/cli && GOWORK=off go run . check -file $(CURDIR)/instance.yaml -core $(CURDIR)/$(CORE)
 
@@ -355,6 +359,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/check-instance-mk.test.sh
 	@bash scripts/check-template.test.sh
 	@bash scripts/template-sync.test.sh
+	@bash scripts/new-instance.test.sh
 	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores
