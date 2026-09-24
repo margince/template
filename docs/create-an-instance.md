@@ -68,6 +68,16 @@ directories. Instance-owned paths (`instance.yaml`, `instance.mk`,
 `extensions/`, `config/`, `data/`, `deploy/`, `docs/client/`) are not checked
 and are where the instance's own work goes.
 
+The root `.gitignore` is template-owned. Put an instance's own ignore rules
+in a nested `.gitignore` inside an instance-owned directory (for example
+`extensions/.gitignore` or `data/.gitignore`), or in `.git/info/exclude` for
+rules that apply to one checkout only.
+
+`make check-template` protects against honest drift: an edit made to a
+template-owned path by mistake. It does not prevent a deliberate edit of
+`.template-version`, which would make it compare against another commit.
+Review changes to `.template-version` like any other change.
+
 ## 4. Daily work
 
 `make dev` runs the development stack with the instance's units composed.
@@ -77,6 +87,15 @@ check` runs the full quality gate, including `check-instance` (is
 the template).
 
 ## 5. Receiving template changes
+
+A fresh clone of an instance (for example from GitHub) has no `template`
+remote, because `git clone` creates `origin` only. Add it once per clone:
+
+```sh
+git remote add template git@github.com:gradionhq/margince-template.git
+```
+
+Then run:
 
 ```sh
 make template-sync
@@ -150,6 +169,7 @@ prefixed with `REGISTRY` when it is set:
   `myregistry.example.com/<vendor>/margince/api`, `/web`, `/worker`.
 
 `REGISTRY` is supplied at build time; it is not stored in `instance.yaml`.
-Each image carries the instance's git revision, core's git revision, and the
-staged unit set as OCI labels (`docker inspect <repo>/api:<version> --format
+Each image carries the instance's name and git revision, core's git
+revision and release tag (`com.margince.core.version`, from `core:` in
+`instance.yaml`), and the staged unit set as OCI labels (`docker inspect <repo>/api:<version> --format
 '{{json .Config.Labels}}'`).

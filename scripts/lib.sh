@@ -42,7 +42,9 @@ instance_get() {
 # REGISTRY, when set, is the registry host in front of it.
 image_repo() {
   local flavor
-  flavor="$(instance_get flavor)"
+  # `|| return 1`: a caller in an `if` or `$(...)` runs with set -e off, so a
+  # failed read would otherwise yield a repo of "" or "<registry>/".
+  flavor="$(instance_get flavor)" || return 1
   if [ -n "${REGISTRY:-}" ]; then
     printf '%s/%s\n' "${REGISTRY%/}" "$flavor"
   else

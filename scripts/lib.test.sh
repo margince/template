@@ -342,6 +342,16 @@ if [ "$(REGISTRY=registry.example.com image_repo)" = "registry.example.com/acme/
 if [ "$(REGISTRY=registry.example.com/ image_repo)" = "registry.example.com/acme/margince" ]; then ok "image_repo drops a trailing slash"; else fail "image_repo drops a trailing slash"; fi
 unset INSTANCE_FILE
 
+INSTANCE_FILE="$TMP/no-such-instance.yaml"
+if out="$(REGISTRY=registry.example.com image_repo 2>/dev/null)"; then
+  fail "image_repo fails when instance.yaml cannot be read — printed '$out'"
+elif [ -n "$out" ]; then
+  fail "image_repo fails when instance.yaml cannot be read — printed '$out'"
+else
+  ok "image_repo fails when instance.yaml cannot be read"
+fi
+unset INSTANCE_FILE
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%s case(s) failed\n' "$FAILURES" >&2
   exit 1

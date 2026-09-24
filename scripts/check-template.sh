@@ -29,7 +29,12 @@ fi
 # The commit is in this repository's history because the instance merged it. A
 # shallow CI checkout may lack it, so fetch exactly that commit from origin.
 if ! git cat-file -e "$want^{commit}" 2>/dev/null; then
-  git fetch --quiet --depth=1 origin "$want" 2>/dev/null || true
+  if ! fetch_err="$(git fetch --quiet --depth=1 origin "$want" 2>&1)"; then
+    echo "check-template: could not fetch template commit $want from origin:" >&2
+    printf '%s\n' "$fetch_err" | sed 's/^/  /' >&2
+    echo "check-template: template commit $want is not in this repository; run make template-sync" >&2
+    exit 1
+  fi
 fi
 if ! git cat-file -e "$want^{commit}" 2>/dev/null; then
   echo "check-template: template commit $want is not in this repository; run make template-sync" >&2

@@ -23,6 +23,8 @@ docker buildx version >/dev/null 2>&1 || die "package: docker buildx is required
 
 REPO="${REPO:-$(image_repo)}"
 instance_name="$(instance_get name)"
+# Read here, before `cd "$CORE"`: the release tag instance.yaml records.
+core_version="$(instance_get core)"
 ROLE="${ROLE:-}"
 
 revision="$(git -C "$ROOT" rev-parse HEAD)"
@@ -64,6 +66,7 @@ REPO="$REPO" VERSION="$VERSION" MARGINCE_BUILD_REVISION="$revision" \
     --set "*.labels.com.margince.instance.name=$instance_name" \
     --set "*.labels.com.margince.instance.revision=$revision" \
     --set "*.labels.com.margince.core.revision=$core_revision" \
+    --set "*.labels.com.margince.core.version=$core_version" \
     --set "*.labels.com.margince.instance.units=${units% }" \
     ${ROLE:+"$ROLE"}
 

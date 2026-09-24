@@ -77,6 +77,15 @@ if check "$inst"; then fail "a malformed .template-version fails"; else ok "a ma
 
 inst="$(fresh_instance)"; printf '%s\n' "0123456789012345678901234567890123456789" > "$inst/.template-version"
 if check "$inst"; then fail "an unknown template commit fails"; else ok "an unknown template commit fails"; fi
+if out="$(bash "$inst/scripts/check-template.sh" 2>&1)"; then
+  fail "a failed fetch is reported with git's error — it passed"
+elif printf '%s\n' "$out" | grep -qx "check-template: could not fetch template commit 0123456789012345678901234567890123456789 from origin:" \
+  && printf '%s\n' "$out" | grep -q '^  .' \
+  && printf '%s\n' "$out" | grep -q 'run make template-sync'; then
+  ok "a failed fetch is reported with git's error"
+else
+  fail "a failed fetch is reported with git's error: $out"
+fi
 
 # --- a path with a space is not word-split or glob-expanded in the listing ---
 inst="$(fresh_instance)"; printf 'x\n' > "$inst/scripts/with space.sh"
