@@ -4,7 +4,7 @@ Source: [design specification](../specs/2026-09-24-client-instance-template-desi
 
 **Target:** a new Margince instance can be created, developed, trialled,
 released, and deployed using only the template. This is milestone **M1**.
-Milestone **M2** migrates the existing instances and retires old repositories.
+Milestone **M2** retires old repositories. Existing instances (`incap`, `afs`) are not migrated; the template applies to new instances only.
 
 `gradionhq/margince-gradion` is the former name of `margince-automation-world`, so there are three instances.
 
@@ -47,14 +47,12 @@ dependencies.
 **M1 is complete** when a new instance created with T11 runs `make dev`,
 `make trial`, `make release`, and `make deploy` successfully.
 
-## M2 — Migrate and retire
+## M2 — Retire
 
 | ID | Repository | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|---|
 | D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. It currently deploys vanilla core; the owning instance repository is an open decision. | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging. | T9 |
-| I1 | margince-automation-world | Migrate | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml`. | `make check` and `make check-template` pass. | M1 |
-| I3 | incap | Migrate | Merge the template. Add `instance.yaml`. | `make check` passes. | M1 |
-| I4 | afs | Migrate | Merge the template. Add `instance.yaml`. | `make check` passes. | M1 |
+| I1 | margince-automation-world | Migrate (open decision) | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml`. | `make check` and `make check-template` pass. | M1 |
 | R1 | margince-release | Archive | Archive the repository. | Archived. | T7 |
 | R2 | margince-d13-deploy | Archive | Archive the repository. | Archived. | D1 |
 | R3 | margince-principles | Update references | Replace references to `margince-release` with `margince-template` and `margince-constellation`. | No reference to `margince-release` remains. | R1 |
@@ -68,7 +66,7 @@ T3 + K2 + C1 → T7
 T3 + K1      → T8
 T2 + T6      → T11
 all T        → T10 → T12  → M1
-M1 → I1, I3, I4 ; D1 → R2 ; T7 → R1 → R3
+M1 → I1 (if decided) ; D1 → R2 ; T7 → R1 → R3
 ```
 
 ## GitHub issues
@@ -95,8 +93,6 @@ Tracking issue: https://github.com/gradionhq/margince-template/issues/14
 | T12 | https://github.com/gradionhq/margince-template/issues/12 |
 | D1 | https://github.com/gradionhq/margince-template/issues/13 |
 | I1 | https://github.com/gradionhq/margince-automation-world/issues/60 |
-| I3 | https://github.com/margince/incap/issues/1 |
-| I4 | https://github.com/margince/afs/issues/1 |
 | R1 | https://github.com/gradionhq/margince-release/issues/2 |
 | R2 | https://github.com/gradionhq/margince-d13-deploy/issues/37 |
 | R3 | https://github.com/gradionhq/margince-principles/issues/2 |

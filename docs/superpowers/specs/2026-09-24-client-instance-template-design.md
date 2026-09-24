@@ -12,7 +12,8 @@ definition.
 
 Three instance repositories currently exist: `incap`, `afs`, and
 `margince-automation-world`. (`gradionhq/margince-gradion` is the former name of
-`margince-automation-world`.) They are inconsistent:
+`margince-automation-world`.) Section 14 defines which of them adopt the
+template. They are inconsistent:
 
 - `incap` and `afs` provide approximately 12 make targets.
 - `margince-automation-world` provides approximately 70 documented make
@@ -134,15 +135,15 @@ template-owned path differs from that commit. `make check` includes
 Example (all values are illustrative):
 
 ```yaml
-name: incap                      # used in image names and the trial bundle name
+name: acme                       # used in image names and the trial bundle name
 display_name: Incap              # used in user-facing text of the desktop bundle
 core: v0.0.2                     # must match the tag of the core/ submodule
-units: [incap]                   # extensions/ entries to compose; empty means none
+units: [acme]                    # extensions/ entries to compose; empty means none
 data:
-  dataset: margince-demo-database/incap@v3   # optional
+  dataset: margince-demo-database/acme@v1    # optional
 license:
-  product: margince-incap        # Constellation product for license issuance
-registry: registry.example.com/clients/incap
+  product: margince-acme         # Constellation product for license issuance
+registry: registry.example.com/clients/acme
 deploy:
   staging:    { adapter: d13 }
   production: { adapter: d13 }
@@ -394,26 +395,16 @@ the images. This decision is required before sub-project 1 is planned.
   composition with a unit present.
 - The Go CLI has unit tests.
 
-## 14. Migration
+## 14. Scope of Adoption
 
-Each existing instance is converted into a fork of the template:
+The template applies to **new instances only**.
 
-1. Add the template as a git remote and merge it with
-   `git merge --allow-unrelated-histories template/main`. This option is
-   required once, because the template has new history. For template-owned
-   paths, keep the template version. Move client-specific content into
-   instance-owned paths.
-2. Create `instance.yaml`. Update the core pin to the nearest core tag.
-3. Verify with `make check`, `make trial`, and one staging deployment.
-
-Later merges are regular merges.
-
-Migration order:
-
-1. `margince-automation-world`. Its tooling is the source of the template, so
-   the first merge has the fewest conflicts. Its `zalo-lab` target moves to
-   `instance.mk`.
-2. `incap` and `afs`. These receive the full tooling set for the first time.
+- `incap` and `afs` are not migrated. They keep their current structure.
+- `margince-automation-world` is the source of the template tooling. Whether it
+  is migrated is an open decision (issue I1).
+- A new instance is created from the template with `scripts/new-instance.sh`
+  (issue T11). The instance is a new repository with a `template` remote.
+  Template changes are applied with `git merge template/main`.
 
 The `margince-d13-deploy` deployment moves to the `d13` adapter and the
 `deploy/` directory of its owning instance repository (open decision).
@@ -434,7 +425,7 @@ The work is delivered as separate implementation plans in the following order:
    endpoint; `make trial`.
 5. **Deployment:** the four-step deployment interface, the `hook` adapter, the
    `d13` adapter.
-6. **Migration and retirement:** migrate the three instances; archive
+6. **Retirement:** archive
    `margince-release` and `margince-d13-deploy`; close PR #421.
 
 ## 16. Rejected Alternatives
