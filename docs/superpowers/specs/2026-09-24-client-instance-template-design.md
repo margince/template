@@ -1,7 +1,7 @@
 # Client Instance Template — Design Specification
 
 - **Date:** 2026-09-24
-- **Status:** Approved for the foundation (T1, T2); later sections may change
+- **Status:** Draft. The foundation (T1, T2) has an implementation plan; later sections may change.
 - **Repository:** `gradionhq/margince-template`
 
 ## 1. Background

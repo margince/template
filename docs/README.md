@@ -4,7 +4,7 @@
 
 | Document | Content |
 |---|---|
-| [Client instance template — design](superpowers/specs/2026-09-24-client-instance-template-design.md) | Goals, repository responsibilities, structure, script reuse, workflows, migration, and sub-projects. Status: approved for the foundation (T1, T2). |
+| [Client instance template — design](superpowers/specs/2026-09-24-client-instance-template-design.md) | Goals, repository responsibilities, structure, script reuse, workflows, migration, and sub-projects. Status: draft; the foundation (T1, T2) has an implementation plan. |
 
 ## Directory layout
 
