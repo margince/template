@@ -75,7 +75,7 @@ rules that apply to one checkout only.
 
 `make check-template` protects against honest drift: an edit made to a
 template-owned path by mistake. It does not prevent a deliberate edit of
-`.template-version`, which would make it compare against another commit.
+`.template-version`, which changes the commit it compares against.
 Review changes to `.template-version` like any other change.
 
 ## 4. Daily work
