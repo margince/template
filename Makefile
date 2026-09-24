@@ -293,8 +293,16 @@ ext-imports: compose ## The unit import allowlist
 ## core's own lane and CI both decide: the first unit to declare a migrations/
 ## layer gets the cluster, and a tree with none stays hermetic. An unconditional
 ## prerequisite would start Postgres for a gate that is about to exit 0.
+##
+## Scanned in $(CORE)/extensions, not our own extensions/: `stage` (compose's
+## prerequisite) copies our units in there, but core ships its own example
+## units alongside them (openchannel carries migrations), so the tree core's
+## own check-ext-migrations.sh gate reads always has a migrations/ layer once
+## staged — checking our extensions/ here misses that and never starts the
+## cluster, so the gate below fails on any client instance, including the
+## template with no units of its own.
 check-ext-migrations: compose ## Unit migration rules
-	@if ls -d extensions/*/migrations >/dev/null 2>&1; then \
+	@if ls -d $(CORE)/extensions/*/migrations >/dev/null 2>&1; then \
 		echo "check-ext-migrations: a unit declares migrations/ — starting the test cluster"; \
 		$(MAKE) db-up; \
 	fi
