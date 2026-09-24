@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: BUSL-1.1
+// SPDX-FileCopyrightText: 2026 Gradion
+
+package __PKG__
+
+import "testing"
+
+// The declaration is the unit's whole contract with the core: the name keys
+// SQL identifiers and the #/ext/<name> route, and the version is what the boot
+// inventory records.
+func TestNewDeclaresTheUnit(t *testing.T) {
+	e := New()
+
+	if e.Name != "__NAME__" {
+		t.Fatalf("Name = %q, want the unit's directory name __NAME__", e.Name)
+	}
+	if err := e.Name.Validate(); err != nil {
+		t.Fatalf("Name is not a valid unit name: %v", err)
+	}
+	if e.Version == "" {
+		t.Fatal("Version is empty — the boot inventory records it")
+	}
+	if err := e.Version.Validate(); err != nil {
+		t.Fatalf("Version is not a valid unit version: %v", err)
+	}
+}

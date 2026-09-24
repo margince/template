@@ -148,7 +148,7 @@ watch: ## Re-stage units whenever a source file changes
 
 # ───────────────────────────── inner loop ─────────────────────────────
 
-new-unit: ## Scaffold a unit from extensions/gradion (NAME=<name>)
+new-unit: ## Scaffold a unit from scripts/unit-skeleton (NAME=<name>)
 	@bash scripts/new-unit.sh "$(NAME)"
 
 ## u — ONE unit's tests plus the cheap policy gates. The gates are in here
@@ -355,6 +355,7 @@ fmt: ## Format extensions/ in place (gofmt -w, biome safe fixes)
 ## the one most likely to catch a staging regression.
 test-scripts: ## The staging scripts' own tests
 	@bash scripts/lib.test.sh
+	@bash scripts/new-unit.test.sh
 	@bash scripts/toolcheck.test.sh
 	@bash scripts/core-contrib.test.sh
 	@bash scripts/preflight.test.sh

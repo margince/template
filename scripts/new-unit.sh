@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# new-unit.sh — scaffold a unit from extensions/gradion.
+# new-unit.sh — scaffold a unit from scripts/unit-skeleton/.
 #
 # Everything is validated BEFORE anything is created. A scaffold that
 # half-creates a rejected unit is worse than one that refuses: presence under
@@ -33,33 +33,23 @@ fi
 
 # The Go package identifier drops the hyphens and nothing else does: a hyphen is
 # illegal in a Go identifier but legal in a module path, a directory name and
-# Extension.Name. zalo-oa is `package zalooa` under extensions/zalo-oa.
+# Extension.Name. extensions/acme-sync is `package acmesync`.
 pkg="$(printf '%s' "$name" | tr -d '-')"
 
-copy_unit_tree "$SRC_EXT/gradion" "$SRC_EXT/$name"
-mv "$SRC_EXT/$name/gradion.go" "$SRC_EXT/$name/$pkg.go"
-mv "$SRC_EXT/$name/gradion_test.go" "$SRC_EXT/$name/${pkg}_test.go"
-# The manifest is DERIVED — the next compose writes it. Shipping the template's
-# would mean a scaffolded unit whose manifest describes a different unit until
-# somebody composed.
-rm -f "$SRC_EXT/$name/manifest.generated.json"
+SKELETON="$ROOT/scripts/unit-skeleton"
+[ -d "$SKELETON" ] || die "new-unit: missing $SKELETON"
 
-# Longest patterns first, so a shorter rule cannot eat a longer one.
-#
-# rewrite_file_in_place rather than `sed -i`: BSD sed requires a backup-suffix
-# argument and GNU sed refuses one, so the `sed -i ''` this used to run made
-# the scaffolder fail on every Linux box.
-while IFS= read -r file; do
-  rewrite_file_in_place "$file" \
-    "s|extensions/gradion|extensions/$name|g" \
-    "s|package gradion|package $pkg|g" \
-    "s|\"gradion\"|\"$name\"|g" \
-    "s|TestNewDeclaresTheHouseUnit|TestNewDeclaresTheUnit|g" \
-    "s|the Gradion house unit|the $name unit|g" \
-    "s|The Gradion house unit|The $name unit|g" \
-    "s|Package gradion is Gradion's house unit|Package $pkg is the $name unit|g" \
-    "s|directory name gradion|directory name $name|g"
-done < <(find "$SRC_EXT/$name" -type f)
+# Render every template into the new unit. The manifest is DERIVED and not
+# rendered here: the next compose writes it.
+mkdir -p "$SRC_EXT/$name"
+render() {
+  local src="$1" dest="$2"
+  cp "$src" "$dest"
+  rewrite_file_in_place "$dest" "s|__NAME__|$name|g" "s|__PKG__|$pkg|g"
+}
+render "$SKELETON/go.mod.tmpl"       "$SRC_EXT/$name/go.mod"
+render "$SKELETON/unit.go.tmpl"      "$SRC_EXT/$name/$pkg.go"
+render "$SKELETON/unit_test.go.tmpl" "$SRC_EXT/$name/${pkg}_test.go"
 
 echo "new-unit: created extensions/$name (package $pkg)"
 echo

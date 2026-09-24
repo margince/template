@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: BUSL-1.1
+// SPDX-FileCopyrightText: 2026 Gradion
+
+// Package __PKG__ is the __NAME__ unit.
+//
+// It ships as identity only: a name and a version, no capabilities. The unit
+// composes, reconciles at boot, appears in the boot inventory and gets its own
+// route at #/ext/__NAME__, so the staging path from this repository into the
+// composed binary is proven before any behaviour is added.
+//
+// Capabilities are fields on the returned declaration. See
+// docs/adding-an-extension.md and core/docs/how-to/add-an-extension.md.
+package __PKG__
+
+import "github.com/margince/margince/backend/pkg/extension"
+
+// New returns the unit's declaration: inert data, holding no handle into the
+// core. The generated composition calls it, and only the boot reconciliation
+// applies anything.
+func New() extension.Extension {
+	return extension.Extension{
+		Name:        "__NAME__",
+		Version:     "0.1.0",
+		Description: "The __NAME__ unit. Identity only, with no capabilities.",
+	}
+}
