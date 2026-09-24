@@ -345,6 +345,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/desktop-kit.test.sh
 	@bash scripts/workflow-wiring.test.sh
 	@bash scripts/desktop-arch.test.sh
+	@bash scripts/check-instance-mk.test.sh
 	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores
@@ -741,3 +742,10 @@ update-core: ## Move core/ to a core release tag and record it in instance.yaml 
 
 clean: unstage ## Unstage and drop upstream's build output
 	@$(MAKE_CORE) clean 2>/dev/null || true
+
+# ──────────────────────────── instance.mk ─────────────────────────────
+
+## Targets only this instance needs. instance.mk is instance-owned and
+## optional. It may add targets; it must not redefine a template target
+## (make check-template refuses that).
+-include instance.mk
