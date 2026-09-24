@@ -21,8 +21,9 @@ type Instance struct {
 }
 
 var (
-	namePattern   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	flavorPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*/margince$`)
+	namePattern    = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	flavorPattern  = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*/margince$`)
+	coreTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
 // Parse decodes instance.yaml and refuses unknown keys.
@@ -69,8 +70,11 @@ func (in Instance) Validate() []string {
 	case strings.ContainsAny(in.DisplayName, "\r\n"):
 		problems = append(problems, "display_name: must be a single line")
 	}
-	if in.Core == "" {
+	switch {
+	case in.Core == "":
 		problems = append(problems, "core: required")
+	case !coreTagPattern.MatchString(in.Core):
+		problems = append(problems, fmt.Sprintf("core: %q must be a release tag like v0.0.2", in.Core))
 	}
 	switch {
 	case in.Flavor == "":

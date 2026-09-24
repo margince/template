@@ -155,7 +155,7 @@ Example (all values are illustrative):
 
 ```yaml
 name: acme                       # used in image names and the trial bundle name
-display_name: Acme               # used in user-facing text of the desktop bundle
+display_name: Acme               # used by make new-instance only (README.md); not shown in the desktop bundle
 core: v0.0.2                     # must match the tag of the core/ submodule
 data:
   dataset: margince-demo-database/acme@v1    # optional
@@ -233,7 +233,7 @@ and the action taken when it is copied into the template. Each script keeps its
 | `lint.sh` | Lint unit code | Change: run craft through `core/scripts/craft-pin.sh`; core `v0.0.2` has no `cli/craft` |
 | `package.sh` | Build `api`, `web`, `worker` images with units | Generalize: read the image name and registry from `instance.yaml`; rename labels `com.gradion.*` to `com.margince.instance.*` |
 | `new-unit.sh` | Create a new unit | Change (T1): render `scripts/unit-skeleton/*.tmpl` instead of copying `extensions/gradion`; add `new-unit.test.sh` |
-| `desktop.sh`, `build-info.sh` | Build, install, and inspect the desktop bundle | Generalize: take the client name in user-facing text from `display_name` in `instance.yaml` |
+| `desktop.sh`, `build-info.sh` | Build, install, and inspect the desktop bundle | Change: neutral text (no client names). `display_name` is used by `new-instance` only. |
 
 The `Makefile` is copied with the following changes:
 

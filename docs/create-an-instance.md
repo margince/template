@@ -99,11 +99,17 @@ before recording it, because a merge with conflicts is not a clean merge).
 make update-core REF=v0.0.3
 ```
 
-`REF` must be a core release tag (`v0.0.x`); a branch or a bare commit is
-refused, because `instance.yaml` can only record a tag. The command moves
-`core/` to that tag and rewrites `core:` in `instance.yaml` to match. It also
-refuses to run if `core/` carries work of its own (see
-`docs/contributing-to-core.md`).
+`REF` must match `^v[0-9]+\.[0-9]+\.[0-9]+$` (`v0.0.3`, not `main`, a bare
+commit, or a non-release tag such as `archive/pr100-salvage`), because
+`instance.yaml` can only record a release tag. The command moves `core/` to
+that tag and rewrites `core:` in `instance.yaml` to match. It also refuses to
+run if `core/` carries work of its own (see `docs/contributing-to-core.md`).
+
+Commit the bump as its own reviewable change:
+
+```sh
+git commit core instance.yaml -m "core: bump to <tag>"
+```
 
 ## 7. Instance-only targets
 

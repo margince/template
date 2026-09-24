@@ -153,7 +153,7 @@ it picks up every other upstream change:
 ```sh
 make update-core REF=<tag>
 make check
-git commit core -m "core: bump to <tag>"
+git commit core instance.yaml -m "core: bump to <tag>"
 ```
 
 ## Troubleshooting

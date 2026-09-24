@@ -29,6 +29,10 @@ printf 'two\n' > "$UP/two" && git -C "$UP" add -A && git -C "$UP" commit -q -m t
 printf 'three\n' > "$UP/three" && git -C "$UP" add -A && git -C "$UP" commit -q -m three
 V2="$(git -C "$UP" rev-parse v0.0.2^{commit})"
 MAIN="$(git -C "$UP" rev-parse main)"
+# A real tag, but not shaped like a release: instance.yaml can only record a
+# release tag, so this must be refused on shape alone, before core/ is even
+# asked whether the tag exists.
+git -C "$UP" tag archive/pr100-salvage "$V2"
 
 fresh_repo() {
   local repo
@@ -68,6 +72,7 @@ expect_refused "refuses an empty ref" ""
 expect_refused "refuses a branch" main
 expect_refused "refuses a commit" "$MAIN"
 expect_refused "refuses a tag that does not exist" v9.9.9
+expect_refused "refuses a non-release tag" archive/pr100-salvage
 
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'
