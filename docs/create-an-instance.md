@@ -58,7 +58,8 @@ path.
 
 `.template-owned` lists the template-owned paths, one git pathspec per line
 — `Makefile`, `scripts/`, `.github/workflows/`, `.githooks/`,
-`.gitleaks.toml`, `.gitignore`, `AGENTS.md`, `CLAUDE.md`, and `docs/*.md`.
+`.gitleaks.toml`, `.gitignore`, `.template-owned` itself, `AGENTS.md`,
+`CLAUDE.md`, and `docs/*.md`.
 `.template-version` holds the one commit id of the template commit the
 instance last merged. `make check-template` reads `.template-owned` from
 that commit — not from the working tree — and fails if any listed path
