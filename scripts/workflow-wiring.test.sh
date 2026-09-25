@@ -80,6 +80,155 @@ for f in "$WF"/*.yml; do
   done
 done
 
+# deploy.yml runs by hand, from a release tag, in a GitHub Environment named
+# by its own input, and must never let that input reach a shell verbatim: a
+# workflow_dispatch input is attacker-controlled text the same as a pull
+# request title, and `${{ inputs.x }}` spliced into a `run:` script is
+# injected before the shell ever sees a variable. The job passes it through
+# `env:` instead, which is opaque to the shell's parser.
+DEPLOY_WF="$WF/deploy.yml"
+if [ -e "$DEPLOY_WF" ]; then
+  ok "deploy.yml exists"
+
+  on_block="$(block_of on "$DEPLOY_WF")"
+  if printf '%s\n' "$on_block" | grep -qE '^[[:space:]]{2}(push|pull_request|schedule|workflow_call)[[:space:]]*:'; then
+    fail "deploy.yml triggers on more than workflow_dispatch"
+  elif printf '%s\n' "$on_block" | grep -qE '^[[:space:]]{2}workflow_dispatch[[:space:]]*:'; then
+    ok "deploy.yml triggers only on workflow_dispatch"
+  else
+    fail "deploy.yml does not trigger on workflow_dispatch"
+  fi
+
+  if grep -qE '^[[:space:]]*environment:[[:space:]]*\$\{\{[[:space:]]*inputs\.environment[[:space:]]*\}\}' "$DEPLOY_WF"; then
+    ok "deploy.yml runs its job in the environment named by inputs.environment"
+  else
+    fail "deploy.yml does not set environment: \${{ inputs.environment }}"
+  fi
+
+  # The release is the tag the run was dispatched from, never a free-form
+  # input: an input let the hooks of one ref deploy the images of another.
+  if printf '%s\n' "$on_block" | grep -qE '^[[:space:]]+version[[:space:]]*:'; then
+    fail "deploy.yml still has a version input; the release is github.ref_name"
+  else
+    ok "deploy.yml has no version input"
+  fi
+  if grep -qE 'REF_TYPE:[[:space:]]*\$\{\{[[:space:]]*github\.ref_type[[:space:]]*\}\}' "$DEPLOY_WF" \
+     && grep -qF '"$REF_TYPE" != tag' "$DEPLOY_WF" \
+     && grep -qF '"$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$' "$DEPLOY_WF"; then
+    ok "deploy.yml refuses a run not dispatched from a vX.Y.Z tag"
+  else
+    fail "deploy.yml does not guard github.ref_type == tag and ref_name ^v[0-9]+\.[0-9]+\.[0-9]+\$ through env:"
+  fi
+  first_step="$(awk '/^[[:space:]]*steps:/ {s=1; next} s && /^[[:space:]]*- / {n++} n==1 {print} n>1 {exit}' "$DEPLOY_WF")"
+  if printf '%s\n' "$first_step" | grep -qF 'github.ref_type'; then
+    ok "deploy.yml checks the tag in its first step, before checkout"
+  else
+    fail "deploy.yml's first step is not the release-tag guard"
+  fi
+  if grep -qE 'DEPLOY_RELEASE:[[:space:]]*\$\{\{[[:space:]]*github\.ref_name[[:space:]]*\}\}' "$DEPLOY_WF"; then
+    ok "deploy.yml deploys VERSION=github.ref_name"
+  else
+    fail "deploy.yml does not pass github.ref_name as the release"
+  fi
+
+  if grep -qE '^[[:space:]]*run:.*make deploy\b' "$DEPLOY_WF"; then
+    ok "deploy.yml runs make deploy"
+  else
+    fail "deploy.yml does not run make deploy"
+  fi
+
+  # The `environment:` job key is resolved by GitHub before any step runs, so
+  # a bad name still resolves an environment before this can object -- but it
+  # still has to stop the job, before checkout finishes or any secret is
+  # exported, on a name workflow_dispatch let through free-form.
+  # With [[ =~ ]] on the whole value: `printf | grep` matches line by line, so
+  # a name with an embedded newline passed if any one line was well-formed.
+  if grep -qF '[[ ! "$DEPLOY_TARGET" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]' "$DEPLOY_WF"; then
+    ok "deploy.yml validates the environment name with [[ =~ ]]"
+  else
+    fail "deploy.yml does not validate inputs.environment with [[ \"\$DEPLOY_TARGET\" =~ ^[a-z0-9]+(-[a-z0-9]+)*\$ ]]"
+  fi
+
+  # checkout, then setup-go, then the instance.yaml lookup, then the export:
+  # a well-formed name that is not an environment of this instance stops the
+  # job before any secret or variable is exported.
+  order="$(grep -nE 'actions/checkout@|actions/setup-go@|name: Environment is in instance.yaml|name: Export the environment|name: Deploy$' "$DEPLOY_WF" | cut -d: -f1 | tr '\n' ' ')"
+  set -- $order
+  if [ "$#" -eq 5 ] && [ "$1" -lt "$2" ] && [ "$2" -lt "$3" ] && [ "$3" -lt "$4" ] && [ "$4" -lt "$5" ] \
+     && grep -qF 'instance_get "deploy.$DEPLOY_TARGET.adapter"' "$DEPLOY_WF"; then
+    ok "deploy.yml looks the environment up in instance.yaml before exporting anything"
+  else
+    fail "deploy.yml steps are not checkout -> setup-go -> Environment is in instance.yaml -> export -> deploy (lines: $order)"
+  fi
+
+  # The default shell has no pipefail: `jq ... | while read` would hide a jq
+  # failure. Every run: step names bash, which adds -o pipefail.
+  runs="$(grep -cE '^[[:space:]]*run:' "$DEPLOY_WF")"
+  shells="$(grep -cE '^[[:space:]]*shell:[[:space:]]*bash[[:space:]]*$' "$DEPLOY_WF")"
+  if [ "$runs" -eq "$shells" ]; then
+    ok "deploy.yml sets shell: bash on each of its $runs run steps"
+  else
+    fail "deploy.yml has $runs run steps but $shells shell: bash lines"
+  fi
+
+  # A secret named PATH, GIT_*, GITHUB_*, BASH_ENV and the like would shadow a
+  # variable the runner, git or a later step relies on. BASH_ENV stands in for
+  # the whole deny list here: a shell-startup hook is the sharpest of them,
+  # since a secret by that name would run as code the moment any later step's
+  # shell starts, not merely read as data.
+  # Go's and make's variables are denied by shape (no underscore), not by a
+  # GO/MAKE prefix, which also swallowed GOOGLE_* and MAKER_* names.
+  if grep -qF "deny_exact='PATH HOME SHELL IFS ENV BASH_ENV NODE_OPTIONS CDPATH PROMPT_COMMAND TMPDIR MFLAGS MAKE_TERMOUT MAKE_TERMERR'" "$DEPLOY_WF" \
+     && grep -qF "deny_prefix='LD_ DYLD_ GITHUB_ RUNNER_ ACTIONS_ GIT_'" "$DEPLOY_WF" \
+     && grep -qF "deny_shape='^GO[A-Z0-9]*\$ ^MAKE[A-Z0-9]*\$'" "$DEPLOY_WF" \
+     && grep -qF '[[ "$name" =~ $re ]] && skip=1' "$DEPLOY_WF"; then
+    ok "deploy.yml filters exported names against the documented deny list"
+  else
+    fail "deploy.yml's deny list is not exactly the documented one (exact: ... TMPDIR MFLAGS MAKE_TERMOUT MAKE_TERMERR; prefixes: ... GIT_; shapes: ^GO[A-Z0-9]*\$ ^MAKE[A-Z0-9]*\$)"
+  fi
+
+  if grep -qE 'VARS_JSON:[[:space:]]*\$\{\{[[:space:]]*toJSON\(vars\)[[:space:]]*\}\}' "$DEPLOY_WF" \
+     && grep -qF 'export_json variable "$VARS_JSON"' "$DEPLOY_WF" \
+     && grep -qF 'export_json secret "$SECRETS_JSON"' "$DEPLOY_WF"; then
+    ok "deploy.yml exports the environment's variables and secrets through the same filter"
+  else
+    fail "deploy.yml does not export toJSON(vars) and toJSON(secrets) through export_json"
+  fi
+
+  if grep -qE '^[[:space:]]*persist-credentials:[[:space:]]*false[[:space:]]*$' "$DEPLOY_WF"; then
+    ok "deploy.yml's checkout does not persist a credential past the job"
+  else
+    fail "deploy.yml's checkout does not set persist-credentials: false"
+  fi
+
+  # Every line that belongs to a `run:` step, single-line or the body of a
+  # `run: |` block, collected the same way block_of collects a top-level key's
+  # body: from the `run:` line until indentation returns to its own level or
+  # less.
+  run_lines="$(awk '
+    /^[[:space:]]*run:[[:space:]]*[|>]/ {
+      match($0, /^[ ]*/); ind = RLENGTH; inrun = 1; print; next
+    }
+    /^[[:space:]]*run:/ { print; inrun = 0; next }
+    inrun {
+      if ($0 ~ /[^[:space:]]/) {
+        match($0, /^[ ]*/)
+        if (RLENGTH <= ind) { inrun = 0 } else { print }
+      } else { print }
+    }
+  ' "$DEPLOY_WF")"
+  if printf '%s\n' "$run_lines" | grep -qF '${{ inputs.'; then
+    fail "deploy.yml templates \${{ inputs. directly into a run: step.
+      inputs.environment must reach the shell through
+      env:, never through \${{ }} inside run:, or a crafted input injects
+      shell code."
+  else
+    ok "deploy.yml never templates \${{ inputs. into a run: step"
+  fi
+else
+  fail "deploy.yml is missing"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%d check(s) failed\n' "$FAILURES" >&2
   exit 1

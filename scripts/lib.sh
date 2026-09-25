@@ -26,13 +26,51 @@ source_units() {
   find "$SRC_EXT" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort
 }
 
-# instance_get <key> — one value from instance.yaml.
+# cli_run <args>... — run the template CLI (scripts/cli) with its own stdout,
+# its own stderr, and its own exit code.
 #
-# Read through the template CLI so there is one parser. GOWORK=off because the
-# editor go.work at the repository root does not list scripts/cli.
-# INSTANCE_FILE overrides the file, for tests.
+# GOWORK=off because the editor go.work at the repository root does not list
+# scripts/cli.
+#
+# `go run` never propagates the program's own exit code: it always exits 1
+# itself and appends a diagnostic line "exit status N" after the program's own
+# stderr. A caller that needs to tell "no such key" (the cli's exit 2) from
+# "the file could not be read" (its exit 1) would otherwise always see 1. Undo
+# the wrapper here, once, rather than in every caller: recover N from that
+# trailing line, strip it, and exit with N instead.
+cli_run() {
+  local err out rc last
+  err="$(mktemp)"
+  # `|| rc=$?`, not `rc=$?` on the next line: under a caller's errexit the
+  # failed assignment would abort the shell here, before the stderr replay.
+  rc=0
+  out="$(cd "$ROOT/scripts/cli" && GOWORK=off go run . "$@" 2>"$err")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    last="$(tail -n1 "$err")"
+    if [[ "$last" =~ ^exit\ status\ ([0-9]+)$ ]]; then
+      rc="${BASH_REMATCH[1]}"
+      sed '$d' "$err" >&2
+    else
+      cat "$err" >&2
+    fi
+  fi
+  rm -f "$err"
+  printf '%s\n' "$out"
+  return "$rc"
+}
+
+# instance_get <key> — one value from instance.yaml, read through the template
+# CLI so there is one parser. Exit 2 for an unknown key, 1 for an unreadable,
+# malformed or empty value. INSTANCE_FILE overrides the file, for tests.
 instance_get() {
-  (cd "$ROOT/scripts/cli" && GOWORK=off go run . get -file "${INSTANCE_FILE:-$ROOT/instance.yaml}" "$1")
+  cli_run get -file "${INSTANCE_FILE:-$ROOT/instance.yaml}" "$1"
+}
+
+# instance_validate — instance.yaml is valid, and every environment under
+# deploy: has its deploy/<env>/ directory. Does not look at core/ (that is
+# make check-instance). Exit 1 with one line per problem on stderr.
+instance_validate() {
+  cli_run validate -file "${INSTANCE_FILE:-$ROOT/instance.yaml}"
 }
 
 # image_repo — the REPO this instance's role images are named under.

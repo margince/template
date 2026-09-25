@@ -12,8 +12,9 @@ Without extensions, the template is itself a working instance, referred to as
 
 ## Status
 
-**Foundation in place.** The template works as Margince Default. Trial,
-release, and deployment are planned (see the issue breakdown).
+**Foundation and deployment in place.** The template works as Margince
+Default and can deploy an instance with `make deploy`. Trial and release are
+planned (see the issue breakdown).
 
 ## How instances use this template
 
@@ -57,9 +58,10 @@ Run `make help` for the full list.
 | `make template-sync` | Merge this template's changes into an instance and record them. |
 | `make check-template` | Verify an instance has not drifted from the template. |
 | `make update-core REF=<tag>` | Move the core pin to a core release tag. |
+| `make deploy ENV=<env> VERSION=<v>` | Deploy the instance's images to an environment defined in `instance.yaml` (`deploy:`). |
 
-Planned, not implemented yet: the trial bundle (issue T8), release (issue T7),
-and deployment (issue T9).
+Planned, not implemented yet: the trial bundle (issue T8) and release
+(issue T7).
 
 ## Related repositories
 

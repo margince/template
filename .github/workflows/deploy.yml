@@ -1,0 +1,159 @@
+# deploy.yml — deploy one release to one environment, by hand.
+#
+# Dispatch this workflow FROM the release tag (Actions → deploy → Run
+# workflow → "Use workflow from": Tags → v1.2.3). The release is the tag the
+# run was dispatched from (github.ref_name), and the checkout is that tag, so
+# the hooks and deploy/<environment>/ that run are the ones in the release.
+# A run dispatched from a branch, or from a tag that is not vX.Y.Z, fails in
+# its first step.
+#
+# Runs `make deploy`, which runs the hook scripts in deploy/<environment>/hooks/.
+# The job runs in the GitHub Environment of the same name, so protection rules,
+# secrets and variables are configured per environment. Configure each
+# environment ahead of time in repository settings: "Deployment branches and
+# tags" set to "Selected branches and tags" with the tag rule v*, and required
+# reviewers for production. This workflow does not create one.
+#
+# The job's `environment:` key is resolved by GitHub before any step runs, so
+# a malformed or unknown name still resolves (or auto-creates) an environment
+# before a step can object. A malformed name stops the job before checkout; a
+# well-formed name that is not under deploy: in instance.yaml stops it before
+# any secret or variable is exported. Neither undoes an environment GitHub
+# already resolved for this run.
+#
+# The job receives the secrets and variables of the environment AND those of
+# the repository and the organization. Keep deploy secrets at environment
+# level only.
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment name from instance.yaml (deploy:). Run from the release tag.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Dispatched from a release tag
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" != tag || ! "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::run this workflow from a release tag vX.Y.Z, not from $REF_TYPE '$REF_NAME'" >&2
+            exit 1
+          fi
+
+      - name: Environment name is valid
+        shell: bash
+        env:
+          DEPLOY_TARGET: ${{ inputs.environment }}
+        run: |
+          if [[ ! "$DEPLOY_TARGET" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "::error::environment '$DEPLOY_TARGET' does not match ^[a-z0-9]+(-[a-z0-9]+)*\$" >&2
+            exit 1
+          fi
+
+      # No `ref:`: the default is the ref the run was dispatched from, which
+      # the first step has confirmed is the release tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: scripts/cli/go.mod
+          cache: false
+
+      - name: Environment is in instance.yaml
+        shell: bash
+        env:
+          DEPLOY_TARGET: ${{ inputs.environment }}
+        run: |
+          source scripts/lib.sh
+          if ! instance_get "deploy.$DEPLOY_TARGET.adapter" >/dev/null; then
+            echo "::error::environment '$DEPLOY_TARGET' is not under deploy: in instance.yaml at $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Export the environment's variables and secrets
+        shell: bash
+        env:
+          VARS_JSON: ${{ toJSON(vars) }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          # One heredoc block per value, so a multi-line value stays intact.
+          #
+          # Only a name that looks like an ordinary, safe environment variable
+          # is exported: an uppercase identifier, and never one that could
+          # shadow a variable the runner, the shell, git, make, Go or a later
+          # step relies on -- PATH, a shell-startup or shell-behaviour hook
+          # (ENV, BASH_ENV, IFS, CDPATH, PROMPT_COMMAND), TMPDIR, a dynamic
+          # linker variable (LD_*, DYLD_*), a Node option-injection vector
+          # (NODE_OPTIONS), make's and Go's own settings, or the runner's/git's
+          # own plumbing (GITHUB_*, RUNNER_*, ACTIONS_*, GIT_*). Go's and
+          # make's variables contain no underscore (GOFLAGS, GOPROXY,
+          # GOTOOLCHAIN, MAKEFLAGS, MAKEFILES, MAKELEVEL), so they are denied
+          # by that exact shape, plus make's MFLAGS, MAKE_TERMOUT and
+          # MAKE_TERMERR by name; GOOGLE_APPLICATION_CREDENTIALS or
+          # MAKER_TOKEN is exported.
+          # github_token is excluded by name (and is lower-case, so the
+          # pattern below would reject it anyway). Variables are exported
+          # first, so a secret of the same name wins. No value is printed.
+          deny_exact='PATH HOME SHELL IFS ENV BASH_ENV NODE_OPTIONS CDPATH PROMPT_COMMAND TMPDIR MFLAGS MAKE_TERMOUT MAKE_TERMERR'
+          deny_prefix='LD_ DYLD_ GITHUB_ RUNNER_ ACTIONS_ GIT_'
+          deny_shape='^GO[A-Z0-9]*$ ^MAKE[A-Z0-9]*$'
+          export_json() {
+            local kind="$1" json="$2" name skip d p re delim
+            printf '%s' "$json" | jq -r 'to_entries[] | select(.key != "github_token") | .key' |
+            while IFS= read -r name; do
+              skip=
+              if [[ ! "$name" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+                skip=1
+              else
+                for d in $deny_exact; do
+                  [ "$name" = "$d" ] && skip=1
+                done
+                for p in $deny_prefix; do
+                  case "$name" in
+                    "$p"*) skip=1 ;;
+                  esac
+                done
+                for re in $deny_shape; do
+                  [[ "$name" =~ $re ]] && skip=1
+                done
+              fi
+              if [ -n "$skip" ]; then
+                printf 'deploy: %s %s not exported (reserved or invalid name)\n' "$kind" "$name"
+                continue
+              fi
+              delim="EOF_$(openssl rand -hex 16)"
+              {
+                printf '%s<<%s\n' "$name" "$delim"
+                printf '%s' "$json" | jq -r --arg k "$name" '.[$k]'
+                printf '%s\n' "$delim"
+              } >> "$GITHUB_ENV"
+            done
+          }
+          export_json variable "$VARS_JSON"
+          export_json secret "$SECRETS_JSON"
+
+      - name: Deploy
+        shell: bash
+        env:
+          DEPLOY_TARGET: ${{ inputs.environment }}
+          DEPLOY_RELEASE: ${{ github.ref_name }}
+        run: make deploy ENV="$DEPLOY_TARGET" VERSION="$DEPLOY_RELEASE"

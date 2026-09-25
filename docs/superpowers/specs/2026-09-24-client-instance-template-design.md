@@ -165,8 +165,8 @@ data:
   dataset: margince-demo-database/acme@v1    # optional
 flavor: acme/margince            # Constellation flavor: license product and image namespace
 deploy:
-  staging:    { adapter: d13 }
-  production: { adapter: d13 }
+  staging:    { adapter: hook }
+  production: { adapter: hook }
 ```
 
 There is no `units` key. A directory under `extensions/` is an enabled unit,
@@ -184,8 +184,13 @@ it. Go is already a required tool, so this adds no dependency.
 - `core` is one of the tags that point at `core/` HEAD.
 - `flavor` has the form `<vendor>/margince`.
 - No unknown key is present.
-- Each environment under `deploy` has a matching `deploy/<env>/` directory
-  (added with the `deploy` key in T9).
+- Each environment under `deploy` matches `^[a-z0-9]+(-[a-z0-9]+)*$`, has an
+  `adapter` of `hook` (`d13` is refused, naming issue D1, until that adapter
+  exists), and has a matching `deploy/<env>/` directory (added with the
+  `deploy` key in T9).
+
+`make deploy` runs the same validation, without the `core` check
+(`cli validate`), before it reads the adapter (Section 10.4).
 
 Sections are added to the schema by the issue that uses them: `data` (T8),
 `deploy` (T9). The template's own file is:
@@ -298,7 +303,7 @@ against the template itself to verify the template.
 | `make desktop VERSION=<v>` | Builds the desktop bundle with the instance units. | Existing, changed |
 | `make trial` | Runs `make desktop` and adds configuration, dataset, and a trial license. See Section 10.2. | New |
 | `make update-core REF=<tag>` | Moves the core submodule to a release tag and records the tag in `instance.yaml`. | Existing, changed |
-| `make release VERSION=<v>` | Verifies the working tree and `make check`, then pushes the tag `v<v>`. | New |
+| `make release VERSION=<v>` | Verifies the working tree and `make check`, then pushes the tag `<v>` (the full tag, for example `v1.2.3`). | New |
 | `make deploy ENV=<env> VERSION=<v>` | Deploys the specified images to the environment defined in `deploy/<env>/`. | New |
 | `make template-sync` | Merges the template's `main` into the instance and records the merged commit in `.template-version`. | Existing |
 | `make check-template` | Drift check: template-owned paths match `.template-version`, and `instance.mk` only adds targets. | Existing |
@@ -347,8 +352,11 @@ defined in sub-project 4.
 
 ### 10.3 Build and Release (Goal 5)
 
-`make release VERSION=<v>` verifies that the working tree is clean and that
-`make check` passes, then pushes the tag `v<v>`.
+`VERSION` is always the full release tag, including the `v`, everywhere it
+is used (`make release`, `make package`, `make deploy`, image tags). For
+example, `make release VERSION=v1.2.3` verifies that the working tree is clean
+and that `make check` passes, then creates and pushes the tag `v1.2.3`; the
+images of that release are tagged `v1.2.3`.
 
 The existing `release.yml` runs on `v*` tags. It runs `full-check.yml` and
 builds the macOS and Windows desktop bundles. The template adds the following
@@ -359,7 +367,7 @@ jobs:
    the candidate tag `cand-<commit>`, for multiple architectures. Each image has an OCI label with the core version.
 2. **Smoke test:** starts the three images with a temporary PostgreSQL and
    Redis instance and verifies that they start and respond.
-3. **Publish:** adds the tag `<v>` to the images in the Constellation registry
+3. **Publish:** adds the tag `<v>` (for example `v1.2.3`) to the images in the Constellation registry
    using the publisher identity, records the release for the flavor in the dist
    service, and generates release notes with the `notes` command. The release
    notes list the core version, the instance commit, and the image digests.
@@ -372,33 +380,117 @@ as a label, because multiple instance releases can use the same core version.
 
 ### 10.4 Deployment (Goal 5)
 
-`make deploy ENV=<env> VERSION=<v>` (or a manual run of `deploy.yml`) executes
-the following steps in order:
+`make deploy ENV=<env> VERSION=<v>` (`bash scripts/deploy.sh <env> <version>`,
+or a manual run of `deploy.yml`) runs:
 
 ```
-preflight → apply → verify → rollback (on failure only)
+preflight → apply → verify
 ```
+
+A failed `preflight` stops the deployment immediately: nothing has changed, so
+there is no rollback. A failed `apply` or `verify` runs `rollback`, and the
+deployment still fails (non-zero exit) whether or not the rollback succeeds.
+If the environment provides no `rollback` step, `make deploy` prints
+"no rollback hook" and exits non-zero without attempting one; the environment
+may be half-deployed.
+
+Before any step, `deploy.sh` requires `VERSION` to be a full release tag
+(`^v[0-9]+\.[0-9]+\.[0-9]+$`), validates `instance.yaml` (`cli validate`),
+and refuses a working tree with uncommitted changes or untracked files unless
+`ALLOW_DIRTY=1`. The hooks and `deploy/<env>/` always come from the checkout;
+when `HEAD` is not the commit of the tag `VERSION`, `deploy.sh` prints
+`deploy: hooks and configuration come from <short sha>, not from release
+<VERSION>` and continues. `deploy.yml` deploys from the tag itself.
+
+`deploy.sh` resolves the adapter for `<env>` from `instance.yaml`
+(`deploy.<env>.adapter`), exports the variables below, then asks the adapter
+`has <step>` before running that step — a step the adapter does not provide is
+skipped, never mistaken for a failure, because a provided step's exit code is
+never overridden. `apply` is the only required step; its absence is caught by
+the adapter's `check`, before any step runs.
+
+| Variable | Set for | Value |
+|---|---|---|
+| `DEPLOY_ENV` | every step | The environment name. |
+| `DEPLOY_VERSION` | every step | The release being deployed. |
+| `DEPLOY_STEP` | every step | The step's own name (`preflight`, `apply`, `verify`, `rollback`). |
+| `DEPLOY_DIR` | every step | Absolute path of `deploy/<env>/`. |
+| `INSTANCE_NAME` | every step | `name` from `instance.yaml`. |
+| `IMAGE_REPO` | every step | The image namespace (Section 6.2). |
+| `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER` | every step | `$IMAGE_REPO/<role>:$DEPLOY_VERSION`. |
+| `DEPLOY_FAILED_STEP` | `rollback` only | The step that failed (`apply` or `verify`). |
 
 `deploy/<env>/` contains the environment configuration: hostnames, replica
 count per component, and the names of required secrets, such as the production
 license (`MARGINCE_LICENSE`) and the database URL. It does not contain secret
-values.
+values; hooks receive secrets from the environment.
 
-`instance.yaml` specifies an **adapter** for each environment. An adapter
-implements the four steps. The template provides two adapters in
-`scripts/deploy/`:
+`instance.yaml` specifies an **adapter** for each environment. This plan
+implements one adapter, in `scripts/deploy/`:
 
-- `d13`: deploys to District 13 (Gradion's Kubernetes platform). Based on
-  `margince-d13-deploy`. Uses `.d13.<env>.yaml` and ingress definitions, with
-  one service per component.
-- `hook`: runs the instance scripts
-  `deploy/<env>/hooks/{preflight,apply,verify,rollback}.sh`.
+- `hook`: runs the instance's own scripts,
+  `deploy/<env>/hooks/{preflight,apply,verify,rollback}.sh`, called with
+  `bash` so a missing executable bit does not matter. `apply.sh` is required;
+  the other three steps are optional.
 
-A new adapter is added to the template only when at least two clients require
-the same deployment target. Until then, clients use the `hook` adapter.
+`d13` (deploy to District 13, Gradion's Kubernetes platform, based on
+`margince-d13-deploy`) is issue D1 and is not implemented yet;
+`instance.yaml` refuses `adapter: d13` with a message naming D1. A new
+adapter is added to the template only when at least two clients require the
+same deployment target. Until then, clients use the `hook` adapter.
 
 All adapters deploy `api`, `web`, and `worker` as separate services so that each
 can be scaled independently.
+
+`.github/workflows/deploy.yml` runs `make deploy` by hand
+(`workflow_dispatch`, with one `environment` input), in the GitHub
+Environment named by `environment`, so protection rules, secrets, and
+variables are configured per environment. The workflow is dispatched from the
+release tag: `VERSION` is `github.ref_name`, and the checkout is that tag.
+Each environment must be created ahead of time in repository settings, with
+"Deployment branches and tags" limited to the tag rule `v*` and, for
+production, required reviewers; the workflow does not create one.
+
+The job steps run in this order:
+
+1. Fail unless `github.ref_type` is `tag` and `github.ref_name` matches
+   `^v[0-9]+\.[0-9]+\.[0-9]+$`.
+2. Fail unless `environment` matches `^[a-z0-9]+(-[a-z0-9]+)*$` (bash
+   `[[ =~ ]]` on the whole value).
+3. Check out the tag; set up Go.
+4. Fail unless `environment` is under `deploy:` in `instance.yaml`.
+5. Export the variables, then the secrets, as environment variables.
+6. Run `make deploy ENV=<environment> VERSION=<tag>`.
+
+A malformed name stops the job before checkout. A well-formed name that is
+not under `deploy:` stops it before any secret or variable is exported.
+GitHub resolves the job's `environment:` — and, for a name it does not
+recognize, may auto-create one — before any step runs, so in both cases
+GitHub may still have resolved or auto-created that environment for the run.
+Every environment a deployment might target must therefore be created ahead
+of time with its own protection rules; an environment reached only through
+auto-creation has none.
+
+The `secrets` and `vars` contexts contain the environment's secrets and
+variables and also the repository's and the organization's. Deploy secrets
+are kept at environment level only. Each name is exported (one `printf`
+heredoc per value, so a multi-line value stays intact; a secret wins over a
+variable of the same name) except a name that does not match
+`^[A-Z_][A-Z0-9_]*$`, or that does match but is one of the excluded exact
+names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
+`CDPATH`, `PROMPT_COMMAND`, `TMPDIR`, `MFLAGS`, `MAKE_TERMOUT`,
+`MAKE_TERMERR`, or carries one of the excluded prefixes `LD_`, `DYLD_`,
+`GITHUB_`, `RUNNER_`, `ACTIONS_`, `GIT_`, or matches `^GO[A-Z0-9]*$` or
+`^MAKE[A-Z0-9]*$` (Go's and make's own variables contain no underscore, so
+`GOOGLE_APPLICATION_CREDENTIALS` and `MAKER_TOKEN` are exported).
+`github_token` is never exported. A skipped name is printed to the log; no
+value is printed. `REGISTRY` can be an environment variable. Checkout runs
+with `persist-credentials: false`, so no push credential for the repository
+is left on disk for a hook to find.
+The checkout is shallow and detached at the tag, so a hook must not rely on
+git history or on pushing. `make deploy` removes `ENV`, `VERSION`,
+`MAKEFLAGS`, `MAKELEVEL`, and `MFLAGS` from the environment of `deploy.sh`,
+so a hook that runs `make` does not inherit them as overrides.
 
 ### 10.5 Licensing by Stage
 
@@ -418,7 +510,7 @@ configuration therefore does not define `license.token`.
 |---|---|---|
 | Core release | git tag `v0.0.x` (for example `v0.0.2`) | What instances pin. `make update-core` accepts release tags only. The version stamped into the release images by `docker-bake.hcl` equals the tag. |
 | Core build | `1970.N` (Constellation `YYYY.edition` format) | Hourly mainline builds of core `main` in Constellation, published to testing only. Not pinned by instances. |
-| Instance release | git tag `v<major>.<minor>.<patch>` in the instance repository | Image tags of the instance. The core release it is built on is recorded as an OCI label and in the dist service. |
+| Instance release | git tag `v<major>.<minor>.<patch>` in the instance repository | Image tags of the instance: the image tag is the full git tag (`v1.2.3`), and `VERSION=` always takes that full tag. The core release it is built on is recorded as an OCI label and in the dist service. |
 | Template | template commit in `.template-version`; template release tags | The template version an instance last merged. |
 
 Current state: core has release tags `v0.0.1` and `v0.0.2`, and `docker-bake.hcl`

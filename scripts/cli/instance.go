@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -14,10 +15,16 @@ import (
 // Instance is the content of instance.yaml. Later issues add fields; an
 // unknown key is refused so a misspelling is never silently ignored.
 type Instance struct {
-	Name        string `yaml:"name"`
-	DisplayName string `yaml:"display_name"`
-	Core        string `yaml:"core"`
-	Flavor      string `yaml:"flavor"`
+	Name        string                  `yaml:"name"`
+	DisplayName string                  `yaml:"display_name"`
+	Core        string                  `yaml:"core"`
+	Flavor      string                  `yaml:"flavor"`
+	Deploy      map[string]DeployTarget `yaml:"deploy"`
+}
+
+// DeployTarget is one environment under deploy: in instance.yaml.
+type DeployTarget struct {
+	Adapter string `yaml:"adapter"`
 }
 
 var (
@@ -52,6 +59,13 @@ func (in Instance) Value(key string) (string, bool) {
 	case "flavor":
 		return in.Flavor, true
 	}
+	if env, ok := strings.CutPrefix(key, "deploy."); ok {
+		if env, ok = strings.CutSuffix(env, ".adapter"); ok {
+			if t, found := in.Deploy[env]; found {
+				return t.Adapter, true
+			}
+		}
+	}
 	return "", false
 }
 
@@ -81,6 +95,26 @@ func (in Instance) Validate() []string {
 		problems = append(problems, "flavor: required")
 	case !flavorPattern.MatchString(in.Flavor):
 		problems = append(problems, fmt.Sprintf("flavor: %q must have the form <vendor>/margince", in.Flavor))
+	}
+	envs := make([]string, 0, len(in.Deploy))
+	for env := range in.Deploy {
+		envs = append(envs, env)
+	}
+	sort.Strings(envs)
+	for _, env := range envs {
+		if !namePattern.MatchString(env) {
+			problems = append(problems, fmt.Sprintf("deploy: environment %q must match ^[a-z0-9]+(-[a-z0-9]+)*$", env))
+			continue
+		}
+		switch adapter := in.Deploy[env].Adapter; adapter {
+		case "":
+			problems = append(problems, fmt.Sprintf("deploy.%s.adapter: required", env))
+		case "hook":
+		case "d13":
+			problems = append(problems, fmt.Sprintf("deploy.%s.adapter: d13 is not available yet (issue D1); use hook", env))
+		default:
+			problems = append(problems, fmt.Sprintf("deploy.%s.adapter: %q is not an adapter (want hook)", env, adapter))
+		}
 	}
 	return problems
 }

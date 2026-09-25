@@ -18,7 +18,7 @@
 
 | Guide | Content |
 |---|---|
-| [Create an instance](create-an-instance.md) | Create a client instance from this template, and keep it current with the template and with core. |
+| [Create an instance](create-an-instance.md) | Create a client instance from this template, keep it current with the template and with core, and deploy it. |
 | [Adding an extension](adding-an-extension.md) | Create and test a unit. |
 | [Contributing to core](contributing-to-core.md) | Send a change to `margince/margince`. |
 | [Desktop build](desktop-build.md) | Build and run the desktop bundle. |
@@ -26,4 +26,4 @@
 | [Troubleshooting](troubleshooting.md) | Known problems and fixes. |
 | [Glossary](glossary.md) | Terms. |
 
-Planned: trial, deploy.
+Planned: trial.
