@@ -190,6 +190,24 @@ func TestRunMissingFile(t *testing.T) {
 	}
 }
 
+func TestRunDeployDirectory(t *testing.T) {
+	file := writeFile(t, valid+"deploy:\n  staging: { adapter: hook }\n")
+	core := gitRepo(t, "v0.0.2")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"check", "-file", file, "-core", core}, &out, &errOut); code != 1 ||
+		!strings.Contains(errOut.String(), "deploy.staging: missing directory deploy/staging/") {
+		t.Fatalf("without the directory: exit %d, stderr %q", code, errOut.String())
+	}
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(file), "deploy", "staging"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"check", "-file", file, "-core", core}, &out, &errOut); code != 0 {
+		t.Fatalf("with the directory: exit %d, stderr %q", code, errOut.String())
+	}
+}
+
 func TestRunUsage(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(nil, &out, &errOut); code != 2 {

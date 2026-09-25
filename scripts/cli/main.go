@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -58,6 +59,20 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	problems := in.Validate()
+	root := filepath.Dir(*file)
+	envs := make([]string, 0, len(in.Deploy))
+	for env := range in.Deploy {
+		envs = append(envs, env)
+	}
+	sort.Strings(envs)
+	for _, env := range envs {
+		if !namePattern.MatchString(env) {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(root, "deploy", env)); err != nil || !st.IsDir() {
+			problems = append(problems, fmt.Sprintf("deploy.%s: missing directory deploy/%s/", env, env))
+		}
+	}
 	if in.Core != "" {
 		tags, err := coreTags(*core)
 		if err != nil {

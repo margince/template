@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestParseValid(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	want := Instance{Name: "margince-default", DisplayName: "Margince Default", Core: "v0.0.2", Flavor: "margince/margince"}
-	if in != want {
+	if !reflect.DeepEqual(in, want) {
 		t.Fatalf("Parse = %+v, want %+v", in, want)
 	}
 	if p := in.Validate(); len(p) != 0 {
@@ -64,6 +65,51 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("Validate = %q, want a problem containing %q", problems, c.want)
 			}
 		})
+	}
+}
+
+func TestParseDeploy(t *testing.T) {
+	in, err := Parse([]byte(valid + "deploy:\n  staging: { adapter: hook }\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got, ok := in.Value("deploy.staging.adapter"); !ok || got != "hook" {
+		t.Fatalf("Value(deploy.staging.adapter) = %q, %v", got, ok)
+	}
+	if _, ok := in.Value("deploy.production.adapter"); ok {
+		t.Fatal("Value for an absent environment reported ok")
+	}
+	if p := in.Validate(); len(p) != 0 {
+		t.Fatalf("Validate = %v", p)
+	}
+}
+
+func TestValidateDeploy(t *testing.T) {
+	base := Instance{Name: "a", DisplayName: "A", Core: "v0.0.2", Flavor: "a/margince"}
+	cases := []struct {
+		name   string
+		deploy map[string]DeployTarget
+		want   string
+	}{
+		{"bad environment name", map[string]DeployTarget{"Prod": {Adapter: "hook"}}, `deploy: environment "Prod"`},
+		{"missing adapter", map[string]DeployTarget{"prod": {}}, "deploy.prod.adapter: required"},
+		{"d13 not yet available", map[string]DeployTarget{"prod": {Adapter: "d13"}}, "D1"},
+		{"unknown adapter", map[string]DeployTarget{"prod": {Adapter: "ssh"}}, `deploy.prod.adapter: "ssh"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := base
+			in.Deploy = c.deploy
+			if got := strings.Join(in.Validate(), "\n"); !strings.Contains(got, c.want) {
+				t.Fatalf("Validate = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestParseRefusesUnknownDeployKey(t *testing.T) {
+	if _, err := Parse([]byte(valid + "deploy:\n  staging: { adaptor: hook }\n")); err == nil {
+		t.Fatal("Parse accepted deploy.staging.adaptor")
 	}
 }
 
