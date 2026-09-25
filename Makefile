@@ -25,7 +25,7 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 	stage unstage compose watch new-unit new-instance deploy u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template template-sync check-composition build test test-extensions arch ext-imports \
-	check-ext-migrations check-manifests check-docs drift test-scripts test-cli secret-scan test-secret-scan \
+	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
 	fe-install fe-test fe-test-ext fe-typecheck-composed fe-ds-gates fe-lint \
 	dev dev-fresh dev-stop dev-logs seed-dev seed-demo verify-demo run \
 	infra-up infra-down infra-logs infra-reset db-up migrate \
@@ -271,6 +271,9 @@ template-sync: ## Merge margince-template's main into this instance and record i
 
 test-cli: ## The template CLI's own tests
 	@cd scripts/cli && GOWORK=off go vet ./... && GOWORK=off go test ./...
+
+test-lifecycle: ## The whole instance lifecycle in a scratch instance (slow; KEEP=1 keeps it)
+	@KEEP='$(subst ','\'',$(value KEEP))' bash scripts/lifecycle.test.sh
 
 ## The composition is generated, so "it compiles" is not evidence on its own —
 ## this is the gate that proves the tree can be rebuilt.
