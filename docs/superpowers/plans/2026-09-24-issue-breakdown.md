@@ -29,7 +29,7 @@ dependencies.
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
-| K2 | Flavors: vendor-namespaced products with dynamic catalog and licenses | Add flavors to the dist service. A flavor is namespaced by vendor: `margince/margince` is core, `<vendor>/margince` is a client instance. Add management APIs to create flavors. Make the static `MARGINCE_AUTH_CATALOG` dynamic through the event outbox, so that a new flavor can be licensed immediately. Grant push to the publisher identity for the flavor image namespace. | Creating a flavor through the API allows issuing a license for it, pushing `<vendor>/margince-api`, `-web`, `-worker` with the publisher identity, and pulling them with the license. | — |
+| K2 | Flavors: vendor-namespaced products with dynamic catalog and licenses | Add flavors to the dist service. A flavor is namespaced by vendor: `margince/margince` is core, `<vendor>/margince` is a client instance. Add management APIs to create flavors. Make the static `MARGINCE_AUTH_CATALOG` dynamic through the event outbox, so that a new flavor can be licensed immediately. Grant push to the publisher identity for the flavor image namespace. | Creating a flavor through the API allows issuing a license for it, pushing `<registry>/<vendor>/margince/api`, `/web`, and `/worker` with the publisher identity, and pulling them with the license. | — |
 | K3 | ~~Hourly mainline builds of core~~ | Closed: no scheduled or hourly builds in any repository; builds run only in the template and instances. | — | — |
 | K4 | Release harness | A command that instance CI runs after publishing a flavor release: a license for the flavor is valid, the containers can be pulled with it, the binaries and SBOMs can be downloaded. Constellation provides the tool; it runs in the instance's CI, not in Constellation. | The command passes against a published flavor release and fails when any check fails. | K2 |
 | K1 | Trial license per flavor | Add a trial license type (validity period, trial marker) and an issuance endpoint that accepts an operator credential. Trial licenses are issued per flavor. Used by `make trial` in instance repositories. | An operator credential can obtain a trial JWT for a flavor. Core accepts it in production mode. | K2 |
@@ -58,8 +58,8 @@ dependencies.
 
 | ID | Repository | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|---|
-| D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. It currently deploys vanilla core; the owning instance repository is an open decision. | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging. | T9 |
-| I1 | margince-automation-world | Migrate (open decision) | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml`. | `make check` and `make check-template` pass. | M1 |
+| D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. It currently deploys vanilla core; the owning instance repository is open decision OD1 (spec Section 17). | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging. | T9 |
+| I1 | margince-automation-world | Migrate (open decision OD2, spec Section 17) | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml`. | `make check` and `make check-template` pass. | M1 |
 | R1 | margince-release | Archive | Archive the repository. | Archived. | T7 |
 | R2 | margince-d13-deploy | Archive | Archive the repository. | Archived. | D1 |
 | R3 | margince-principles | Update references | Replace references to `margince-release` with `margince-template` and `margince-constellation`. | No reference to `margince-release` remains. | R1 |
