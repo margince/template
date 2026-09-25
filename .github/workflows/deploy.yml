@@ -1,0 +1,59 @@
+# deploy.yml — deploy one release to one environment, by hand.
+#
+# Runs `make deploy`, which runs the hook scripts in deploy/<environment>/hooks/.
+# The job runs in the GitHub Environment of the same name, so protection rules
+# and secrets are configured per environment. Every secret of that environment
+# is exported to the job so the hooks can read it; secret values never live in
+# the repository.
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment name from instance.yaml (deploy:)
+        required: true
+        type: string
+      version:
+        description: Release to deploy (an instance release tag)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: scripts/cli/go.mod
+          cache: false
+      - name: Export the environment's secrets
+        env:
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          # One heredoc block per secret, so a multi-line value stays intact.
+          echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key != "github_token") | .key' |
+          while IFS= read -r name; do
+            delim="EOF_$(openssl rand -hex 16)"
+            {
+              printf '%s<<%s\n' "$name" "$delim"
+              echo "$SECRETS_JSON" | jq -r --arg k "$name" '.[$k]'
+              printf '%s\n' "$delim"
+            } >> "$GITHUB_ENV"
+          done
+      - name: Deploy
+        env:
+          DEPLOY_TARGET: ${{ inputs.environment }}
+          DEPLOY_RELEASE: ${{ inputs.version }}
+        run: make deploy ENV="$DEPLOY_TARGET" VERSION="$DEPLOY_RELEASE"

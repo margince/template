@@ -80,6 +80,65 @@ for f in "$WF"/*.yml; do
   done
 done
 
+# deploy.yml runs by hand, in a GitHub Environment named by its own input, and
+# must never let that input (or `version`) reach a shell verbatim: a
+# workflow_dispatch input is attacker-controlled text the same as a pull
+# request title, and `${{ inputs.x }}` spliced into a `run:` script is
+# injected before the shell ever sees a variable. The job passes both through
+# `env:` instead, which is opaque to the shell's parser.
+DEPLOY_WF="$WF/deploy.yml"
+if [ -e "$DEPLOY_WF" ]; then
+  ok "deploy.yml exists"
+
+  on_block="$(block_of on "$DEPLOY_WF")"
+  if printf '%s\n' "$on_block" | grep -qE '^[[:space:]]{2}(push|pull_request|schedule|workflow_call)[[:space:]]*:'; then
+    fail "deploy.yml triggers on more than workflow_dispatch"
+  elif printf '%s\n' "$on_block" | grep -qE '^[[:space:]]{2}workflow_dispatch[[:space:]]*:'; then
+    ok "deploy.yml triggers only on workflow_dispatch"
+  else
+    fail "deploy.yml does not trigger on workflow_dispatch"
+  fi
+
+  if grep -qE '^[[:space:]]*environment:[[:space:]]*\$\{\{[[:space:]]*inputs\.environment[[:space:]]*\}\}' "$DEPLOY_WF"; then
+    ok "deploy.yml runs its job in the environment named by inputs.environment"
+  else
+    fail "deploy.yml does not set environment: \${{ inputs.environment }}"
+  fi
+
+  if grep -qE '^[[:space:]]*run:.*make deploy\b' "$DEPLOY_WF"; then
+    ok "deploy.yml runs make deploy"
+  else
+    fail "deploy.yml does not run make deploy"
+  fi
+
+  # Every line that belongs to a `run:` step, single-line or the body of a
+  # `run: |` block, collected the same way block_of collects a top-level key's
+  # body: from the `run:` line until indentation returns to its own level or
+  # less.
+  run_lines="$(awk '
+    /^[[:space:]]*run:[[:space:]]*[|>]/ {
+      match($0, /^[ ]*/); ind = RLENGTH; inrun = 1; print; next
+    }
+    /^[[:space:]]*run:/ { print; inrun = 0; next }
+    inrun {
+      if ($0 ~ /[^[:space:]]/) {
+        match($0, /^[ ]*/)
+        if (RLENGTH <= ind) { inrun = 0 } else { print }
+      } else { print }
+    }
+  ' "$DEPLOY_WF")"
+  if printf '%s\n' "$run_lines" | grep -qF '${{ inputs.'; then
+    fail "deploy.yml templates \${{ inputs. directly into a run: step.
+      inputs.environment and inputs.version must reach the shell through
+      env:, never through \${{ }} inside run:, or a crafted input injects
+      shell code."
+  else
+    ok "deploy.yml never templates \${{ inputs. into a run: step"
+  fi
+else
+  fail "deploy.yml is missing"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%d check(s) failed\n' "$FAILURES" >&2
   exit 1
