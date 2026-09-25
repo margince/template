@@ -512,6 +512,86 @@ git history or on pushing. `make deploy` removes `ENV`, `VERSION`,
 `MAKEFLAGS`, `MAKELEVEL`, and `MFLAGS` from the environment of `deploy.sh`,
 so a hook that runs `make` does not inherit them as overrides.
 
+### 10.4.1 District 13 Adapter (issue D1)
+
+**Status:** Proposed. Not yet reviewed.
+
+District 13 (D13) is the Kubernetes platform operated by NFQ DevOps. Its
+interface, as used by `margince-d13-deploy`, is the following:
+
+- NFQ DevOps registers a repository with D13. A push to a branch named after
+  an environment (`staging`, `production`) starts the NFQ Jenkins pipeline
+  defined by `Jenkinsfile` (`nfq-library`).
+- The pipeline reads `.d13.<branch>.yaml` from the repository root. For each
+  service it builds an image from the Dockerfile named in that file, writes
+  `.env` from the namespace's Vault secrets into the build context, and
+  deploys with Helm into the namespace `<project>-<branch>`.
+- Jenkins reports the result as a GitHub commit status on the pushed commit.
+- The Jenkins agent has no kubectl context. The `Verify rollout` stage
+  therefore cannot confirm that the pods serve the new build, and it does not
+  fail the build.
+
+`margince-d13-deploy` compiles Margince from source inside D13. The `d13`
+adapter does not compile anything. D13 deploys the images of an instance
+release (Section 10.3), so the deployed code is the code that the release
+smoke test and the release harness verified. Core's release images use the
+same entrypoints as the current D13 images (`scripts/deploy/*-entrypoint.sh`,
+which read `/.env`), so a thin image layer is sufficient.
+
+**Environment branch.** The branch named after the environment is generated
+by the adapter. It is never merged into `main` and never edited by hand. Each
+deployment adds one commit to it. The tree of that commit contains only:
+
+| Path | Source |
+|---|---|
+| `.d13.<branch>.yaml`, `config/margince.yaml`, `ingress.<branch>.yaml` (optional) | `deploy/<env>/` (instance-owned) |
+| `Jenkinsfile`, `scripts/verify-rollout.sh` | `scripts/deploy/d13/` (template-owned) |
+| `Dockerfile.api`, `Dockerfile.worker` | Generated: `FROM $IMAGE_API` (or `$IMAGE_WORKER`), then copy `.env` to `/.env` and `config/margince.yaml` to `/app/config/margince.yaml`. |
+| `Dockerfile.web` | Generated: `FROM $IMAGE_WEB`. |
+| `RELEASE` | `DEPLOY_VERSION`. |
+
+`deploy/<env>/d13.env` sets `D13_BRANCH` (default: the environment name) and
+`D13_URL` (the public base URL, for example `https://margince.staging.gradion.com`).
+
+**Steps.**
+
+| Step | Action |
+|---|---|
+| `check` | `deploy/<env>/` contains `.d13.<branch>.yaml`, `config/margince.yaml`, and `d13.env`. `D13_BRANCH` is not the default branch. |
+| `preflight` | `D13_PUSH_TOKEN` is set. The three release images exist in the registry (`docker manifest inspect`). |
+| `apply` | Builds the tree, commits it with the current branch tip as parent (no parent for the first deployment), and pushes it to `D13_BRANCH` with `D13_PUSH_TOKEN`. |
+| `verify` | Waits for the Jenkins commit status on the pushed commit (timeout `D13_VERIFY_TIMEOUT`, default 1800 seconds). `failure` or `error` fails the step. After `success`, `D13_URL/` and `D13_URL/v1/` must answer without a 5xx status. |
+| `rollback` | Pushes a new commit whose tree is the tree of the branch tip before `apply`. Jenkins then redeploys the previous release. If there was no previous tip, the step reports that there is nothing to roll back to and fails. |
+
+`D13_PUSH_TOKEN` is a GitHub token with `contents: write` and
+`statuses: read` on the instance repository. It is an environment secret
+(Section 10.4); `deploy.yml` keeps `persist-credentials: false`.
+
+**Limits.** `verify` confirms that Jenkins finished and that the public URL
+answers. It cannot confirm that the pods run the new image, because core has
+no public endpoint that reports its version and D13 gives the pipeline no
+kubectl context. A rollback is a redeployment of an older image against a
+database whose migrations may have advanced; `rollback` does not change the
+database.
+
+**Prerequisites outside this repository.**
+
+| ID | Owner | Prerequisite |
+|---|---|---|
+| P1 | NFQ DevOps | Register the owning instance repository with D13 Jenkins, with `project: margince`, so the existing namespaces (`margince-staging`, `margince-production`) and their Vault secrets are reused. |
+| P2 | NFQ DevOps, Constellation | The D13 Jenkins Docker builder can pull the instance images from the Constellation registry. |
+| P3 | Repository administrator | Create `D13_PUSH_TOKEN` in each GitHub Environment. |
+
+**Changes from `margince-d13-deploy`.**
+
+- Staging is no longer deployed nightly from core `main`. There are no
+  scheduled builds (Section 4). Staging is deployed with `make deploy` from an
+  instance release.
+- Production is deployed with the same command. `PRODUCTION_RELEASE` is
+  replaced by `RELEASE` on each environment branch.
+- `margince-d13-deploy` keeps deploying until the new repository's staging and
+  production deployments pass `verify`. Then it is archived (R2).
+
 ### 10.5 Licensing by Stage
 
 | Stage | Runtime mode | License |
@@ -617,8 +697,12 @@ The work is delivered as separate implementation plans in the following order.
 
 ## 17. Open Decisions
 
-None. A new decision is added here with its options and the issues it blocks,
-and is moved to Section 4 when it is made.
+| ID | Decision | Options | Recommendation | Blocks |
+|---|---|---|---|---|
+| OD3 | Which instance owns `margince.gradion.com` (the D13 deployment, Section 10.4.1). | (a) A new instance repository with no extensions: instance `gradion`, flavor `gradion/margince`, repository `gradionhq/margince-instance-gradion`. It releases and deploys like any client instance. (b) `margince-automation-world` after I1; `margince.gradion.com` would then run its five extensions. | (a). It keeps the current behavior (core without extensions) and does not make D1 wait for M1 and I1. | D1 |
+
+A new decision is added here with its options and the issues it blocks, and
+is moved to Section 4 when it is made.
 
 ## 18. Implementation Status
 
@@ -634,6 +718,6 @@ The GitHub issues and their dependencies are listed in
 | Release (T7) | Waiting for Constellation K2 (flavors, image namespace, push identity) and K4 (release harness). T7 also changes `make deploy`, `deploy.yml`, and the lifecycle test from `vX.Y.Z` to the Constellation version pattern. |
 | Trial (T8) | Waiting for Constellation K1 (trial license per flavor). |
 | Guides (T12) | After T7 and T8. |
-| `d13` adapter and its instance repository (D1) | Open. Can start now. |
+| `d13` adapter and its instance repository (D1) | Design proposed (Section 10.4.1); waits for review and OD3. The first real deployment also needs T7 and P1–P3. |
 | Retirement (R1–R3) | After T7 and D1. |
 | `margince-automation-world` migration (I1) | After M1. |
