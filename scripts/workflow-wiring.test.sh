@@ -229,6 +229,52 @@ else
   fail "deploy.yml is missing"
 fi
 
+# lifecycle.yml runs the whole instance lifecycle, which is slow — `make
+# new-instance` and the scratch template clone it drives both need a full
+# history, and every action it calls must be pinned by SHA like every other
+# workflow here.
+LIFECYCLE_WF="$WF/lifecycle.yml"
+if [ -e "$LIFECYCLE_WF" ]; then
+  ok "lifecycle.yml exists"
+
+  if grep -qE '^[[:space:]]*run:[[:space:]]*make test-lifecycle[[:space:]]*$' "$LIFECYCLE_WF"; then
+    ok "lifecycle.yml runs make test-lifecycle"
+  else
+    fail "lifecycle.yml does not run make test-lifecycle"
+  fi
+
+  if grep -qE '^[[:space:]]*timeout-minutes[[:space:]]*:[[:space:]]*[0-9]+[[:space:]]*$' "$LIFECYCLE_WF"; then
+    ok "lifecycle.yml sets timeout-minutes"
+  else
+    fail "lifecycle.yml has no timeout-minutes — a hung instance lifecycle would run until the runner's own default limit"
+  fi
+
+  unpinned="$(grep -oE 'uses:[[:space:]]*[^[:space:]]+' "$LIFECYCLE_WF" \
+    | grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true)"
+  if [ -z "$unpinned" ]; then
+    ok "lifecycle.yml pins every \`uses:\` to a 40-hex SHA"
+  else
+    fail "lifecycle.yml has a \`uses:\` not pinned to a 40-hex commit SHA: $unpinned"
+  fi
+
+  # fetch-depth: 0, not the checkout default: `make new-instance` and the
+  # scratch template clone both need full history, which a shallow checkout
+  # does not have.
+  checkout_block="$(awk '
+    /uses:[[:space:]]*actions\/checkout@/ { match($0, /^[ ]*/); ind = RLENGTH; started = 1; print; next }
+    started {
+      if ($0 ~ /[^[:space:]]/) { match($0, /^[ ]*/); if (RLENGTH <= ind) exit }
+      print
+    }' "$LIFECYCLE_WF")"
+  if printf '%s\n' "$checkout_block" | grep -qE 'fetch-depth:[[:space:]]*0[[:space:]]*$'; then
+    ok "lifecycle.yml's checkout sets fetch-depth: 0"
+  else
+    fail "lifecycle.yml's checkout does not set fetch-depth: 0"
+  fi
+else
+  fail "lifecycle.yml is missing"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%d check(s) failed\n' "$FAILURES" >&2
   exit 1

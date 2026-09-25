@@ -1,0 +1,61 @@
+# The instance lifecycle, end to end: create an instance from this template,
+# add and test a unit, deploy it through the hook adapter (a success and a
+# rollback), and merge a template change into it. `scripts/lifecycle.test.sh`
+# asserts every step's outcome, so a green run here proves the template still
+# produces a working instance, not merely that the template itself composes.
+#
+# Separate from ci.yml because it is slow — it runs `make install`, creates a
+# whole instance, composes and tests a unit, and drives two deployments —
+# where ci.yml's job answers in well under a minute. Splitting it out keeps
+# the fast gate fast without dropping the slow one.
+#
+# Trial (T8) and release (T7) steps join `scripts/lifecycle.test.sh` when
+# those lanes exist; this workflow needs no change when they do.
+name: lifecycle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # fetch-depth: 0, unlike ci.yml's checkout: the test creates a fresh
+      # instance with `make new-instance` and clones this checkout again as a
+      # scratch template remote, and both need a clean, unshallow history —
+      # a shallow clone has no full history to instantiate or merge from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: core/backend/go.mod
+          cache-dependency-path: core/backend/go.sum
+
+      # Node and pnpm: `make install` runs core's own install, and the
+      # composed unit the test adds is built and tested through `make u`.
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: core/pnpm-lock.yaml
+
+      - name: The instance lifecycle
+        shell: bash
+        run: make test-lifecycle
