@@ -130,10 +130,28 @@ margince-template/                   (client forks use the same structure)
 
 ### 6.1 Drift Check
 
-The file `.template-version` records the template commit that was last merged
-into the instance. The command `make check-template` fails if any
-template-owned path differs from that commit. `make check` includes
-`make check-template`.
+`.template-owned` lists the template-owned paths, one git pathspec per line.
+`make check-template` reads this list from the commit named in
+`.template-version`, not from the instance's working tree, so an instance
+cannot remove a path from the list by editing it locally.
+
+`.template-version` holds one commit id: the template commit that was last
+merged into the instance. `make check-template` fails if any
+`.template-owned` path differs from that commit — an edit, a removal, or an
+untracked or newly added file inside an owned directory all count as drift.
+`make check` includes `make check-template`.
+
+The template itself carries no `.template-version`: it is the source of
+template-owned paths, so there is nothing to compare it with, and
+`make check-template` reports this and exits 0.
+
+`make template-sync` merges the template's `main` into the instance and
+updates `.template-version` to the merged commit, which is how an instance
+picks up a template-owned change before `make check-template` next runs.
+The instance keeps its own `core` gitlink; the sync prints the template's
+core pin, and `make update-core` follows it. A conflict on an instance-owned
+path keeps the instance's side; a conflict on a template-owned path takes the
+template's side; a conflict on any other path stops the sync.
 
 ### 6.2 `instance.yaml`
 
@@ -141,7 +159,7 @@ Example (all values are illustrative):
 
 ```yaml
 name: acme                       # used in image names and the trial bundle name
-display_name: Acme               # used in user-facing text of the desktop bundle
+display_name: Acme               # used by make new-instance only (README.md); not shown in the desktop bundle
 core: v0.0.2                     # must match the tag of the core/ submodule
 data:
   dataset: margince-demo-database/acme@v1    # optional
@@ -179,9 +197,12 @@ core: v0.0.2
 flavor: margince/margince
 ```
 
-The image namespace is derived from `flavor`: `<registry>/<vendor>/margince-api`,
-`-web`, and `-worker`. The registry host is a template setting, not an
-instance setting.
+The image namespace is derived from `flavor`: `<registry>/<flavor>` when a
+registry is supplied, `<flavor>` otherwise. Core's `docker-bake.hcl` appends
+`/api`, `/web`, and `/worker` to that namespace, so an instance's images are
+`<registry>/<flavor>/api`, `/web`, and `/worker` — for example
+`myregistry.example.com/acme/margince/api`. The registry host is supplied at
+build time (`REGISTRY=<host> make package`), not stored in `instance.yaml`.
 
 ### 6.3 `instance.mk`
 
@@ -216,7 +237,7 @@ and the action taken when it is copied into the template. Each script keeps its
 | `lint.sh` | Lint unit code | Change: run craft through `core/scripts/craft-pin.sh`; core `v0.0.2` has no `cli/craft` |
 | `package.sh` | Build `api`, `web`, `worker` images with units | Generalize: read the image name and registry from `instance.yaml`; rename labels `com.gradion.*` to `com.margince.instance.*` |
 | `new-unit.sh` | Create a new unit | Change (T1): render `scripts/unit-skeleton/*.tmpl` instead of copying `extensions/gradion`; add `new-unit.test.sh` |
-| `desktop.sh`, `build-info.sh` | Build, install, and inspect the desktop bundle | Generalize: take the client name in user-facing text from `display_name` in `instance.yaml` |
+| `desktop.sh`, `build-info.sh` | Build, install, and inspect the desktop bundle | Change: neutral text (no client names). `display_name` is used by `new-instance` only. |
 
 The `Makefile` is copied with the following changes:
 
@@ -266,6 +287,7 @@ against the template itself to verify the template.
 | Command | Function | Status |
 |---|---|---|
 | `make install` | Verifies required tools, checks out core, installs dependencies, git hooks, and configuration. | Existing |
+| `make new-instance NAME=<n> DISPLAY_NAME=<d>` | Creates a client instance repository from the template (`VENDOR=`, `DIR=`, `PUSH=1 OWNER=`). | Existing |
 | `make dev` | Starts infrastructure services and runs `api`, `worker`, and `web` with the instance units composed. | Existing |
 | `make new-unit NAME=<n>` | Creates an extension in `extensions/<n>` from `scripts/unit-skeleton/`. | Existing, changed |
 | `make check-instance` | Validates `instance.yaml` (Section 6.2). | New |
@@ -275,10 +297,11 @@ against the template itself to verify the template.
 | `make package VERSION=<v>` | Builds the `api`, `web`, and `worker` images with the instance units. | Existing, changed |
 | `make desktop VERSION=<v>` | Builds the desktop bundle with the instance units. | Existing, changed |
 | `make trial` | Runs `make desktop` and adds configuration, dataset, and a trial license. See Section 10.2. | New |
-| `make update-core REF=<tag>` | Updates the core submodule. Changed to accept tags only and to update `instance.yaml`. | Existing, changed |
+| `make update-core REF=<tag>` | Moves the core submodule to a release tag and records the tag in `instance.yaml`. | Existing, changed |
 | `make release VERSION=<v>` | Verifies the working tree and `make check`, then pushes the tag `v<v>`. | New |
 | `make deploy ENV=<env> VERSION=<v>` | Deploys the specified images to the environment defined in `deploy/<env>/`. | New |
-| `make check-template` | Drift check. | New |
+| `make template-sync` | Merges the template's `main` into the instance and records the merged commit in `.template-version`. | Existing |
+| `make check-template` | Drift check: template-owned paths match `.template-version`, and `instance.mk` only adds targets. | Existing |
 
 ## 10. Workflows
 
@@ -332,7 +355,7 @@ builds the macOS and Windows desktop bundles. The template adds the following
 jobs:
 
 1. **Images:** runs `make package` with the flavor namespace and `VERSION=<v>`.
-   This produces `<registry>/<vendor>/margince-api`, `-web`, and `-worker` with
+   This produces `<registry>/<flavor>/api`, `/web`, and `/worker` with
    the candidate tag `cand-<commit>`, for multiple architectures. Each image has an OCI label with the core version.
 2. **Smoke test:** starts the three images with a temporary PostgreSQL and
    Redis instance and verifies that they start and respond.

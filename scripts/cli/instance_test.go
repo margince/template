@@ -51,6 +51,8 @@ func TestValidate(t *testing.T) {
 		{"blank display name", Instance{Name: "a", DisplayName: "  ", Core: "v1", Flavor: "a/margince"}, "display_name: required"},
 		{"multi-line display name", Instance{Name: "a", DisplayName: "A\nB", Core: "v1", Flavor: "a/margince"}, "single line"},
 		{"missing core", Instance{Name: "a", DisplayName: "D", Flavor: "a/margince"}, "core: required"},
+		{"core is a branch, not a release tag", Instance{Name: "a", DisplayName: "D", Core: "main", Flavor: "a/margince"}, "release tag like v0.0.2"},
+		{"core is a non-release tag", Instance{Name: "a", DisplayName: "D", Core: "archive/pr100-salvage", Flavor: "a/margince"}, "release tag like v0.0.2"},
 		{"missing flavor", Instance{Name: "a", DisplayName: "D", Core: "v1"}, "flavor: required"},
 		{"flavor without product", Instance{Name: "a", DisplayName: "D", Core: "v1", Flavor: "acme"}, "<vendor>/margince"},
 		{"flavor with other product", Instance{Name: "a", DisplayName: "D", Core: "v1", Flavor: "acme/crm"}, "<vendor>/margince"},

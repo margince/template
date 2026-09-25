@@ -860,7 +860,7 @@ cmd_kit() {
 Copy the Margince demo database folder into THIS directory, then run the
 demo loader in the installation folder (two levels up). See its README.md.
 
-The demo database is not part of this download. Ask your Gradion contact
+The demo database is not part of this download. Ask the team that provided this build
 for it. It is a folder with a "datasets" directory inside it.
 NOTE
   fi

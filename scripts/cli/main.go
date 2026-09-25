@@ -2,6 +2,7 @@
 // editor go.work at the repository root does not list this module.
 //
 //	cli check [-file instance.yaml] [-core core]
+//	cli get [-file instance.yaml] <key>
 package main
 
 import (
@@ -19,16 +20,30 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+const usage = "usage: cli check [-file instance.yaml] [-core core] | cli get [-file instance.yaml] <key>"
+
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "check" {
-		fmt.Fprintln(stderr, "usage: cli check [-file instance.yaml] [-core core]")
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, usage)
 		return 2
 	}
+	switch args[0] {
+	case "check":
+		return runCheck(args[1:], stdout, stderr)
+	case "get":
+		return runGet(args[1:], stdout, stderr)
+	}
+	fmt.Fprintln(stderr, usage)
+	return 2
+}
+
+// runCheck validates instance.yaml and that core/ is at the tag it names.
+func runCheck(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	file := fs.String("file", "instance.yaml", "path to instance.yaml")
 	core := fs.String("core", "core", "path to the core submodule")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 

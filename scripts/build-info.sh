@@ -241,7 +241,7 @@ EOF
     cat <<'NOTE'
 
 Quote the version above in a bug report. The commits identify the exact sources
-this folder was built from: "repo" is the Gradion installation, "core" is the
+this folder was built from: "repo" is the instance repository, "core" is the
 upstream Margince it carries, and "dataset" is the demo database it was filled
 from -- "none" if it ships no demo data at all.
 

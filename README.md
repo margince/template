@@ -53,7 +53,10 @@ Run `make help` for the full list.
 | `make u NAME=<n>` | Run one unit's tests and the policy gates. |
 | `make check` | Run the full quality gate. |
 | `make ci` | Run `make check` plus the database and submodule lanes. |
-| `make update-core REF=<ref>` | Move the core pin. |
+| `make new-instance NAME=<n> DISPLAY_NAME=<d>` | Create a client instance repository from this template. |
+| `make template-sync` | Merge this template's changes into an instance and record them. |
+| `make check-template` | Verify an instance has not drifted from the template. |
+| `make update-core REF=<tag>` | Move the core pin to a core release tag. |
 
 Planned, not implemented yet: the trial bundle (issue T8), release (issue T7),
 and deployment (issue T9).

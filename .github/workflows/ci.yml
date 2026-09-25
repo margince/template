@@ -50,6 +50,9 @@ jobs:
       - name: instance.yaml is valid
         run: make check-instance
 
+      - name: Template-owned paths are unchanged
+        run: make check-template
+
       ## Node and pnpm, because `make lint` runs biome over extensions/ and the
       ## composer resolves a pnpm workspace. The composed frontend SUITES are not
       ## here — they moved to full-check.yml — but the toolchain is still needed.

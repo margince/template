@@ -21,8 +21,9 @@ type Instance struct {
 }
 
 var (
-	namePattern   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	flavorPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*/margince$`)
+	namePattern    = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	flavorPattern  = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*/margince$`)
+	coreTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
 // Parse decodes instance.yaml and refuses unknown keys.
@@ -37,6 +38,21 @@ func Parse(data []byte) (Instance, error) {
 		return in, err
 	}
 	return in, nil
+}
+
+// Value returns the value of one instance.yaml key by its YAML name.
+func (in Instance) Value(key string) (string, bool) {
+	switch key {
+	case "name":
+		return in.Name, true
+	case "display_name":
+		return in.DisplayName, true
+	case "core":
+		return in.Core, true
+	case "flavor":
+		return in.Flavor, true
+	}
+	return "", false
 }
 
 // Validate returns one message per problem, or nil.
@@ -54,8 +70,11 @@ func (in Instance) Validate() []string {
 	case strings.ContainsAny(in.DisplayName, "\r\n"):
 		problems = append(problems, "display_name: must be a single line")
 	}
-	if in.Core == "" {
+	switch {
+	case in.Core == "":
 		problems = append(problems, "core: required")
+	case !coreTagPattern.MatchString(in.Core):
+		problems = append(problems, fmt.Sprintf("core: %q must be a release tag like v0.0.2", in.Core))
 	}
 	switch {
 	case in.Flavor == "":

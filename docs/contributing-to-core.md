@@ -1,8 +1,9 @@
 # Contributing a change to core
 
 Normally, changes flow one way: from upstream into this repository. `core/` is
-upstream Margince as a git submodule, `make update-core` pulls new upstream
-commits, and CI checks that no build modified any tracked file inside `core/`.
+upstream Margince as a git submodule, `make update-core REF=<tag>` moves it to
+a core release tag, and CI checks that no build modified any tracked file
+inside `core/`.
 
 Sometimes you need to send a change the other way. A unit is written against an
 *extension seam* — a package under `core/backend/pkg/` that units are allowed to
@@ -150,9 +151,9 @@ fixes. Once the change lands upstream, this installation picks it up the same wa
 it picks up every other upstream change:
 
 ```sh
-make update-core      # or: make update-core REF=<sha|tag>
+make update-core REF=<tag>
 make check
-git commit core -m "core: bump to <sha>"
+git commit core instance.yaml -m "core: bump to <tag>"
 ```
 
 ## Troubleshooting
@@ -162,7 +163,7 @@ git commit core -m "core: bump to <sha>"
 | `git status` here shows `core` modified | The pointer moved because a branch is checked out. Expected. Clear it with `make core-restore`. `git checkout core` does **not** work — see above. |
 | I already committed the moved pointer | `git checkout HEAD~1 -- core` if it is the last commit, then `make core-restore`. On a pushed branch, add a commit restoring the pinned sha. `make core-check-pin` tells you when it is right again. |
 | `core-check-pin` refuses | `core/` is pinned to a commit upstream has not merged. The message names the fix; usually `make core-restore` then commit the pointer. |
-| `update-core` refuses | It is protecting a branch, uncommitted work, or detached commits. `make core-status` says which. |
+| `update-core` refuses | It is protecting a branch, uncommitted work, or detached commits, or `REF` names something other than a core release tag. `make core-status` says which of the first three applies; `git -C core tag --list 'v*'` lists the release tags. |
 | `core-pr` refuses on sign-off | `git -C core rebase --signoff origin/main`. |
 | `core-pr` says no remote accepts a push | Add a `fork` remote, as above. |
 | `make u` refuses: "core has modified tracked files" | Expected while a seam edit is open. Prefix the command with `MARGINCE_ALLOW_DIRTY_CORE=1`, as the loop above shows. |
