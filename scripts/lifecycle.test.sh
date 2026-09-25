@@ -88,14 +88,16 @@ grep -qx 'rollback v0.1.1 verify' deploy/deploy.log || fail "rollback did not ru
 step "merge a template change"
 TPL="$WORK/template"
 git clone -q "$ROOT" "$TPL"
+# $ROOT's HEAD may not be a branch at all — CI checks out a detached PR merge
+# commit — in which case the clone has no local branch, and template-sync's
+# default TEMPLATE_BRANCH=main has nothing to fetch. Give the scratch clone a
+# branch of its own and sync from exactly that, regardless of what $ROOT's
+# HEAD is.
+git -C "$TPL" checkout -q -B lifecycle-template
 printf '\nLifecycle test note.\n' >> "$TPL/docs/README.md"
 git -C "$TPL" commit -q -am "docs: lifecycle test change"
 git remote set-url template "$TPL"
-# $TPL is a clone of $ROOT, so its checked-out branch is whatever branch $ROOT
-# is on, not necessarily "main" (template-sync's default). Running this from a
-# feature branch — as during this script's own development — would otherwise
-# fail with "couldn't find remote ref main".
-export TEMPLATE_BRANCH="$(git -C "$TPL" branch --show-current)"
+export TEMPLATE_BRANCH=lifecycle-template
 make -s template-sync
 [ "$(tr -d '[:space:]' < .template-version)" = "$(git -C "$TPL" rev-parse HEAD)" ] || fail ".template-version does not record the merged template commit"
 grep -q 'Lifecycle test note.' docs/README.md || fail "the template change did not arrive"
