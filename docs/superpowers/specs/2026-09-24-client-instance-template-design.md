@@ -532,12 +532,18 @@ tag and keeps `1970.N` for hourly builds.
 
 - Existing script tests (`*.test.sh`) are copied with their scripts and run by
   `make test-scripts`. Generalized scripts get updated tests.
-- The template CI runs the complete lifecycle against the template: `install`,
-  `check`, `trial` (build only), `release` (dry run), and `deploy` with a test
-  `hook` adapter. Template changes that break a command fail in the template CI
+- `make test-lifecycle` (`scripts/lifecycle.test.sh`) creates an instance from
+  the template in a scratch directory and runs it through the lifecycle a
+  client developer uses: `new-instance`, `check-instance` and `check-template`,
+  adding and testing a unit (`new-unit`, `compose`, `u`), `deploy` through the
+  hook adapter (a success and a verify failure that rolls back), and
+  `template-sync` from a scratch template clone. Every step asserts its
+  outcome. It is slow, so it is not part of `make test-scripts` and runs in
+  its own CI workflow, `lifecycle.yml`, on every pull request, on push to
+  `main`, and on demand. Template changes that break the lifecycle fail there
   before any instance merges them.
-- A test instance with one example unit runs the same lifecycle to verify
-  composition with a unit present.
+- Trial (T8) and release (T7) steps join `scripts/lifecycle.test.sh` when
+  those lanes exist; `lifecycle.yml` needs no change when they do.
 - The Go CLI has unit tests.
 
 ## 14. Scope of Adoption

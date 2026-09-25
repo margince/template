@@ -59,6 +59,7 @@ Run `make help` for the full list.
 | `make check-template` | Verify an instance has not drifted from the template. |
 | `make update-core REF=<tag>` | Move the core pin to a core release tag. |
 | `make deploy ENV=<env> VERSION=<v>` | Deploy the instance's images to an environment defined in `instance.yaml` (`deploy:`). |
+| `make test-lifecycle` | Run the whole instance lifecycle end to end in a scratch instance (slow). |
 
 Planned, not implemented yet: the trial bundle (issue T8) and release
 (issue T7).
