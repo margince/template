@@ -14,6 +14,8 @@ env="${1:-}"
 version="${2:-}"
 [ -n "$env" ] || die "deploy: pass ENV=<environment>, e.g. make deploy ENV=staging VERSION=v1.0.0"
 [ -n "$version" ] || die "deploy: pass VERSION=<release>, e.g. make deploy ENV=$env VERSION=v1.0.0"
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  die "deploy: VERSION '$version' is not a release tag; it must match ^v[0-9]+\.[0-9]+\.[0-9]+\$, e.g. v1.2.3"
 
 # The whole file first: `cli get` only parses, so an adapter that is not
 # available (d13), a malformed environment name, or a missing deploy/<env>/
@@ -21,6 +23,30 @@ version="${2:-}"
 if ! out="$(instance_validate 2>&1)"; then
   printf '%s\n' "$out" >&2
   die "deploy: instance.yaml is not valid; nothing was deployed"
+fi
+
+# The hooks and deploy/<env>/ are read from this checkout, not from the
+# release. Uncommitted changes match no commit at all, so they are refused
+# unless asked for. A checkout that is not at the release tag is only
+# reported: deploy.yml enforces the tag in CI, and a local run may deploy a
+# release with hooks fixed after it.
+if ! dirty="$(git -C "$ROOT" status --porcelain 2>&1)"; then
+  die "deploy: cannot read the git status of $ROOT: $dirty"
+fi
+if [ -n "$dirty" ]; then
+  if [ "${ALLOW_DIRTY:-}" = 1 ]; then
+    echo "deploy: the working tree has uncommitted changes; deploying anyway (ALLOW_DIRTY=1)" >&2
+  else
+    printf '%s\n' "$dirty" >&2
+    die "deploy: the working tree has uncommitted changes, so the hooks and configuration match no commit; commit them, or re-run with ALLOW_DIRTY=1"
+  fi
+fi
+# The tag's commit, compared with HEAD: exact whichever other tags point at
+# HEAD, which `git describe --exact-match` (it names only one) is not.
+head="$(git -C "$ROOT" rev-parse HEAD)"
+tagged="$(git -C "$ROOT" rev-parse -q --verify "refs/tags/$version^{commit}" 2>/dev/null)" || tagged=""
+if [ "$tagged" != "$head" ]; then
+  echo "deploy: hooks and configuration come from $(git -C "$ROOT" rev-parse --short HEAD), not from release $version" >&2
 fi
 
 # instance_get's cli exits 2 for an unknown key (no such environment) and 1

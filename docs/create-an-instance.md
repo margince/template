@@ -258,10 +258,27 @@ Each hook script runs with the following environment variables:
 make deploy ENV=staging VERSION=v1.2.3
 ```
 
-This runs `bash scripts/deploy.sh staging v1.2.3`: it validates `ENV` and
-`VERSION`, reads the adapter for `staging` from `instance.yaml`, and runs the
-steps above with hook scripts reading secrets already present in your shell
-environment.
+This runs `bash scripts/deploy.sh staging v1.2.3`. Before any hook runs, it
+does the following, in order:
+
+1. It requires `ENV` and `VERSION`. `VERSION` must be a full release tag that
+   matches `^v[0-9]+\.[0-9]+\.[0-9]+$` (for example `v1.2.3`).
+2. It validates `instance.yaml` (`cli validate`: every key, every adapter, and
+   every `deploy/<env>/` directory; not `core/`). An invalid file stops the
+   deployment with one line per problem.
+3. It refuses a working tree with uncommitted changes or untracked files
+   (`git status --porcelain` is not empty), because the hooks and
+   `deploy/<env>/` would then match no commit. `ALLOW_DIRTY=1` overrides
+   this.
+4. If `HEAD` is not the commit of the tag `VERSION` (or the tag does not
+   exist locally), it prints
+   `deploy: hooks and configuration come from <short sha>, not from release <VERSION>`
+   and continues. The hooks always come from the checkout, not from the
+   release. `deploy.yml` deploys from the tag itself.
+5. It reads the adapter for `staging` from `instance.yaml`.
+
+It then runs the steps above with hook scripts reading secrets already
+present in your shell environment.
 
 ### Running `deploy.yml`
 

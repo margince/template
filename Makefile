@@ -252,8 +252,8 @@ new-instance: ## Create a client instance repository from this template (NAME=, 
 		OWNER='$(subst ','\'',$(value OWNER))' \
 		bash scripts/new-instance.sh
 
-deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSION=)
-	@bash scripts/deploy.sh '$(subst ','\'',$(value ENV))' '$(subst ','\'',$(value VERSION))'
+deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSION=, ALLOW_DIRTY=1)
+	@ALLOW_DIRTY='$(subst ','\'',$(value ALLOW_DIRTY))' bash scripts/deploy.sh '$(subst ','\'',$(value ENV))' '$(subst ','\'',$(value VERSION))'
 
 check-instance: ## instance.yaml is valid and names the tag core/ is at
 	@cd scripts/cli && GOWORK=off go run . check -file $(CURDIR)/instance.yaml -core $(CURDIR)/$(CORE)
