@@ -4,6 +4,12 @@
 # instance's own units (none in the template).
 
 SHELL := /usr/bin/env bash
+
+# git's repository location variables never reach a recipe. git sets them when
+# it runs a hook, and inherited they make the script suites' throwaway
+# repositories act on this one (scripts/git-env.test.sh).
+unexport GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+	GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR
 .DEFAULT_GOAL := help
 
 CORE := core
@@ -355,6 +361,7 @@ fmt: ## Format extensions/ in place (gofmt -w, biome safe fixes)
 ## the one most likely to catch a staging regression.
 test-scripts: ## The staging scripts' own tests
 	@bash scripts/lib.test.sh
+	@bash scripts/git-env.test.sh
 	@bash scripts/new-unit.test.sh
 	@bash scripts/update-core.test.sh
 	@bash scripts/toolcheck.test.sh

@@ -17,6 +17,14 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
+# git sets GIT_DIR (and in a linked worktree also GIT_WORK_TREE and
+# GIT_INDEX_FILE) for a hook. Inherited, they make every nested `git` act on
+# THIS repository: the script suites' throwaway `git init` and `git -C <dir>`
+# commands would commit to the current branch and rewrite its config. The gates
+# find the repository from the working directory instead.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
 if ! make test-scripts; then
   echo >&2
   echo "pre-push: the staging lane's tests fail — push blocked." >&2
