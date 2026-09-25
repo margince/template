@@ -76,6 +76,8 @@ specification also defines the responsibility of each repository.
 | Template git history | The template starts with new git history. The history of `margince-automation-world` is not imported, because it contains the code of five client extensions, and every future client fork would inherit that code. The initial import commit records the source repository and commit of each copied file. |
 | `margince-release` | Archived. |
 | Constellation PR #421 | Closed. Dist releases are drafted and published with Constellation's release-management CLI. The PR #421 commands (`verdict`, `promote`, `notes`, `tag-sources`, `cleanup`) are reused in the template CLI only for functions that the release-management CLI does not provide: image promotion, release notes, and removal of candidate images. |
+| District 13 deployment of Margince Default | Owned by a new instance repository created from the template with `make new-instance` (issue D1). It is not placed in the template: `deploy/` is instance-owned, and a real environment in the template would be copied into every new instance. |
+| `margince-automation-world` | Adopts the template after M1 (issue I1): it merges the template with `--allow-unrelated-histories`, moves `zalo-lab` to `instance.mk`, and adds `instance.yaml` and `.template-version`. It is the most active instance; without migration its tooling diverges from the template. |
 | Deployment | Each client uses one deployment process. The template defines standard deployment steps. The instance provides configuration values and, where required, hook scripts. |
 
 ## 5. Repository Responsibilities
@@ -88,7 +90,7 @@ specification also defines the responsibility of each repository.
 | `margince-constellation` | Customer records; flavors; license issuance per flavor (trial and production); the release-management CLI and the release harness that instance CI runs; license-gated container registry and artifact downloads; `upgrade-cli`. | Instance composition or instance builds. |
 | `margince-demo-database` | Demo datasets. An instance references a dataset by name and version in `data/`. | — |
 | `margince-qc` | Acceptance tests against a specified build. Can target any instance. | — |
-| `margince-d13-deploy` | Deploys vanilla core (Margince Default) to District 13. Replaced by the `d13` adapter and the `deploy/` directory of an owning instance repository, then archived. The owning repository is open decision OD1 (Section 17). | — |
+| `margince-d13-deploy` | Deploys vanilla core (Margince Default) to District 13. Replaced by the `d13` adapter and the `deploy/` directory of a new instance repository created from the template (Section 4), then archived. | — |
 | `margince-release` | — | Archived. |
 
 ## 6. Template Structure and Path Ownership
@@ -577,15 +579,15 @@ together with the release lane.
 The template applies to **new instances only**.
 
 - `incap` and `afs` are not migrated. They keep their current structure.
-- `margince-automation-world` is the source of the template tooling. Whether it
-  is migrated is open decision OD2 (Section 17).
+- `margince-automation-world` is the source of the template tooling. It adopts
+  the template after M1 (Section 4, issue I1).
 - A new instance is created from the template with `scripts/new-instance.sh`
   (issue T11). The instance is a new repository with a `template` remote.
   Template changes are applied with `git merge template/main`.
 
 The `margince-d13-deploy` deployment moves to the `d13` adapter and the
-`deploy/` directory of its owning instance repository (open decision OD1,
-Section 17).
+`deploy/` directory of a new instance repository created from the template
+(Section 4, issue D1).
 
 ## 15. Sub-Projects
 
@@ -597,7 +599,7 @@ The work is delivered as separate implementation plans in the following order.
 | 2 | Template foundation | Copy the tooling from `margince-automation-world`; generalize the scripts in Section 7; add `instance.yaml`, `instance.mk`, the unit skeleton, the drift check, instance creation and synchronization, and the template CI. | template | Complete (T1–T6, T11, T10 part 1) |
 | 3 | Flavors, build, and release | Constellation flavors (management API, vendor namespace, dynamic catalog through the event outbox, licenses per flavor) and the release harness; the image, smoke test, publish, and verify jobs in `release.yml`; `make release`. | Constellation (K2, K4), template (T7) | Waiting for K2 and K4 |
 | 4 | Trial and licensing | Constellation trial license type and issuance endpoint per flavor; `make trial`. Starts after flavors exist. | Constellation (K1), template (T8) | Waiting for K1 |
-| 5 | Deployment | The four-step deployment interface and the `hook` adapter (T9); the `d13` adapter (D1). | template | T9 complete; D1 waits for OD1 |
+| 5 | Deployment | The four-step deployment interface and the `hook` adapter (T9); the `d13` adapter (D1). | template | T9 complete; D1 open |
 | 6 | Retirement | Archive `margince-release` (R1) and `margince-d13-deploy` (R2); close PR #421; update references (R3). | several | Waiting for T7 and D1 |
 
 ## 16. Rejected Alternatives
@@ -615,13 +617,8 @@ The work is delivered as separate implementation plans in the following order.
 
 ## 17. Open Decisions
 
-| ID | Decision | Options | Recommendation | Blocks |
-|---|---|---|---|---|
-| OD1 | Which instance repository owns the District 13 deployment of Margince Default, currently in `margince-d13-deploy`. | (a) A new instance repository created from the template with `make new-instance`. (b) `margince-template` itself. | (a). `deploy/` is instance-owned; a real environment in the template would be copied into every new instance. | D1, R2 |
-| OD2 | Whether `margince-automation-world` adopts the template (issue I1). | (a) Migrate after M1: merge the template with `--allow-unrelated-histories`, move `zalo-lab` to `instance.mk`, add `instance.yaml`. (b) Do not migrate; it keeps its own tooling. | (a). It is the most active instance, and its tooling diverges from the template with every change made in only one of the two repositories. | I1 |
-
-A decision is recorded by moving its row into Section 4 and updating the
-issues it blocks.
+None. A new decision is added here with its options and the issues it blocks,
+and is moved to Section 4 when it is made.
 
 ## 18. Implementation Status
 
@@ -637,5 +634,6 @@ The GitHub issues and their dependencies are listed in
 | Release (T7) | Waiting for Constellation K2 (flavors, image namespace, push identity) and K4 (release harness). T7 also changes `make deploy`, `deploy.yml`, and the lifecycle test from `vX.Y.Z` to the Constellation version pattern. |
 | Trial (T8) | Waiting for Constellation K1 (trial license per flavor). |
 | Guides (T12) | After T7 and T8. |
-| `d13` adapter (D1) | Waiting for OD1. |
+| `d13` adapter and its instance repository (D1) | Open. Can start now. |
 | Retirement (R1–R3) | After T7 and D1. |
+| `margince-automation-world` migration (I1) | After M1. |

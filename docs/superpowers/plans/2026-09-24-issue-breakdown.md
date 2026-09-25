@@ -58,8 +58,8 @@ dependencies.
 
 | ID | Repository | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|---|
-| D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. It currently deploys vanilla core; the owning instance repository is open decision OD1 (spec Section 17). | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging. | T9 |
-| I1 | margince-automation-world | Migrate (open decision OD2, spec Section 17) | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml`. | `make check` and `make check-template` pass. | M1 |
+| D1 | margince-template | `d13` adapter | Port `margince-d13-deploy` into `scripts/deploy/d13`. Create a new instance repository with `make new-instance` that owns the District 13 deployment of Margince Default (vanilla core) in its `deploy/`. | The adapter deploys `api`, `web`, `worker` as separate services to D13 staging from that instance repository. | T9 |
+| I1 | margince-automation-world | Migrate to the template | Merge the template (`--allow-unrelated-histories`). Move `zalo-lab` to `instance.mk`. Add `instance.yaml` and `.template-version`. | `make check` and `make check-template` pass. | M1 |
 | R1 | margince-release | Archive | Archive the repository. | Archived. | T7 |
 | R2 | margince-d13-deploy | Archive | Archive the repository. | Archived. | D1 |
 | R3 | margince-principles | Update references | Replace references to `margince-release` with `margince-template` and `margince-constellation`. | No reference to `margince-release` remains. | R1 |
@@ -74,7 +74,7 @@ T3 + K2 + K4 → T7
 T3 + K1      → T8
 T2 + T6      → T11
 all T        → T10 → T12  → M1
-M1 → I1 (if decided) ; D1 → R2 ; T7 → R1 → R3
+M1 → I1 ; D1 → R2 ; T7 → R1 → R3
 ```
 
 ## GitHub issues
