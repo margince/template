@@ -11,6 +11,12 @@
 #
 # Trial (T8) and release (T7) steps join `scripts/lifecycle.test.sh` when
 # those lanes exist; this workflow needs no change when they do.
+#
+# `.github/workflows/` is template-owned (.template-owned), so every instance
+# inherits this file unchanged and check-template rejects removing it. In an
+# instance, `make new-instance` always errors ("this is an instance"), so the
+# job must not run there. The job-level `if:` below skips it outright in that
+# case — a skipped job reports neutral, not failed.
 name: lifecycle
 
 on:
@@ -28,13 +34,12 @@ concurrency:
 
 jobs:
   lifecycle:
+    if: github.repository == 'gradionhq/margince-template'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # fetch-depth: 0, unlike ci.yml's checkout: the test creates a fresh
-      # instance with `make new-instance` and clones this checkout again as a
-      # scratch template remote, and both need a clean, unshallow history —
-      # a shallow clone has no full history to instantiate or merge from.
+      # fetch-depth: 0, unlike ci.yml's checkout: full history avoids
+      # shallow-repository edge cases when the test clones this checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

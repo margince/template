@@ -10,10 +10,37 @@
 # Slow (it composes and tests a unit), so it is not part of `make test-scripts`.
 # Needs the tools `make install` provides.
 #
+# Runs `make install` in the scratch instance, which installs core's gate
+# tools into `$(go env GOPATH)/bin` and fills the Go module cache and the
+# pnpm store — machine-wide caches, not scratch state. Only the scratch
+# directory itself is removed afterwards.
+#
 # Usage: bash scripts/lifecycle.test.sh   (or: make test-lifecycle; KEEP=1 keeps the scratch directory)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# This is an instance, not the template: `make new-instance` refuses to run
+# here ("this is an instance"), so the lifecycle it drives cannot either.
+# lifecycle.yml is template-owned (.template-owned) and every instance
+# inherits it unchanged, so this script skips itself instead of failing on
+# every instance's CI.
+if [ -e "$ROOT/.template-version" ]; then
+  echo "lifecycle: skipped — this is an instance; the lifecycle test runs in margince-template"
+  exit 0
+fi
+
+# git's repository location variables never reach this script when it is run
+# directly, bypassing the Makefile's `unexport` (Makefile:11); inherited, they
+# would make the scratch clones below act on this repository instead of
+# their own.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
+# The scratch commits below must not depend on the developer's own commit
+# signing config — a signing key that needs a passphrase, or is simply absent,
+# would hang or fail this test for a reason that has nothing to do with the
+# lifecycle.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
 
 export GIT_AUTHOR_NAME="Lifecycle Test" GIT_AUTHOR_EMAIL="lifecycle@example.test"
 export GIT_COMMITTER_NAME="Lifecycle Test" GIT_COMMITTER_EMAIL="lifecycle@example.test"
@@ -87,7 +114,7 @@ grep -qx 'rollback v0.1.1 verify' deploy/deploy.log || fail "rollback did not ru
 
 step "merge a template change"
 TPL="$WORK/template"
-git clone -q "$ROOT" "$TPL"
+git -c advice.detachedHead=false clone -q "$ROOT" "$TPL"
 # $ROOT's HEAD may not be a branch at all — CI checks out a detached PR merge
 # commit — in which case the clone has no local branch, and template-sync's
 # default TEMPLATE_BRANCH=main has nothing to fetch. Give the scratch clone a

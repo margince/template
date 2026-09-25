@@ -237,6 +237,18 @@ LIFECYCLE_WF="$WF/lifecycle.yml"
 if [ -e "$LIFECYCLE_WF" ]; then
   ok "lifecycle.yml exists"
 
+  # .github/workflows/ is template-owned, so every instance inherits this
+  # file unchanged and cannot remove it (check-template rejects that). An
+  # instance has no `make new-instance` to drive, so the job must not run
+  # there: it needs this guard, or every instance's CI would fail on every
+  # push and pull request.
+  job_block="$(block_of lifecycle "$LIFECYCLE_WF")"
+  if printf '%s\n' "$job_block" | grep -qE "^[[:space:]]*if:[[:space:]]*github\.repository == 'gradionhq/margince-template'[[:space:]]*\$"; then
+    ok "lifecycle.yml's job guards on github.repository == 'gradionhq/margince-template'"
+  else
+    fail "lifecycle.yml's job does not guard on github.repository == 'gradionhq/margince-template' — every instance inherits this template-owned file and would run the job too"
+  fi
+
   if grep -qE '^[[:space:]]*run:[[:space:]]*make test-lifecycle[[:space:]]*$' "$LIFECYCLE_WF"; then
     ok "lifecycle.yml runs make test-lifecycle"
   else
