@@ -165,8 +165,8 @@ data:
   dataset: margince-demo-database/acme@v1    # optional
 flavor: acme/margince            # Constellation flavor: license product and image namespace
 deploy:
-  staging:    { adapter: d13 }
-  production: { adapter: d13 }
+  staging:    { adapter: hook }
+  production: { adapter: hook }
 ```
 
 There is no `units` key. A directory under `extensions/` is an enabled unit,
@@ -184,8 +184,10 @@ it. Go is already a required tool, so this adds no dependency.
 - `core` is one of the tags that point at `core/` HEAD.
 - `flavor` has the form `<vendor>/margince`.
 - No unknown key is present.
-- Each environment under `deploy` has a matching `deploy/<env>/` directory
-  (added with the `deploy` key in T9).
+- Each environment under `deploy` matches `^[a-z0-9]+(-[a-z0-9]+)*$`, has an
+  `adapter` of `hook` (`d13` is refused, naming issue D1, until that adapter
+  exists), and has a matching `deploy/<env>/` directory (added with the
+  `deploy` key in T9).
 
 Sections are added to the schema by the issue that uses them: `data` (T8),
 `deploy` (T9). The template's own file is:
@@ -372,33 +374,77 @@ as a label, because multiple instance releases can use the same core version.
 
 ### 10.4 Deployment (Goal 5)
 
-`make deploy ENV=<env> VERSION=<v>` (or a manual run of `deploy.yml`) executes
-the following steps in order:
+`make deploy ENV=<env> VERSION=<v>` (`bash scripts/deploy.sh <env> <version>`,
+or a manual run of `deploy.yml`) runs:
 
 ```
-preflight → apply → verify → rollback (on failure only)
+preflight → apply → verify
 ```
+
+A failed `preflight` stops the deployment immediately: nothing has changed, so
+there is no rollback. A failed `apply` or `verify` runs `rollback`, and the
+deployment still fails (non-zero exit) whether or not the rollback succeeds.
+If the environment provides no `rollback` step, `make deploy` prints
+"no rollback hook" and exits non-zero without attempting one; the environment
+may be half-deployed.
+
+`deploy.sh` resolves the adapter for `<env>` from `instance.yaml`
+(`deploy.<env>.adapter`), exports the variables below, then asks the adapter
+`has <step>` before running that step — a step the adapter does not provide is
+skipped, never mistaken for a failure, because a provided step's exit code is
+never overridden. `apply` is the only required step; its absence is caught by
+the adapter's `check`, before any step runs.
+
+| Variable | Set for | Value |
+|---|---|---|
+| `DEPLOY_ENV` | every step | The environment name. |
+| `DEPLOY_VERSION` | every step | The release being deployed. |
+| `DEPLOY_STEP` | every step | The step's own name (`preflight`, `apply`, `verify`, `rollback`). |
+| `DEPLOY_DIR` | every step | Absolute path of `deploy/<env>/`. |
+| `INSTANCE_NAME` | every step | `name` from `instance.yaml`. |
+| `IMAGE_REPO` | every step | The image namespace (Section 6.2). |
+| `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER` | every step | `$IMAGE_REPO/<role>:$DEPLOY_VERSION`. |
+| `DEPLOY_FAILED_STEP` | `rollback` only | The step that failed (`apply` or `verify`). |
 
 `deploy/<env>/` contains the environment configuration: hostnames, replica
 count per component, and the names of required secrets, such as the production
 license (`MARGINCE_LICENSE`) and the database URL. It does not contain secret
-values.
+values; hooks receive secrets from the environment.
 
-`instance.yaml` specifies an **adapter** for each environment. An adapter
-implements the four steps. The template provides two adapters in
-`scripts/deploy/`:
+`instance.yaml` specifies an **adapter** for each environment. This plan
+implements one adapter, in `scripts/deploy/`:
 
-- `d13`: deploys to District 13 (Gradion's Kubernetes platform). Based on
-  `margince-d13-deploy`. Uses `.d13.<env>.yaml` and ingress definitions, with
-  one service per component.
-- `hook`: runs the instance scripts
-  `deploy/<env>/hooks/{preflight,apply,verify,rollback}.sh`.
+- `hook`: runs the instance's own scripts,
+  `deploy/<env>/hooks/{preflight,apply,verify,rollback}.sh`, called with
+  `bash` so a missing executable bit does not matter. `apply.sh` is required;
+  the other three steps are optional.
 
-A new adapter is added to the template only when at least two clients require
-the same deployment target. Until then, clients use the `hook` adapter.
+`d13` (deploy to District 13, Gradion's Kubernetes platform, based on
+`margince-d13-deploy`) is issue D1 and is not implemented yet;
+`instance.yaml` refuses `adapter: d13` with a message naming D1. A new
+adapter is added to the template only when at least two clients require the
+same deployment target. Until then, clients use the `hook` adapter.
 
 All adapters deploy `api`, `web`, and `worker` as separate services so that each
 can be scaled independently.
+
+`.github/workflows/deploy.yml` runs `make deploy` by hand
+(`workflow_dispatch`, with `environment` and `version` inputs), in the GitHub
+Environment named by `environment`, so protection rules and secrets are
+configured per environment. That environment must be created ahead of time in
+repository settings, with whatever protection rules and secrets it needs; the
+workflow does not create one. The workflow validates `environment` against
+`^[a-z0-9]+(-[a-z0-9]+)*$` before any other step, so a malformed or unknown
+name is rejected before any secret is exported or any hook runs. Every secret
+of the resolved environment is then exported to the job as an environment
+variable of the same name (one `printf` heredoc per secret, so a multi-line
+value stays intact), except a name that is not an ordinary, safe variable:
+not an uppercase identifier, or one that could shadow `PATH`, `HOME`,
+`SHELL`, `IFS`, a shell-startup hook (`ENV`, `BASH_ENV`), a dynamic-linker
+variable (`LD_*`, `DYLD_*`), `NODE_OPTIONS`, or the runner's or git's own
+plumbing (`GITHUB_*`, `RUNNER_*`, `ACTIONS_*`, `GIT_*`). Checkout runs with
+`persist-credentials: false`, so no push credential for the repository is left
+on disk for a hook to find.
 
 ### 10.5 Licensing by Stage
 

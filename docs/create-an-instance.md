@@ -173,3 +173,114 @@ Each image carries the instance's name and git revision, core's git
 revision and release tag (`com.margince.core.version`, from `core:` in
 `instance.yaml`), and the staged unit set as OCI labels (`docker inspect <repo>/api:<version> --format
 '{{json .Config.Labels}}'`).
+
+## 9. Deploy
+
+Add an environment under `deploy:` in `instance.yaml`:
+
+```yaml
+deploy:
+  staging:
+    adapter: hook
+```
+
+The environment name must match `^[a-z0-9]+(-[a-z0-9]+)*$`. The only adapter
+available today is `hook`; `adapter: d13` is refused with a message naming
+issue D1 until that adapter exists. `make check-instance` fails if an
+environment has no matching `deploy/<env>/` directory.
+
+### Hook layout
+
+The `hook` adapter runs the instance's own scripts, under
+`deploy/<env>/hooks/`:
+
+```
+deploy/staging/
+└── hooks/
+    ├── apply.sh       required
+    ├── preflight.sh   optional
+    ├── verify.sh      optional
+    └── rollback.sh    optional
+```
+
+Each script runs under `bash`, so it does not need the executable bit.
+`apply.sh` is required — `make deploy` refuses to run if it is missing. The
+other three are optional: a step with no script is reported as skipped, not
+as failed.
+
+Example `apply.sh`:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+echo "deploying $IMAGE_API"
+echo "deploying $IMAGE_WEB"
+echo "deploying $IMAGE_WORKER"
+# ... pull and run the images on the target host
+```
+
+`deploy/<env>/` holds configuration values only — hostnames, replica counts,
+the names of required secrets — never secret values. Hooks read secret
+values from the environment (see the variable table below, and "Running
+`deploy.yml`" for where those values come from in CI).
+
+### Step order and failure rules
+
+```
+preflight → apply → verify
+```
+
+A failed `preflight` stops the deployment immediately: nothing has changed,
+so there is no rollback. A failed `apply` or `verify` runs `rollback.sh`, and
+the deployment still fails (non-zero exit) whether or not the rollback
+succeeds. If the environment has no `rollback.sh`, `make deploy` prints
+`no rollback hook` and exits non-zero without attempting one — the
+environment may be half-deployed.
+
+### Variables
+
+Each hook script runs with the following environment variables:
+
+| Variable | Set for | Value |
+|---|---|---|
+| `DEPLOY_ENV` | every step | The environment name (`ENV=`). |
+| `DEPLOY_VERSION` | every step | The release being deployed (`VERSION=`). |
+| `DEPLOY_STEP` | every step | The step's own name (`preflight`, `apply`, `verify`, `rollback`). |
+| `DEPLOY_DIR` | every step | Absolute path of `deploy/<env>/`. |
+| `INSTANCE_NAME` | every step | `name` from `instance.yaml`. |
+| `IMAGE_REPO` | every step | The image namespace (Section 8). |
+| `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER` | every step | `$IMAGE_REPO/api:$DEPLOY_VERSION`, `/web`, `/worker`. |
+| `DEPLOY_FAILED_STEP` | `rollback` only | The step that failed (`apply` or `verify`). |
+
+### Running locally
+
+```sh
+make deploy ENV=staging VERSION=v1.2.3
+```
+
+This runs `bash scripts/deploy.sh staging v1.2.3`: it validates `ENV` and
+`VERSION`, reads the adapter for `staging` from `instance.yaml`, and runs the
+steps above with hook scripts reading secrets already present in your shell
+environment.
+
+### Running `deploy.yml`
+
+`.github/workflows/deploy.yml` is a manually triggered workflow
+(`workflow_dispatch`, with `environment` and `version` inputs) that runs
+`make deploy` in the GitHub Environment named by `environment`. Create that
+environment ahead of time (repository Settings → Environments), with
+whatever protection rules and secrets it needs — the workflow does not
+create one.
+
+The workflow validates `environment` against `^[a-z0-9]+(-[a-z0-9]+)*$`
+before doing anything else, so a malformed or unknown name is rejected
+before any secret is exported or any hook runs. Every secret of the resolved
+environment is then exported to the job as an environment variable of the
+same name, so hooks can read it with `$NAME`; secret values never live in
+the repository or in `deploy/<env>/`. A secret name that is not an ordinary,
+safe variable — not an uppercase identifier, or one that could shadow
+`PATH`, a shell-startup variable, a dynamic-linker variable, or the
+runner's or git's own plumbing (`GITHUB_*`, `RUNNER_*`, `ACTIONS_*`,
+`GIT_*`) — is skipped and reported instead of exported. Checkout runs with
+`persist-credentials: false`, so no push credential for the repository is
+left on disk for a hook to find.
