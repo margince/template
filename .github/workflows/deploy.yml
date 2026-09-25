@@ -5,6 +5,15 @@
 # and secrets are configured per environment. Every secret of that environment
 # is exported to the job so the hooks can read it; secret values never live in
 # the repository.
+#
+# Environments must be created ahead of time in repository settings, with
+# whatever protection rules and secrets that environment needs — this
+# workflow does not create one. The job's `environment:` key below is
+# resolved by GitHub before any step runs, so an unknown or malformed name in
+# the input still resolves (or auto-creates) an environment before the
+# "Environment name is valid" step below gets a chance to object. That step
+# stops the job before any secret is exported and before any hook runs; it
+# does not undo an environment GitHub already resolved for this run.
 name: deploy
 
 on:
@@ -31,9 +40,19 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
+      - name: Environment name is valid
+        env:
+          DEPLOY_TARGET: ${{ inputs.environment }}
+        run: |
+          if ! printf '%s' "$DEPLOY_TARGET" | grep -qE '^[a-z0-9]+(-[a-z0-9]+)*$'; then
+            echo "::error::environment '$DEPLOY_TARGET' does not match ^[a-z0-9]+(-[a-z0-9]+)*\$" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: scripts/cli/go.mod
@@ -43,12 +62,41 @@ jobs:
           SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
           # One heredoc block per secret, so a multi-line value stays intact.
-          echo "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key != "github_token") | .key' |
+          #
+          # Only a name that looks like an ordinary, safe environment variable
+          # is exported: an uppercase identifier, and never one that could
+          # shadow a variable the runner, git, or a later step relies on --
+          # PATH, a shell-startup hook (ENV, BASH_ENV, IFS), a
+          # dynamic linker variable (LD_*, DYLD_*), a Node option-injection
+          # vector (NODE_OPTIONS), or the runner's/git's own plumbing
+          # (GITHUB_*, RUNNER_*, ACTIONS_*, GIT_*). github_token is already
+          # excluded above (and is lower-case, so the pattern below would
+          # reject it anyway).
+          deny_exact='PATH HOME SHELL IFS ENV BASH_ENV NODE_OPTIONS'
+          deny_prefix='LD_ DYLD_ GITHUB_ RUNNER_ ACTIONS_ GIT_'
+          printf '%s' "$SECRETS_JSON" | jq -r 'to_entries[] | select(.key != "github_token") | .key' |
           while IFS= read -r name; do
+            skip=
+            if ! printf '%s' "$name" | grep -qE '^[A-Z_][A-Z0-9_]*$'; then
+              skip=1
+            else
+              for d in $deny_exact; do
+                [ "$name" = "$d" ] && skip=1
+              done
+              for p in $deny_prefix; do
+                case "$name" in
+                  "$p"*) skip=1 ;;
+                esac
+              done
+            fi
+            if [ -n "$skip" ]; then
+              printf 'deploy: secret %s not exported (reserved or invalid name)\n' "$name"
+              continue
+            fi
             delim="EOF_$(openssl rand -hex 16)"
             {
               printf '%s<<%s\n' "$name" "$delim"
-              echo "$SECRETS_JSON" | jq -r --arg k "$name" '.[$k]'
+              printf '%s' "$SECRETS_JSON" | jq -r --arg k "$name" '.[$k]'
               printf '%s\n' "$delim"
             } >> "$GITHUB_ENV"
           done

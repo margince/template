@@ -111,6 +111,33 @@ if [ -e "$DEPLOY_WF" ]; then
     fail "deploy.yml does not run make deploy"
   fi
 
+  # The `environment:` job key is resolved by GitHub before any step runs, so
+  # a bad name still resolves an environment before this can object -- but it
+  # still has to stop the job, before checkout finishes or any secret is
+  # exported, on a name workflow_dispatch let through free-form.
+  if grep -qF '^[a-z0-9]+(-[a-z0-9]+)*$' "$DEPLOY_WF"; then
+    ok "deploy.yml validates the environment name"
+  else
+    fail "deploy.yml does not validate inputs.environment against ^[a-z0-9]+(-[a-z0-9]+)*\$"
+  fi
+
+  # A secret named PATH, GIT_*, GITHUB_*, BASH_ENV and the like would shadow a
+  # variable the runner, git or a later step relies on. BASH_ENV stands in for
+  # the whole deny list here: a shell-startup hook is the sharpest of them,
+  # since a secret by that name would run as code the moment any later step's
+  # shell starts, not merely read as data.
+  if grep -qF 'BASH_ENV' "$DEPLOY_WF"; then
+    ok "deploy.yml filters secret names against a deny list"
+  else
+    fail "deploy.yml does not filter secret names before exporting them (BASH_ENV not found in a deny list)"
+  fi
+
+  if grep -qE '^[[:space:]]*persist-credentials:[[:space:]]*false[[:space:]]*$' "$DEPLOY_WF"; then
+    ok "deploy.yml's checkout does not persist a credential past the job"
+  else
+    fail "deploy.yml's checkout does not set persist-credentials: false"
+  fi
+
   # Every line that belongs to a `run:` step, single-line or the body of a
   # `run: |` block, collected the same way block_of collects a top-level key's
   # body: from the `run:` line until indentation returns to its own level or
