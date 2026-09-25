@@ -433,18 +433,29 @@ can be scaled independently.
 Environment named by `environment`, so protection rules and secrets are
 configured per environment. That environment must be created ahead of time in
 repository settings, with whatever protection rules and secrets it needs; the
-workflow does not create one. The workflow validates `environment` against
-`^[a-z0-9]+(-[a-z0-9]+)*$` before any other step, so a malformed or unknown
-name is rejected before any secret is exported or any hook runs. Every secret
-of the resolved environment is then exported to the job as an environment
-variable of the same name (one `printf` heredoc per secret, so a multi-line
-value stays intact), except a name that is not an ordinary, safe variable:
-not an uppercase identifier, or one that could shadow `PATH`, `HOME`,
-`SHELL`, `IFS`, a shell-startup hook (`ENV`, `BASH_ENV`), a dynamic-linker
-variable (`LD_*`, `DYLD_*`), `NODE_OPTIONS`, or the runner's or git's own
-plumbing (`GITHUB_*`, `RUNNER_*`, `ACTIONS_*`, `GIT_*`). Checkout runs with
-`persist-credentials: false`, so no push credential for the repository is left
-on disk for a hook to find.
+workflow does not create one.
+
+GitHub resolves the job's `environment:` — and, for a name it does not
+recognize, may auto-create one — before any step runs, including before the
+workflow's own "Environment name is valid" step. That step still stops the
+job before any secret is exported or any hook runs, but it cannot undo an
+environment GitHub already resolved or auto-created for that run. Every
+environment a deployment might target must therefore be created ahead of
+time with its own protection rules; an environment reached only through
+auto-creation has none.
+
+The workflow validates `environment` against `^[a-z0-9]+(-[a-z0-9]+)*$`
+before any other step, so a malformed or unknown name stops the job before
+any secret is exported or any hook runs. Every secret of the resolved
+environment is then exported to the job as an environment variable of the
+same name (one `printf` heredoc per secret, so a multi-line value stays
+intact), except a name that does not match `^[A-Z_][A-Z0-9_]*$`, or that
+does match but is one of the excluded exact names `PATH`, `HOME`, `SHELL`,
+`IFS`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, or carries one of the excluded
+prefixes `LD_`, `DYLD_`, `GITHUB_`, `RUNNER_`, `ACTIONS_`, `GIT_`.
+`github_token` is never exported. A skipped secret's name is printed to the
+log; its value never is. Checkout runs with `persist-credentials: false`, so
+no push credential for the repository is left on disk for a hook to find.
 
 ### 10.5 Licensing by Stage
 

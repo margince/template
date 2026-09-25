@@ -272,15 +272,30 @@ environment ahead of time (repository Settings → Environments), with
 whatever protection rules and secrets it needs — the workflow does not
 create one.
 
+GitHub resolves the job's `environment:` (and, for a name it does not
+recognize, may auto-create one) before any step runs — including before the
+workflow's own "Environment name is valid" step. That step still stops the
+job before any secret is exported or any hook runs, but it cannot undo an
+environment GitHub already resolved or created for that run. This is why
+every environment a deployment might target must be created ahead of time,
+with its own protection rules: an environment that does not yet exist gets
+no protection rules by being auto-created this way.
+
 The workflow validates `environment` against `^[a-z0-9]+(-[a-z0-9]+)*$`
-before doing anything else, so a malformed or unknown name is rejected
-before any secret is exported or any hook runs. Every secret of the resolved
-environment is then exported to the job as an environment variable of the
-same name, so hooks can read it with `$NAME`; secret values never live in
-the repository or in `deploy/<env>/`. A secret name that is not an ordinary,
-safe variable — not an uppercase identifier, or one that could shadow
-`PATH`, a shell-startup variable, a dynamic-linker variable, or the
-runner's or git's own plumbing (`GITHUB_*`, `RUNNER_*`, `ACTIONS_*`,
-`GIT_*`) — is skipped and reported instead of exported. Checkout runs with
+before doing anything else, so a malformed or unknown name stops the job
+before any secret is exported or any hook runs. Every secret of the
+resolved environment is then exported to the job as an environment variable
+of the same name, so hooks can read it with `$NAME`; secret values never
+live in the repository or in `deploy/<env>/`. A secret's name is exported
+only if it matches `^[A-Z_][A-Z0-9_]*$` and is none of the following:
+
+- the exact names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`,
+  `NODE_OPTIONS`
+- a name with one of the prefixes `LD_`, `DYLD_`, `GITHUB_`, `RUNNER_`,
+  `ACTIONS_`, `GIT_`
+
+`github_token` is never exported (it is excluded before this filter runs,
+and is lower-case, so the pattern above would reject it anyway). A skipped
+secret's name is printed to the log; its value never is. Checkout runs with
 `persist-credentials: false`, so no push credential for the repository is
 left on disk for a hook to find.
