@@ -169,6 +169,9 @@ prefixed with `REGISTRY` when it is set:
   `myregistry.example.com/<vendor>/margince/api`, `/web`, `/worker`.
 
 `REGISTRY` is supplied at build time; it is not stored in `instance.yaml`.
+`make deploy` reads `REGISTRY` from the environment the same way to name the
+images it deploys; in `deploy.yml` it can be a GitHub Environment variable
+(Section 9).
 Each image carries the instance's name and git revision, core's git
 revision and release tag (`com.margince.core.version`, from `core:` in
 `instance.yaml`), and the staged unit set as OCI labels (`docker inspect <repo>/api:<version> --format
@@ -283,36 +286,70 @@ present in your shell environment.
 ### Running `deploy.yml`
 
 `.github/workflows/deploy.yml` is a manually triggered workflow
-(`workflow_dispatch`, with `environment` and `version` inputs) that runs
-`make deploy` in the GitHub Environment named by `environment`. Create that
-environment ahead of time (repository Settings → Environments), with
-whatever protection rules and secrets it needs — the workflow does not
-create one.
+(`workflow_dispatch`, with one `environment` input) that runs `make deploy`
+in the GitHub Environment named by `environment`. Dispatch it **from the
+release tag**: Actions → deploy → Run workflow → "Use workflow from" →
+Tags → `v1.2.3`. The release is the tag the run was dispatched from
+(`github.ref_name`), and the job checks out that tag, so the hooks and
+`deploy/<env>/` that run are the ones in the release. A run dispatched from a
+branch, or from a tag that does not match `^v[0-9]+\.[0-9]+\.[0-9]+$`, fails
+in its first step.
 
-GitHub resolves the job's `environment:` (and, for a name it does not
-recognize, may auto-create one) before any step runs — including before the
-workflow's own "Environment name is valid" step. That step still stops the
-job before any secret is exported or any hook runs, but it cannot undo an
-environment GitHub already resolved or created for that run. This is why
-every environment a deployment might target must be created ahead of time,
-with its own protection rules: an environment that does not yet exist gets
-no protection rules by being auto-created this way.
+Create each environment ahead of time (repository Settings →
+Environments); the workflow does not create one. Configure each environment
+as follows:
 
-The workflow validates `environment` against `^[a-z0-9]+(-[a-z0-9]+)*$`
-before doing anything else, so a malformed or unknown name stops the job
-before any secret is exported or any hook runs. Every secret of the
-resolved environment is then exported to the job as an environment variable
-of the same name, so hooks can read it with `$NAME`; secret values never
-live in the repository or in `deploy/<env>/`. A secret's name is exported
-only if it matches `^[A-Z_][A-Z0-9_]*$` and is none of the following:
+| Setting | Value |
+|---|---|
+| Deployment branches and tags | Selected branches and tags, with the tag rule `v*`. |
+| Required reviewers | Required for `production`. |
+| Secrets and variables | The values this environment's hooks read. |
+
+The job steps run in this order:
+
+1. **Dispatched from a release tag.** Fails unless `github.ref_type` is `tag`
+   and `github.ref_name` matches `^v[0-9]+\.[0-9]+\.[0-9]+$`.
+2. **Environment name is valid.** Fails unless `environment` matches
+   `^[a-z0-9]+(-[a-z0-9]+)*$` (the whole value, so an embedded newline
+   fails).
+3. Checkout of the tag, and Go setup.
+4. **Environment is in instance.yaml.** Fails unless `environment` is under
+   `deploy:` in the `instance.yaml` of the tag.
+5. **Export.** The environment's variables, then its secrets, are exported
+   as environment variables of the same name.
+6. **Deploy.** `make deploy ENV=<environment> VERSION=<tag>`.
+
+A malformed name therefore stops the job before checkout. A well-formed name
+that is not under `deploy:` in `instance.yaml` stops it before any secret or
+variable is exported. GitHub resolves the job's `environment:` before any
+step runs, and for a name it does not recognize it may auto-create one, so
+in both cases GitHub may still have resolved or created that environment
+for the run. An environment that exists only through auto-creation has no
+protection rules. This is why every environment a deployment might target
+must be created ahead of time, with its own rules.
+
+The `secrets` and `vars` contexts contain the environment's secrets and
+variables **and** the repository's and the organization's. All of them pass
+through the export filter below. Keep deploy secrets at environment level
+only, so one environment cannot read another environment's secrets. If a
+variable and a secret have the same name, the secret wins. Secret values
+never live in the repository or in `deploy/<env>/`. Variables are not
+secret, but their values are not printed either. `REGISTRY` (Section 8) can
+be set as an environment variable, so `IMAGE_API`, `IMAGE_WEB`, and
+`IMAGE_WORKER` name the registry of that environment.
+
+A name is exported only if it matches `^[A-Z_][A-Z0-9_]*$` and is none of the
+following:
 
 - the exact names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`,
-  `NODE_OPTIONS`
+  `NODE_OPTIONS`, `CDPATH`, `PROMPT_COMMAND`, `TMPDIR`
 - a name with one of the prefixes `LD_`, `DYLD_`, `GITHUB_`, `RUNNER_`,
-  `ACTIONS_`, `GIT_`
+  `ACTIONS_`, `GIT_`, `MAKE`, `GO`
 
-`github_token` is never exported (it is excluded before this filter runs,
-and is lower-case, so the pattern above would reject it anyway). A skipped
-secret's name is printed to the log; its value never is. Checkout runs with
+The `GO` prefix also excludes names such as `GOOGLE_CREDENTIALS`, and the
+`MAKE` prefix names such as `MAKER_TOKEN`: give such a value a different
+name. `github_token` is never exported (it is excluded by name, and is
+lower-case, so the pattern above would reject it anyway). A skipped name is
+printed to the log; its value never is. Checkout runs with
 `persist-credentials: false`, so no push credential for the repository is
 left on disk for a hook to find.
