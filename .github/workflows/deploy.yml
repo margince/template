@@ -103,15 +103,21 @@ jobs:
           # step relies on -- PATH, a shell-startup or shell-behaviour hook
           # (ENV, BASH_ENV, IFS, CDPATH, PROMPT_COMMAND), TMPDIR, a dynamic
           # linker variable (LD_*, DYLD_*), a Node option-injection vector
-          # (NODE_OPTIONS), make's and Go's own settings (MAKE*, GO*), or the
-          # runner's/git's own plumbing (GITHUB_*, RUNNER_*, ACTIONS_*, GIT_*).
+          # (NODE_OPTIONS), make's and Go's own settings, or the runner's/git's
+          # own plumbing (GITHUB_*, RUNNER_*, ACTIONS_*, GIT_*). Go's and
+          # make's variables contain no underscore (GOFLAGS, GOPROXY,
+          # GOTOOLCHAIN, MAKEFLAGS, MAKEFILES, MAKELEVEL), so they are denied
+          # by that exact shape, plus make's MFLAGS, MAKE_TERMOUT and
+          # MAKE_TERMERR by name; GOOGLE_APPLICATION_CREDENTIALS or
+          # MAKER_TOKEN is exported.
           # github_token is excluded by name (and is lower-case, so the
           # pattern below would reject it anyway). Variables are exported
           # first, so a secret of the same name wins. No value is printed.
-          deny_exact='PATH HOME SHELL IFS ENV BASH_ENV NODE_OPTIONS CDPATH PROMPT_COMMAND TMPDIR'
-          deny_prefix='LD_ DYLD_ GITHUB_ RUNNER_ ACTIONS_ GIT_ MAKE GO'
+          deny_exact='PATH HOME SHELL IFS ENV BASH_ENV NODE_OPTIONS CDPATH PROMPT_COMMAND TMPDIR MFLAGS MAKE_TERMOUT MAKE_TERMERR'
+          deny_prefix='LD_ DYLD_ GITHUB_ RUNNER_ ACTIONS_ GIT_'
+          deny_shape='^GO[A-Z0-9]*$ ^MAKE[A-Z0-9]*$'
           export_json() {
-            local kind="$1" json="$2" name skip d p delim
+            local kind="$1" json="$2" name skip d p re delim
             printf '%s' "$json" | jq -r 'to_entries[] | select(.key != "github_token") | .key' |
             while IFS= read -r name; do
               skip=
@@ -125,6 +131,9 @@ jobs:
                   case "$name" in
                     "$p"*) skip=1 ;;
                   esac
+                done
+                for re in $deny_shape; do
+                  [[ "$name" =~ $re ]] && skip=1
                 done
               fi
               if [ -n "$skip" ]; then

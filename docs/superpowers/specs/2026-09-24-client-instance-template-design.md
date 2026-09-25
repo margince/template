@@ -478,8 +478,11 @@ heredoc per value, so a multi-line value stays intact; a secret wins over a
 variable of the same name) except a name that does not match
 `^[A-Z_][A-Z0-9_]*$`, or that does match but is one of the excluded exact
 names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
-`CDPATH`, `PROMPT_COMMAND`, `TMPDIR`, or carries one of the excluded prefixes
-`LD_`, `DYLD_`, `GITHUB_`, `RUNNER_`, `ACTIONS_`, `GIT_`, `MAKE`, `GO`.
+`CDPATH`, `PROMPT_COMMAND`, `TMPDIR`, `MFLAGS`, `MAKE_TERMOUT`,
+`MAKE_TERMERR`, or carries one of the excluded prefixes `LD_`, `DYLD_`,
+`GITHUB_`, `RUNNER_`, `ACTIONS_`, `GIT_`, or matches `^GO[A-Z0-9]*$` or
+`^MAKE[A-Z0-9]*$` (Go's and make's own variables contain no underscore, so
+`GOOGLE_APPLICATION_CREDENTIALS` and `MAKER_TOKEN` are exported).
 `github_token` is never exported. A skipped name is printed to the log; no
 value is printed. `REGISTRY` can be an environment variable. Checkout runs
 with `persist-credentials: false`, so no push credential for the repository

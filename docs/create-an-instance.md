@@ -347,13 +347,16 @@ A name is exported only if it matches `^[A-Z_][A-Z0-9_]*$` and is none of the
 following:
 
 - the exact names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`,
-  `NODE_OPTIONS`, `CDPATH`, `PROMPT_COMMAND`, `TMPDIR`
+  `NODE_OPTIONS`, `CDPATH`, `PROMPT_COMMAND`, `TMPDIR`, `MFLAGS`,
+  `MAKE_TERMOUT`, `MAKE_TERMERR`
 - a name with one of the prefixes `LD_`, `DYLD_`, `GITHUB_`, `RUNNER_`,
-  `ACTIONS_`, `GIT_`, `MAKE`, `GO`
+  `ACTIONS_`, `GIT_`
+- a name that matches `^GO[A-Z0-9]*$` or `^MAKE[A-Z0-9]*$` (Go's and make's
+  own variables, such as `GOFLAGS`, `GOPROXY`, `MAKEFLAGS`, `MAKEFILES`)
 
-The `GO` prefix also excludes names such as `GOOGLE_CREDENTIALS`, and the
-`MAKE` prefix names such as `MAKER_TOKEN`: give such a value a different
-name. `github_token` is never exported (it is excluded by name, and is
+These two patterns contain no underscore, so names such as
+`GOOGLE_APPLICATION_CREDENTIALS` and `MAKER_TOKEN` are exported.
+`github_token` is never exported (it is excluded by name, and is
 lower-case, so the pattern above would reject it anyway). A skipped name is
 printed to the log; its value never is. Checkout runs with
 `persist-credentials: false`, so no push credential for the repository is

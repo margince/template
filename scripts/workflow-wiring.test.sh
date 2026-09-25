@@ -176,11 +176,15 @@ if [ -e "$DEPLOY_WF" ]; then
   # the whole deny list here: a shell-startup hook is the sharpest of them,
   # since a secret by that name would run as code the moment any later step's
   # shell starts, not merely read as data.
-  if grep -qF "deny_exact='PATH HOME SHELL IFS ENV BASH_ENV NODE_OPTIONS CDPATH PROMPT_COMMAND TMPDIR'" "$DEPLOY_WF" \
-     && grep -qF "deny_prefix='LD_ DYLD_ GITHUB_ RUNNER_ ACTIONS_ GIT_ MAKE GO'" "$DEPLOY_WF"; then
+  # Go's and make's variables are denied by shape (no underscore), not by a
+  # GO/MAKE prefix, which also swallowed GOOGLE_* and MAKER_* names.
+  if grep -qF "deny_exact='PATH HOME SHELL IFS ENV BASH_ENV NODE_OPTIONS CDPATH PROMPT_COMMAND TMPDIR MFLAGS MAKE_TERMOUT MAKE_TERMERR'" "$DEPLOY_WF" \
+     && grep -qF "deny_prefix='LD_ DYLD_ GITHUB_ RUNNER_ ACTIONS_ GIT_'" "$DEPLOY_WF" \
+     && grep -qF "deny_shape='^GO[A-Z0-9]*\$ ^MAKE[A-Z0-9]*\$'" "$DEPLOY_WF" \
+     && grep -qF '[[ "$name" =~ $re ]] && skip=1' "$DEPLOY_WF"; then
     ok "deploy.yml filters exported names against the documented deny list"
   else
-    fail "deploy.yml's deny list is not exactly the documented one (exact: ... BASH_ENV ... TMPDIR; prefixes: ... GIT_ MAKE GO)"
+    fail "deploy.yml's deny list is not exactly the documented one (exact: ... TMPDIR MFLAGS MAKE_TERMOUT MAKE_TERMERR; prefixes: ... GIT_; shapes: ^GO[A-Z0-9]*\$ ^MAKE[A-Z0-9]*\$)"
   fi
 
   if grep -qE 'VARS_JSON:[[:space:]]*\$\{\{[[:space:]]*toJSON\(vars\)[[:space:]]*\}\}' "$DEPLOY_WF" \
