@@ -303,7 +303,7 @@ against the template itself to verify the template.
 | `make desktop VERSION=<v>` | Builds the desktop bundle with the instance units. | Existing, changed |
 | `make trial` | Runs `make desktop` and adds configuration, dataset, and a trial license. See Section 10.2. | New |
 | `make update-core REF=<tag>` | Moves the core submodule to a release tag and records the tag in `instance.yaml`. | Existing, changed |
-| `make release VERSION=<v>` | Verifies the working tree and `make check`, then pushes the tag `v<v>`. | New |
+| `make release VERSION=<v>` | Verifies the working tree and `make check`, then pushes the tag `<v>` (the full tag, for example `v1.2.3`). | New |
 | `make deploy ENV=<env> VERSION=<v>` | Deploys the specified images to the environment defined in `deploy/<env>/`. | New |
 | `make template-sync` | Merges the template's `main` into the instance and records the merged commit in `.template-version`. | Existing |
 | `make check-template` | Drift check: template-owned paths match `.template-version`, and `instance.mk` only adds targets. | Existing |
@@ -352,8 +352,11 @@ defined in sub-project 4.
 
 ### 10.3 Build and Release (Goal 5)
 
-`make release VERSION=<v>` verifies that the working tree is clean and that
-`make check` passes, then pushes the tag `v<v>`.
+`VERSION` is always the full release tag, including the `v`, everywhere it
+is used (`make release`, `make package`, `make deploy`, image tags). For
+example, `make release VERSION=v1.2.3` verifies that the working tree is clean
+and that `make check` passes, then creates and pushes the tag `v1.2.3`; the
+images of that release are tagged `v1.2.3`.
 
 The existing `release.yml` runs on `v*` tags. It runs `full-check.yml` and
 builds the macOS and Windows desktop bundles. The template adds the following
@@ -364,7 +367,7 @@ jobs:
    the candidate tag `cand-<commit>`, for multiple architectures. Each image has an OCI label with the core version.
 2. **Smoke test:** starts the three images with a temporary PostgreSQL and
    Redis instance and verifies that they start and respond.
-3. **Publish:** adds the tag `<v>` to the images in the Constellation registry
+3. **Publish:** adds the tag `<v>` (for example `v1.2.3`) to the images in the Constellation registry
    using the publisher identity, records the release for the flavor in the dist
    service, and generates release notes with the `notes` command. The release
    notes list the core version, the instance commit, and the image digests.
@@ -504,7 +507,7 @@ configuration therefore does not define `license.token`.
 |---|---|---|
 | Core release | git tag `v0.0.x` (for example `v0.0.2`) | What instances pin. `make update-core` accepts release tags only. The version stamped into the release images by `docker-bake.hcl` equals the tag. |
 | Core build | `1970.N` (Constellation `YYYY.edition` format) | Hourly mainline builds of core `main` in Constellation, published to testing only. Not pinned by instances. |
-| Instance release | git tag `v<major>.<minor>.<patch>` in the instance repository | Image tags of the instance. The core release it is built on is recorded as an OCI label and in the dist service. |
+| Instance release | git tag `v<major>.<minor>.<patch>` in the instance repository | Image tags of the instance: the image tag is the full git tag (`v1.2.3`), and `VERSION=` always takes that full tag. The core release it is built on is recorded as an OCI label and in the dist service. |
 | Template | template commit in `.template-version`; template release tags | The template version an instance last merged. |
 
 Current state: core has release tags `v0.0.1` and `v0.0.2`, and `docker-bake.hcl`
