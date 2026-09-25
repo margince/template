@@ -31,8 +31,30 @@ source_units() {
 # Read through the template CLI so there is one parser. GOWORK=off because the
 # editor go.work at the repository root does not list scripts/cli.
 # INSTANCE_FILE overrides the file, for tests.
+#
+# `go run` never propagates the program's own exit code: it always exits 1
+# itself and appends a diagnostic line "exit status N" after the program's own
+# stderr. A caller that needs to tell "no such key" (the cli's exit 2) from
+# "the file could not be read" (its exit 1) would otherwise always see 1. Undo
+# the wrapper here, once, rather than in every caller: recover N from that
+# trailing line, strip it, and exit with N instead.
 instance_get() {
-  (cd "$ROOT/scripts/cli" && GOWORK=off go run . get -file "${INSTANCE_FILE:-$ROOT/instance.yaml}" "$1")
+  local err out rc last
+  err="$(mktemp)"
+  out="$(cd "$ROOT/scripts/cli" && GOWORK=off go run . get -file "${INSTANCE_FILE:-$ROOT/instance.yaml}" "$1" 2>"$err")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    last="$(tail -n1 "$err")"
+    if [[ "$last" =~ ^exit\ status\ ([0-9]+)$ ]]; then
+      rc="${BASH_REMATCH[1]}"
+      sed '$d' "$err" >&2
+    else
+      cat "$err" >&2
+    fi
+  fi
+  rm -f "$err"
+  printf '%s\n' "$out"
+  return "$rc"
 }
 
 # image_repo — the REPO this instance's role images are named under.

@@ -36,6 +36,7 @@ EOF
 }
 
 deploy() { (cd "$1" && bash scripts/deploy.sh "$2" "$3") >/dev/null 2>&1; }
+deploy_out() { (cd "$1" && bash scripts/deploy.sh "$2" "$3") 2>&1; }
 steps() { [ -f "$1/log" ] && awk '{print $1}' "$1/log" | tr '\n' ' ' | sed 's/ $//'; }
 
 # --- success ---
@@ -49,6 +50,15 @@ inst="$(fresh_instance preflight apply verify:1 rollback)"
 if deploy "$inst" staging v1; then fail "a failed verify fails the deployment"; else ok "a failed verify fails the deployment"; fi
 if [ "$(steps "$inst")" = "preflight apply verify rollback" ]; then ok "a failed verify runs rollback"; else fail "a failed verify runs rollback: $(steps "$inst")"; fi
 if grep -q '^rollback .* verify$' "$inst/log"; then ok "rollback receives the failed step"; else fail "rollback receives the failed step"; fi
+
+# --- exit code 3 is a step's own result, never "not provided" ---
+inst="$(fresh_instance apply:3 verify rollback)"
+if deploy "$inst" staging v1; then fail "an apply exiting 3 fails the deployment"; else ok "an apply exiting 3 fails the deployment"; fi
+if [ "$(steps "$inst")" = "apply rollback" ]; then ok "an apply exiting 3 runs rollback, not a skip"; else fail "an apply exiting 3 runs rollback, not a skip: $(steps "$inst")"; fi
+
+inst="$(fresh_instance preflight apply verify:3 rollback)"
+if deploy "$inst" staging v1; then fail "a verify exiting 3 fails the deployment"; else ok "a verify exiting 3 fails the deployment"; fi
+if [ "$(steps "$inst")" = "preflight apply verify rollback" ]; then ok "a verify exiting 3 runs rollback, not a skip"; else fail "a verify exiting 3 runs rollback, not a skip: $(steps "$inst")"; fi
 
 # --- apply fails ---
 inst="$(fresh_instance apply:1 verify rollback)"
@@ -81,6 +91,20 @@ expect_refused "refuses a missing environment" "" v1
 expect_refused "refuses an environment not in instance.yaml" production v1
 expect_refused "refuses a missing version" staging ""
 expect_refused "refuses when apply.sh is missing" staging v1 no-apply
+
+# --- a broken instance.yaml is reported, not read as a missing environment ---
+inst="$(fresh_instance preflight apply)"
+printf 'name: acme\n  bad: [unterminated\n' > "$inst/instance.yaml"
+out="$(deploy_out "$inst" staging v1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  fail "a broken instance.yaml — it succeeded"
+elif [ -s "$inst/log" ]; then
+  fail "a broken instance.yaml — a hook ran"
+elif ! printf '%s' "$out" | grep -q 'cannot read instance.yaml'; then
+  fail "a broken instance.yaml names the problem: $out"
+else
+  ok "a broken instance.yaml names the problem and runs no hook"
+fi
 
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'

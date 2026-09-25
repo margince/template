@@ -15,8 +15,19 @@ version="${2:-}"
 [ -n "$env" ] || die "deploy: pass ENV=<environment>, e.g. make deploy ENV=staging VERSION=v1.0.0"
 [ -n "$version" ] || die "deploy: pass VERSION=<release>, e.g. make deploy ENV=$env VERSION=v1.0.0"
 
-adapter="$(instance_get "deploy.$env.adapter" 2>/dev/null)" \
-  || die "deploy: '$env' is not an environment in instance.yaml (deploy: $env: { adapter: hook })"
+# instance_get's cli exits 2 for an unknown key (no such environment) and 1
+# for an unreadable or invalid instance.yaml — two different problems that
+# must not share one message, or a broken file reads as a missing environment.
+if out="$(instance_get "deploy.$env.adapter" 2>&1)"; then
+  adapter="$out"
+else
+  status=$?
+  if [ "$status" -eq 2 ]; then
+    die "deploy: '$env' is not an environment in instance.yaml (deploy: $env: { adapter: hook })"
+  else
+    die "deploy: cannot read instance.yaml: $out"
+  fi
+fi
 [ -f "$ROOT/scripts/deploy/$adapter.sh" ] || die "deploy: no adapter script scripts/deploy/$adapter.sh"
 [ -d "$ROOT/deploy/$env" ] || die "deploy: missing directory deploy/$env/"
 
@@ -27,16 +38,18 @@ export IMAGE_API="$repo/api:$version" IMAGE_WEB="$repo/web:$version" IMAGE_WORKE
 
 bash "$ROOT/scripts/deploy/$adapter.sh" check
 
-# run_step <step> — 0 on success or when the adapter does not provide the step.
+# run_step <step> — 0 on success or when the adapter does not provide the
+# step; the step's own exit code otherwise, unchanged. `has` is asked first,
+# so a step that runs is never mistaken for a step that was skipped.
 run_step() {
-  local status=0
-  export DEPLOY_STEP="$1"
-  echo "deploy: $DEPLOY_STEP ($env, $version, adapter $adapter)"
-  bash "$ROOT/scripts/deploy/$adapter.sh" "$1" || status=$?
-  if [ "$status" -eq 3 ]; then
-    echo "deploy: $1 skipped (not provided)"
+  local step="$1" status=0
+  export DEPLOY_STEP="$step"
+  if ! bash "$ROOT/scripts/deploy/$adapter.sh" has "$step"; then
+    echo "deploy: $step skipped (not provided)"
     return 0
   fi
+  echo "deploy: $step ($env, $version, adapter $adapter)"
+  bash "$ROOT/scripts/deploy/$adapter.sh" "$step" || status=$?
   return "$status"
 }
 
@@ -45,12 +58,16 @@ rollback() {
   local status=0
   export DEPLOY_STEP=rollback
   echo "deploy: $1 failed — rolling back"
+  if ! bash "$ROOT/scripts/deploy/$adapter.sh" has rollback; then
+    echo "deploy: no rollback hook — the environment may be half-deployed" >&2
+    exit 1
+  fi
   bash "$ROOT/scripts/deploy/$adapter.sh" rollback || status=$?
-  case "$status" in
-    0) echo "deploy: rolled back" ;;
-    3) echo "deploy: no rollback hook — the environment may be half-deployed" >&2 ;;
-    *) echo "deploy: rollback failed (exit $status) — the environment may be half-deployed" >&2 ;;
-  esac
+  if [ "$status" -eq 0 ]; then
+    echo "deploy: rolled back"
+  else
+    echo "deploy: rollback failed (exit $status) — the environment may be half-deployed" >&2
+  fi
   exit 1
 }
 
