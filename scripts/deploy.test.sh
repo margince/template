@@ -92,19 +92,36 @@ expect_refused "refuses an environment not in instance.yaml" production v1
 expect_refused "refuses a missing version" staging ""
 expect_refused "refuses when apply.sh is missing" staging v1 no-apply
 
-# --- a broken instance.yaml is reported, not read as a missing environment ---
-inst="$(fresh_instance preflight apply)"
-printf 'name: acme\n  bad: [unterminated\n' > "$inst/instance.yaml"
-out="$(deploy_out "$inst" staging v1)" && rc=0 || rc=$?
-if [ "$rc" -eq 0 ]; then
-  fail "a broken instance.yaml — it succeeded"
-elif [ -s "$inst/log" ]; then
-  fail "a broken instance.yaml — a hook ran"
-elif ! printf '%s' "$out" | grep -q 'cannot read instance.yaml'; then
-  fail "a broken instance.yaml names the problem: $out"
-else
-  ok "a broken instance.yaml names the problem and runs no hook"
-fi
+# --- an invalid instance.yaml is refused before any hook, naming the problem ---
+# expect_invalid <label> <env> <instance.yaml body> <text the output must contain>
+expect_invalid() {
+  local label="$1" env="$2" body="$3" want="$4" inst out rc
+  inst="$(fresh_instance preflight apply)"
+  printf '%b' "$body" > "$inst/instance.yaml"
+  if [ "$env" != staging ]; then
+    mkdir -p "$inst/deploy/$env/hooks"
+    cp "$inst/deploy/staging/hooks/"*.sh "$inst/deploy/$env/hooks/"
+  fi
+  out="$(deploy_out "$inst" "$env" v1.2.3)" && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    fail "$label — it succeeded"
+  elif [ -s "$inst/log" ]; then
+    fail "$label — a hook ran"
+  elif ! printf '%s' "$out" | grep -qF "$want"; then
+    fail "$label — the output does not contain '$want': $out"
+  else
+    ok "$label"
+  fi
+}
+base='name: acme\ndisplay_name: Acme\ncore: v0.0.2\nflavor: acme/margince\n'
+expect_invalid "a broken instance.yaml names the problem and runs no hook" staging \
+  'name: acme\n  bad: [unterminated\n' 'instance.yaml is not valid'
+expect_invalid "adapter d13 is refused, naming issue D1, and runs no hook" staging \
+  "${base}deploy:\n  staging: { adapter: d13 }\n" 'issue D1'
+expect_invalid "an environment named Prod is refused and runs no hook" Prod \
+  "${base}deploy:\n  Prod: { adapter: hook }\n" 'environment "Prod" must match'
+expect_invalid "an environment without its deploy/<env>/ directory elsewhere in instance.yaml is refused" staging \
+  "${base}deploy:\n  staging: { adapter: hook }\n  qa: { adapter: hook }\n" 'deploy.qa: missing directory deploy/qa/'
 
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'

@@ -15,6 +15,14 @@ version="${2:-}"
 [ -n "$env" ] || die "deploy: pass ENV=<environment>, e.g. make deploy ENV=staging VERSION=v1.0.0"
 [ -n "$version" ] || die "deploy: pass VERSION=<release>, e.g. make deploy ENV=$env VERSION=v1.0.0"
 
+# The whole file first: `cli get` only parses, so an adapter that is not
+# available (d13), a malformed environment name, or a missing deploy/<env>/
+# directory would otherwise reach a hook.
+if ! out="$(instance_validate 2>&1)"; then
+  printf '%s\n' "$out" >&2
+  die "deploy: instance.yaml is not valid; nothing was deployed"
+fi
+
 # instance_get's cli exits 2 for an unknown key (no such environment) and 1
 # for an unreadable or invalid instance.yaml — two different problems that
 # must not share one message, or a broken file reads as a missing environment.
@@ -33,7 +41,10 @@ fi
 
 repo="$(image_repo)"
 export DEPLOY_ENV="$env" DEPLOY_VERSION="$version" DEPLOY_DIR="$ROOT/deploy/$env"
-export INSTANCE_NAME="$(instance_get name)" IMAGE_REPO="$repo"
+# Assigned, then exported: `export X="$(cmd)"` returns export's status, not
+# cmd's, so a failed read would be exported as an empty value.
+name="$(instance_get name)"
+export INSTANCE_NAME="$name" IMAGE_REPO="$repo"
 export IMAGE_API="$repo/api:$version" IMAGE_WEB="$repo/web:$version" IMAGE_WORKER="$repo/worker:$version"
 
 bash "$ROOT/scripts/deploy/$adapter.sh" check

@@ -3,6 +3,7 @@
 //
 //	cli check [-file instance.yaml] [-core core]
 //	cli get [-file instance.yaml] <key>
+//	cli validate [-file instance.yaml]
 package main
 
 import (
@@ -21,7 +22,7 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-const usage = "usage: cli check [-file instance.yaml] [-core core] | cli get [-file instance.yaml] <key>"
+const usage = "usage: cli check [-file instance.yaml] [-core core] | cli get [-file instance.yaml] <key> | cli validate [-file instance.yaml]"
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -33,6 +34,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runCheck(args[1:], stdout, stderr)
 	case "get":
 		return runGet(args[1:], stdout, stderr)
+	case "validate":
+		return runValidate(args[1:], stdout, stderr)
 	}
 	fmt.Fprintln(stderr, usage)
 	return 2
@@ -58,21 +61,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "instance.yaml: %v\n", err)
 		return 1
 	}
-	problems := in.Validate()
-	root := filepath.Dir(*file)
-	envs := make([]string, 0, len(in.Deploy))
-	for env := range in.Deploy {
-		envs = append(envs, env)
-	}
-	sort.Strings(envs)
-	for _, env := range envs {
-		if !namePattern.MatchString(env) {
-			continue
-		}
-		if st, err := os.Stat(filepath.Join(root, "deploy", env)); err != nil || !st.IsDir() {
-			problems = append(problems, fmt.Sprintf("deploy.%s: missing directory deploy/%s/", env, env))
-		}
-	}
+	problems := append(in.Validate(), deployDirProblems(in, filepath.Dir(*file))...)
 	if in.Core != "" {
 		tags, err := coreTags(*core)
 		if err != nil {
@@ -108,6 +97,62 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "instance.yaml: ok (%s, core %s)\n", in.Name, in.Core)
 	return 0
+}
+
+// runValidate validates instance.yaml and the deploy/<env>/ directories,
+// without looking at core/: `make deploy` runs it, and a deployment does not
+// depend on the core checkout. Exit 0 when valid, 1 with one line per problem.
+func runValidate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	file := fs.String("file", "instance.yaml", "path to instance.yaml")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: cli validate [-file instance.yaml]")
+		return 2
+	}
+	data, err := os.ReadFile(*file)
+	if err != nil {
+		fmt.Fprintf(stderr, "instance.yaml: %v\n", err)
+		return 1
+	}
+	in, err := Parse(data)
+	if err != nil {
+		fmt.Fprintf(stderr, "instance.yaml: %v\n", err)
+		return 1
+	}
+	problems := append(in.Validate(), deployDirProblems(in, filepath.Dir(*file))...)
+	if len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintf(stderr, "instance.yaml: %s\n", p)
+		}
+		return 1
+	}
+	fmt.Fprintln(stdout, "instance.yaml: valid")
+	return 0
+}
+
+// deployDirProblems reports each well-named environment under deploy: that
+// has no deploy/<env>/ directory beside instance.yaml (root). A malformed
+// name is Validate's problem, and is not also looked up on disk.
+func deployDirProblems(in Instance, root string) []string {
+	envs := make([]string, 0, len(in.Deploy))
+	for env := range in.Deploy {
+		envs = append(envs, env)
+	}
+	sort.Strings(envs)
+	var problems []string
+	for _, env := range envs {
+		if !namePattern.MatchString(env) {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(root, "deploy", env)); err != nil || !st.IsDir() {
+			problems = append(problems, fmt.Sprintf("deploy.%s: missing directory deploy/%s/", env, env))
+		}
+	}
+	return problems
 }
 
 // coreTags lists the tags that point at HEAD of the core checkout.

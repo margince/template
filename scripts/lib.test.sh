@@ -331,6 +331,10 @@ printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.2\nflavor: acme/margince\n' >
 if [ "$(instance_get name)" = "acme" ]; then ok "instance_get reads a key"; else fail "instance_get reads a key"; fi
 if [ "$(instance_get flavor)" = "acme/margince" ]; then ok "instance_get reads the flavor"; else fail "instance_get reads the flavor"; fi
 if instance_get units >/dev/null 2>&1; then fail "instance_get refuses an unknown key"; else ok "instance_get refuses an unknown key"; fi
+rc=0; instance_get units >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then ok "instance_get exits exactly 2 for an unknown key"; else fail "instance_get exits exactly 2 for an unknown key — exit $rc"; fi
+rc=0; INSTANCE_FILE="$TMP/no-such-instance.yaml" instance_get name >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 1 ]; then ok "instance_get exits exactly 1 for an unreadable file"; else fail "instance_get exits exactly 1 for an unreadable file — exit $rc"; fi
 unset INSTANCE_FILE
 
 # --- image_repo ---
