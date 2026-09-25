@@ -164,7 +164,14 @@ u: compose ## One unit's tests + policy gates (NAME=<unit>)
 	@# In the STAGED copy: the composed go.work `use`s core/extensions/<unit>, so
 	@# `go test` in the source dir fails with "directory prefix . does not contain
 	@# modules listed in go.work". The copy is byte-identical.
-	@cd $(CORE)/extensions/$(NAME) && GOWORK=$(CURDIR)/$(CORE)/build/composition/go.work go test ./...
+	@# Both sides of that check must resolve from the SAME path kind: $(CURDIR) is
+	@# make's physical cwd (symlinks resolved), but a RELATIVE `cd` stays on the
+	@# shell's logical $PWD. Under a symlinked checkout (macOS puts every `mktemp
+	@# -d` under /var/folders, itself a symlink to /private/var/folders) the two
+	@# diverge by the /private prefix, and go reports the same "directory prefix"
+	@# error even from the staged copy. Making the `cd` absolute from $(CURDIR)
+	@# keeps both physical, so they agree.
+	@cd $(CURDIR)/$(CORE)/extensions/$(NAME) && GOWORK=$(CURDIR)/$(CORE)/build/composition/go.work go test ./...
 	@echo "== policy gates"
 	@# Piped through REWRITE like every other delegating lane: without it a
 	@# finding names core/extensions/<unit>/…, the staged copy that must not be
@@ -304,7 +311,9 @@ test-extensions: compose ## Every staged unit's own test lane
 ## repository exists to hold stops being checked without a word.
 ARCH_TESTS := TestExtensionsImportOnlyTheAllowlistedSurface|TestSurfaceMarkerLivesOnlyUnderPkg|TestCompositionWiredOnlyFromCmd
 arch: compose ## Upstream's arch fitness tests over the composed tree
-	@set -o pipefail; cd $(CORE)/backend \
+	@# Absolute `cd` from $(CURDIR), same reason as `u`'s go test call: it must
+	@# agree with GOWORK's $(CURDIR)-based path under a symlinked checkout.
+	@set -o pipefail; cd $(CURDIR)/$(CORE)/backend \
 		&& pkg="$$(grep -rl 'func TestExtensionsImportOnlyTheAllowlistedSurface' \
 			--include='*_test.go' . | head -1 | xargs -r dirname)"; \
 		[ -n "$$pkg" ] || { \
