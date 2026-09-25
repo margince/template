@@ -333,6 +333,17 @@ if [ "$(instance_get flavor)" = "acme/margince" ]; then ok "instance_get reads t
 if instance_get units >/dev/null 2>&1; then fail "instance_get refuses an unknown key"; else ok "instance_get refuses an unknown key"; fi
 rc=0; instance_get units >/dev/null 2>&1 || rc=$?
 if [ "$rc" -eq 2 ]; then ok "instance_get exits exactly 2 for an unknown key"; else fail "instance_get exits exactly 2 for an unknown key — exit $rc"; fi
+# Under errexit, as a caller with `set -e` runs it: the exit code and the
+# cli's message still come out, instead of the shell aborting inside. A
+# separate bash, not a subshell: errexit is ignored inside a subshell on the
+# left of ||, which would make this pass either way.
+rc=0
+bash -c 'set -euo pipefail; source "$1"; instance_get units >/dev/null' _ "$SCRIPT_DIR/lib.sh" 2>"$TMP/errexit.err" || rc=$?
+if [ "$rc" -eq 2 ] && grep -qF 'unknown key "units"' "$TMP/errexit.err" && ! grep -q '^exit status' "$TMP/errexit.err"; then
+  ok "instance_get under set -e exits 2 and replays the cli's message"
+else
+  fail "instance_get under set -e exits 2 and replays the cli's message — exit $rc, stderr: $(cat "$TMP/errexit.err")"
+fi
 rc=0; INSTANCE_FILE="$TMP/no-such-instance.yaml" instance_get name >/dev/null 2>&1 || rc=$?
 if [ "$rc" -eq 1 ]; then ok "instance_get exits exactly 1 for an unreadable file"; else fail "instance_get exits exactly 1 for an unreadable file — exit $rc"; fi
 unset INSTANCE_FILE

@@ -191,6 +191,37 @@ else
   fail "warns when HEAD has moved past the release tag (exit $rc): $out"
 fi
 
+# --- `has` exiting other than 0 or 1 is an error, never "not provided" ---
+# broken_has <inst> <step> <code> — the instance's copy of the hook adapter
+# answers `has <step>` with <code>.
+broken_has() {
+  local f="$1/scripts/deploy/hook.sh" tmp
+  tmp="$(mktemp "$TMP/hook.XXXXXX")"
+  awk -v step="$2" -v code="$3" 'NR == 1 { print; print "[ \"${1:-}\" = has ] && [ \"${2:-}\" = " step " ] && { echo \"deploy/hook.sh: cannot read hooks\" >&2; exit " code "; }"; next } { print }' "$f" > "$tmp"
+  cat "$tmp" > "$f"; rm -f "$tmp"
+  commit_all "$1"
+}
+inst="$(fresh_instance preflight apply verify rollback)"
+broken_has "$inst" verify 3
+out="$(deploy_out "$inst" staging v1.2.3)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then fail "has exiting 3 stops the deployment — it succeeded"
+elif ! printf '%s' "$out" | grep -qF "could not answer 'has verify' (exit 3)"; then fail "has exiting 3 stops the deployment with the adapter's message: $out"
+elif ! printf '%s' "$out" | grep -qF 'cannot read hooks'; then fail "has exiting 3 shows the adapter's own message: $out"
+elif printf '%s' "$out" | grep -q 'verify skipped'; then fail "has exiting 3 is not read as a skip: $out"
+else ok "has exiting 3 stops the deployment with the adapter's message, not a skip"; fi
+
+inst="$(fresh_instance preflight apply verify:1 rollback)"
+broken_has "$inst" rollback 3
+out="$(deploy_out "$inst" staging v1.2.3)" && rc=0 || rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "could not answer 'has rollback' (exit 3)" && ! printf '%s' "$out" | grep -q 'no rollback hook'; then
+  ok "has rollback exiting 3 is reported as an adapter error, not as no rollback hook"
+else
+  fail "has rollback exiting 3 is reported as an adapter error (exit $rc): $out"
+fi
+
+if DEPLOY_DIR= bash "$SCRIPT_DIR/deploy/hook.sh" has apply 2>/dev/null; then rc=0; else rc=$?; fi
+if [ "$rc" -eq 2 ]; then ok "hook.sh has exits 2, not 1, without DEPLOY_DIR"; else fail "hook.sh has exits 2, not 1, without DEPLOY_DIR — exit $rc"; fi
+
 # --- make deploy: hooks do not inherit make's variables, and quoting holds ---
 inst="$(fresh_instance)"
 cp "$SCRIPT_DIR/../Makefile" "$inst/Makefile"

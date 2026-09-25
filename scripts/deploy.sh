@@ -75,13 +75,26 @@ export IMAGE_API="$repo/api:$version" IMAGE_WEB="$repo/web:$version" IMAGE_WORKE
 
 bash "$ROOT/scripts/deploy/$adapter.sh" check
 
+# has <step> — 0 when the adapter provides the step, 1 when it does not.
+# Any other exit code is the adapter failing to answer (its message is on
+# stderr), never "not provided": deploy.sh stops.
+has() {
+  local status=0
+  bash "$ROOT/scripts/deploy/$adapter.sh" has "$1" || status=$?
+  case "$status" in
+    0|1) return "$status" ;;
+    *) die "deploy: adapter $adapter could not answer 'has $1' (exit $status)" ;;
+  esac
+}
+
 # run_step <step> — 0 on success or when the adapter does not provide the
 # step; the step's own exit code otherwise, unchanged. `has` is asked first,
 # so a step that runs is never mistaken for a step that was skipped.
 run_step() {
-  local step="$1" status=0
+  local step="$1" status=0 provided=0
   export DEPLOY_STEP="$step"
-  if ! bash "$ROOT/scripts/deploy/$adapter.sh" has "$step"; then
+  has "$step" || provided=$?
+  if [ "$provided" -eq 1 ]; then
     echo "deploy: $step skipped (not provided)"
     return 0
   fi
@@ -92,11 +105,15 @@ run_step() {
 
 rollback() {
   export DEPLOY_FAILED_STEP="$1"
-  local status=0
+  local status=0 provided=0
   export DEPLOY_STEP=rollback
   echo "deploy: $1 failed — rolling back"
-  if ! bash "$ROOT/scripts/deploy/$adapter.sh" has rollback; then
+  bash "$ROOT/scripts/deploy/$adapter.sh" has rollback || provided=$?
+  if [ "$provided" -eq 1 ]; then
     echo "deploy: no rollback hook — the environment may be half-deployed" >&2
+    exit 1
+  elif [ "$provided" -ne 0 ]; then
+    echo "deploy: adapter $adapter could not answer 'has rollback' (exit $provided) — the environment may be half-deployed" >&2
     exit 1
   fi
   bash "$ROOT/scripts/deploy/$adapter.sh" rollback || status=$?

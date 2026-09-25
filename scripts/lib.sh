@@ -41,8 +41,10 @@ source_units() {
 cli_run() {
   local err out rc last
   err="$(mktemp)"
-  out="$(cd "$ROOT/scripts/cli" && GOWORK=off go run . "$@" 2>"$err")"
-  rc=$?
+  # `|| rc=$?`, not `rc=$?` on the next line: under a caller's errexit the
+  # failed assignment would abort the shell here, before the stderr replay.
+  rc=0
+  out="$(cd "$ROOT/scripts/cli" && GOWORK=off go run . "$@" 2>"$err")" || rc=$?
   if [ "$rc" -ne 0 ]; then
     last="$(tail -n1 "$err")"
     if [[ "$last" =~ ^exit\ status\ ([0-9]+)$ ]]; then
