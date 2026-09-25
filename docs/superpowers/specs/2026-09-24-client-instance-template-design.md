@@ -541,7 +541,14 @@ tag and keeps `1970.N` for hourly builds.
   outcome. It is slow, so it is not part of `make test-scripts` and runs in
   its own CI workflow, `lifecycle.yml`, on every pull request, on push to
   `main`, and on demand. Template changes that break the lifecycle fail there
-  before any instance merges them.
+  before any instance merges them. It needs a clean template working tree
+  (`make new-instance` refuses otherwise).
+- `.github/workflows/` is template-owned (Section 6), so every instance
+  inherits `lifecycle.yml` unchanged. Its job guards on
+  `github.repository == 'gradionhq/margince-template'` so it never runs
+  there, and `scripts/lifecycle.test.sh` itself skips (exit 0) when
+  `.template-version` exists, since an instance has no `make new-instance` to
+  drive the lifecycle it tests.
 - Trial (T8) and release (T7) steps join `scripts/lifecycle.test.sh` when
   those lanes exist; `lifecycle.yml` needs no change when they do.
 - The Go CLI has unit tests.
