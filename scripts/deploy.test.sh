@@ -191,5 +191,35 @@ else
   fail "warns when HEAD has moved past the release tag (exit $rc): $out"
 fi
 
+# --- make deploy: hooks do not inherit make's variables, and quoting holds ---
+inst="$(fresh_instance)"
+cp "$SCRIPT_DIR/../Makefile" "$inst/Makefile"
+cat > "$inst/deploy/staging/hooks/apply.sh" <<EOF
+#!/usr/bin/env bash
+printf 'ENV=%s VERSION=%s MAKEFLAGS=%s MAKELEVEL=%s ALLOW_DIRTY=%s\n' "\${ENV-unset}" "\${VERSION-unset}" "\${MAKEFLAGS-unset}" "\${MAKELEVEL-unset}" "\${ALLOW_DIRTY-unset}" >> "$inst/log"
+EOF
+commit_all "$inst"
+if (cd "$inst" && make -s deploy ENV=staging VERSION=v1.2.3) >/dev/null 2>&1 \
+   && grep -qx 'ENV=unset VERSION=unset MAKEFLAGS=unset MAKELEVEL=unset ALLOW_DIRTY=' "$inst/log"; then
+  ok "make deploy runs the hooks without ENV, VERSION or make's own variables"
+else
+  fail "make deploy runs the hooks without ENV, VERSION or make's own variables: $(cat "$inst/log" 2>/dev/null)"
+fi
+rm -f "$inst/log"
+printf '# edited\n' >> "$inst/deploy/staging/hooks/apply.sh"
+if (cd "$inst" && make -s deploy ENV=staging VERSION=v1.2.3 ALLOW_DIRTY=1) >/dev/null 2>&1 && [ -s "$inst/log" ]; then
+  ok "make deploy passes ALLOW_DIRTY=1 through"
+else
+  fail "make deploy passes ALLOW_DIRTY=1 through"
+fi
+rm -f "$inst/log"
+if (cd "$inst" && make -s deploy "ENV=staging'; touch pwned; '" VERSION=v1.2.3 ALLOW_DIRTY="1'; touch pwned2; '") >/dev/null 2>&1; then
+  fail "make deploy refuses a quoted ENV — it succeeded"
+elif [ -e "$inst/pwned" ] || [ -e "$inst/pwned2" ] || [ -s "$inst/log" ]; then
+  fail "make deploy keeps a single quote in ENV or ALLOW_DIRTY as data"
+else
+  ok "make deploy keeps a single quote in ENV or ALLOW_DIRTY as data"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'

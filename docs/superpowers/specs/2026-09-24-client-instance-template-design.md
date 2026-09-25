@@ -481,6 +481,10 @@ names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
 value is printed. `REGISTRY` can be an environment variable. Checkout runs
 with `persist-credentials: false`, so no push credential for the repository
 is left on disk for a hook to find.
+The checkout is shallow and detached at the tag, so a hook must not rely on
+git history or on pushing. `make deploy` removes `ENV`, `VERSION`,
+`MAKEFLAGS`, `MAKELEVEL`, and `MFLAGS` from the environment of `deploy.sh`,
+so a hook that runs `make` does not inherit them as overrides.
 
 ### 10.5 Licensing by Stage
 

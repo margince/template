@@ -253,7 +253,11 @@ new-instance: ## Create a client instance repository from this template (NAME=, 
 		bash scripts/new-instance.sh
 
 deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSION=, ALLOW_DIRTY=1)
-	@ALLOW_DIRTY='$(subst ','\'',$(value ALLOW_DIRTY))' bash scripts/deploy.sh '$(subst ','\'',$(value ENV))' '$(subst ','\'',$(value VERSION))'
+	@# env -u: make exports its command-line variables (ENV, VERSION) and its
+	@# own MAKEFLAGS to the recipe, and a hook that runs make would inherit
+	@# them as overrides. deploy.sh receives both as arguments instead.
+	@env -u ENV -u VERSION -u MAKEFLAGS -u MAKELEVEL -u MFLAGS \
+		ALLOW_DIRTY='$(subst ','\'',$(value ALLOW_DIRTY))' bash scripts/deploy.sh '$(subst ','\'',$(value ENV))' '$(subst ','\'',$(value VERSION))'
 
 check-instance: ## instance.yaml is valid and names the tag core/ is at
 	@cd scripts/cli && GOWORK=off go run . check -file $(CURDIR)/instance.yaml -core $(CURDIR)/$(CORE)

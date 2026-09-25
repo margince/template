@@ -255,6 +255,11 @@ Each hook script runs with the following environment variables:
 | `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER` | every step | `$IMAGE_REPO/api:$DEPLOY_VERSION`, `/web`, `/worker`. |
 | `DEPLOY_FAILED_STEP` | `rollback` only | The step that failed (`apply` or `verify`). |
 
+`make deploy` runs `deploy.sh` without `ENV`, `VERSION`, `MAKEFLAGS`,
+`MAKELEVEL`, and `MFLAGS` in the environment, so a hook that runs `make`
+does not inherit them as overrides. Read `DEPLOY_ENV` and `DEPLOY_VERSION`
+instead.
+
 ### Running locally
 
 ```sh
@@ -353,3 +358,7 @@ lower-case, so the pattern above would reject it anyway). A skipped name is
 printed to the log; its value never is. Checkout runs with
 `persist-credentials: false`, so no push credential for the repository is
 left on disk for a hook to find.
+
+In CI the checkout is shallow (one commit), detached at the tag, and has no
+push credential. A hook must not rely on git history, on a branch, or on
+pushing to the repository.
