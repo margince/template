@@ -4,7 +4,7 @@ Source: [design specification](../specs/2026-09-24-client-instance-template-desi
 
 The Constellation issues (C1, K1–K4) include the proposal for mainline builds, a release harness, flavors, and trials. Trials start after flavors exist.
 
-Versions: core releases are `v0.0.x` tags; hourly mainline builds use build version `1970.N`.
+Versions: core releases are `v0.0.x` tags; template and instance releases use Constellation's `YYYY.edition` (for example `2026.3`). There are no scheduled or hourly builds; builds run only in the template and instances.
 
 Implementation plan for T1 and T2: [template foundation](2026-09-24-template-foundation.md).
 
@@ -23,15 +23,15 @@ dependencies.
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
-| C1 | Release images carry the v0.0.x release tag | Release git tags stay `v0.0.x`. For a release tag, `docker-bake.hcl` must stamp the images with the same version (today it stamps `1970.<build>`). The `1970.N` build version stays for scheduled mainline builds. | Pushing release tag `v0.0.<n>` produces images stamped with version `v0.0.<n>`. A scheduled build still produces `1970.<build>`. | — |
+| C1 | ~~Release images carry the v0.0.x release tag~~ | Closed: not needed. Instances build their own images from core's bake file at the pinned `v0.0.x` tag; core's release images are not consumed. | — | — |
 
 ### gradionhq/margince-constellation
 
 | ID | Title | Scope | Done when | Depends on |
 |---|---|---|---|---|
 | K2 | Flavors: vendor-namespaced products with dynamic catalog and licenses | Add flavors to the dist service. A flavor is namespaced by vendor: `margince/margince` is core, `<vendor>/margince` is a client instance. Add management APIs to create flavors. Make the static `MARGINCE_AUTH_CATALOG` dynamic through the event outbox, so that a new flavor can be licensed immediately. Grant push to the publisher identity for the flavor image namespace. | Creating a flavor through the API allows issuing a license for it, pushing `<vendor>/margince-api`, `-web`, `-worker` with the publisher identity, and pulling them with the license. | — |
-| K3 | Hourly mainline builds of core | Build core `main` hourly with build version `1970.N` and record each build in the dist service, published to testing. The build definition stays in core (`docker-bake.hcl`, desktop build). Release versions remain core's `v0.0.x` tags. Reuse the Go commands from PR #421 (`verdict`, `promote`, `notes`, `cleanup`) and close PR #421. | A new `1970.N` build appears in testing after each hourly run. PR #421 is closed. | C1 |
-| K4 | Release harness | After each release (mainline core build or flavor release), verify: a license for the product is valid, the containers can be pulled with it, the binaries can be downloaded, the SBOMs can be downloaded. Provide it as a command that instance CI can also run. | The harness runs after every mainline build and fails the run on any failed check. | K3 |
+| K3 | ~~Hourly mainline builds of core~~ | Closed: no scheduled or hourly builds in any repository; builds run only in the template and instances. | — | — |
+| K4 | Release harness | A command that instance CI runs after publishing a flavor release: a license for the flavor is valid, the containers can be pulled with it, the binaries and SBOMs can be downloaded. Constellation provides the tool; it runs in the instance's CI, not in Constellation. | The command passes against a published flavor release and fails when any check fails. | K2 |
 | K1 | Trial license per flavor | Add a trial license type (validity period, trial marker) and an issuance endpoint that accepts an operator credential. Trial licenses are issued per flavor. Used by `make trial` in instance repositories. | An operator credential can obtain a trial JWT for a flavor. Core accepts it in production mode. | K2 |
 
 ### gradionhq/margince-template
@@ -44,7 +44,7 @@ dependencies.
 | T4 | `instance.mk` | Add `-include instance.mk` and a check that it does not redefine template targets. | A redefined target fails `make check`. | T1 |
 | T5 | Core pin by tag | `make update-core` accepts release tags only and updates `core` in `instance.yaml`. | A branch ref or commit is rejected. After `make update-core REF=<tag>`, `make check-instance` passes. | T2 |
 | T6 | Drift check | Add `.template-version` and `make check-template`. | Editing a template-owned file fails `make check`. | T1 |
-| T7 | Release workflow | Add `make release`. Extend `release.yml` with image build (candidate tag), smoke test, publish to the flavor namespace, record the flavor release in the dist service, and run the release harness. Port `notes` and `cleanup` from PR #421 into `scripts/cli`. | Tag `v<v>` publishes three role images and release notes for the flavor, and the release harness passes. | T3, C1, K2, K4 |
+| T7 | Release workflow | `make release VERSION=YYYY.edition` tags the release; `release.yml` on that tag builds the role images (candidate tag), smoke-tests them, publishes them under the flavor namespace, drafts and publishes the release in the dist service with Constellation's release-management CLI, and runs the release harness. `make deploy`, `deploy.yml` and the lifecycle test switch from `vX.Y.Z` to Constellation's version pattern. | Tag `2026.1` publishes three role images and a dist release for the flavor, and the harness passes. | T3, K2, K4 |
 | T8 | Laptop trial build | Add `make trial`: desktop build, production configuration, dataset, and a trial license for the flavor from `scripts/trial-license.sh`. | `make trial` produces a bundle that starts in production mode on macOS. | T3, K1 |
 | T9 | Deploy contract and `hook` adapter | Add `make deploy`, `deploy.yml`, and the four steps (`preflight`, `apply`, `verify`, `rollback`) with the `hook` adapter. | A test hook deployment runs. A failing `verify` triggers `rollback`. | T2 |
 | T10 | Template CI | Run the lifecycle in CI on the empty template and on a test instance with one unit: `install`, `check`, `trial` (build only), `release` (dry run), `deploy` (test hook). | CI passes on both. | T1–T9 |
@@ -67,11 +67,10 @@ dependencies.
 ## Order
 
 ```
-C1, K2, T1                  (parallel start)
-C1 → K3 → K4
-K2 → K1
+K2, T1                      (parallel start)
+K2 → K1, K4
 T2 → T3, T4, T5, T6, T9
-T3 + C1 + K2 + K4 → T7
+T3 + K2 + K4 → T7
 T3 + K1      → T8
 T2 + T6      → T11
 all T        → T10 → T12  → M1
