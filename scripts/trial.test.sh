@@ -171,11 +171,47 @@ for ds in "https://example.test/org/demo-data.git@v3.1.0" "git@example.test:org/
 ")"
   MARGINCE_TRIAL_LICENSE="$TOKEN" trial "$inst" v1.2.0
   out="$inst/dist/trial/acme-v1.2.0-macos-arm64"
-  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'make desktop-seed DATASET='; then ok "data.dataset ($url): the seeding command is printed"; else fail "data.dataset ($url): the seeding command is printed: $OUT"; fi
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "make desktop-seed DESKTOP_DEST=\"$out\" DATASET="; then ok "data.dataset ($url): the seeding command points DESKTOP_DEST at the bundle"; else fail "data.dataset ($url): the seeding command points DESKTOP_DEST at the bundle: $OUT"; fi
   if printf '%s' "$OUT" | grep -qF "git clone $url " && printf '%s' "$OUT" | grep -qF "checkout $ref"; then ok "data.dataset ($url): split at the last @ into url and ref"; else fail "data.dataset ($url): split at the last @: $OUT"; fi
   if grep -qxF "url: $url" "$out/data/demo/DATASET.txt" 2>/dev/null && grep -qxF "ref: $ref" "$out/data/demo/DATASET.txt"; then ok "data.dataset ($url): the reference is in data/demo/DATASET.txt"; else fail "data.dataset ($url): the reference is in data/demo/DATASET.txt: $(cat "$out/data/demo/DATASET.txt" 2>&1)"; fi
   if grep -qF "$url" "$out/TRIAL.txt" 2>/dev/null; then ok "data.dataset ($url): TRIAL.txt names the dataset"; else fail "data.dataset ($url): TRIAL.txt names the dataset"; fi
 done
+
+# --- the socket-path note: printed when the macOS bundle path is too long for
+# a unix socket (scripts/desktop.sh's own 103-byte limit). A `name` of 60 'a's
+# forces this regardless of how long $TMP itself already is. ---
+long_name="$(printf 'a%.0s' $(seq 1 60))"
+mk_long_inst() {
+  local inst
+  inst="$(mktemp -d "$TMP/inst.XXXXXX")"
+  cp -R "$SCRIPT_DIR" "$inst/scripts"
+  printf 'name: %s\ndisplay_name: Acme\ncore: v0.0.2\n' "$long_name" > "$inst/instance.yaml"
+  printf '%s' "$inst"
+}
+
+inst="$(mk_long_inst)"
+MARGINCE_TRIAL_LICENSE="$TOKEN" trial "$inst" v1.2.0
+out="$inst/dist/trial/$long_name-v1.2.0-macos-arm64"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'macOS limit'; then
+  ok "a too-long macOS bundle path prints the socket-limit note"
+else
+  fail "a too-long macOS bundle path prints the socket-limit note: $OUT"
+fi
+if printf '%s' "$OUT" | grep -qF "mv \"$out\""; then
+  ok "the note tells the user to move the exact bundle path"
+else
+  fail "the note tells the user to move the exact bundle path: $OUT"
+fi
+
+# Same over-limit path length, but Windows has no unix-socket limit: the note
+# must not appear there. Proves the macOS-only guard, not just a short path.
+inst="$(mk_long_inst)"
+TEST_UNAME_S=MINGW64_NT-10.0-19045 TEST_UNAME_M=x86_64 MARGINCE_TRIAL_LICENSE="$TOKEN" trial "$inst" v1.2.0
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'macOS limit'; then
+  ok "a windows bundle prints no macOS socket-limit note, however long its path"
+else
+  fail "a windows bundle prints no macOS socket-limit note: $OUT"
+fi
 
 if [ "$FAILURES" -ne 0 ]; then
   printf '\ntrial.test: %d failure(s)\n' "$FAILURES" >&2

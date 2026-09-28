@@ -75,6 +75,15 @@ if [ -e "$out" ] && [ "${FORCE:-}" != 1 ]; then
   die "trial: $out exists; pass FORCE=1 to replace it"
 fi
 
+# macOS caps a unix socket path at 103 bytes; the launcher's database socket
+# is <root>/data/sockets/.s.PGSQL.5432 (27 bytes), so the root has 76
+# (scripts/desktop.sh, SOCKET_TAIL/SOCKET_LIMIT). A trial bundle is built
+# straight into dist/trial/<name>-<v>-<platform>/ inside this checkout, which
+# is routinely longer than that — the bundle runs directly, unlike a `make
+# desktop-install` copy, so nothing else checks this before the first start.
+SOCKET_TAIL=27
+SOCKET_LIMIT=103
+
 # The license lives in a private temporary directory until it is written into
 # the bundle. The staging directory is created after the build, beside the
 # output, so the final move is a rename.
@@ -210,6 +219,17 @@ rm -rf "$out"
 mv "$staged" "$out"
 
 printf 'trial: %s\n' "$out"
+case "$platform" in
+  macos-*)
+    socket_len=$(( ${#out} + SOCKET_TAIL ))
+    if [ "$socket_len" -gt "$SOCKET_LIMIT" ]; then
+      printf 'trial: note: this path is %s bytes; with the database socket that is %s, over\n' "${#out}" "$socket_len"
+      printf '       the %s-byte macOS limit, so the bundle will not start from here. Move or\n' "$SOCKET_LIMIT"
+      printf '       copy it to a short path before the first start, e.g.:\n'
+      printf '         mv "%s" ~/Trial\n' "$out"
+    fi
+    ;;
+esac
 if [ -n "$expires" ]; then
   printf 'trial: production mode, trial license expires %s\n' "$expires"
 else
@@ -220,7 +240,8 @@ if [ -n "$dataset" ]; then
   printf 'trial: data.dataset is %s at %s. After the first start, seed it:\n' "$dataset_url" "$dataset_ref"
   printf '  git clone %s "%s"\n' "$dataset_url" "$clone"
   printf '  git -C "%s" checkout %s\n' "$clone" "$dataset_ref"
-  printf '  make desktop-seed DATASET="%s"\n' "$clone"
+  printf '  make desktop-seed DESKTOP_DEST="%s" DATASET="%s"\n' "$out" "$clone"
+  printf '  (DESKTOP_DEST is wherever the bundle actually runs from — update it if you moved it)\n'
   if [ ! -e "$out/Load Demo Data.command" ] && [ ! -e "$out/Load Demo Data.cmd" ]; then
     printf 'trial: note: this bundle has no demo loader. It is built only when the desktop\n'
     printf '       build can reach the dataset: run make trial with DATASET=<checkout>.\n'

@@ -61,6 +61,20 @@ Unzip and run the launcher (`docs/desktop-build.md` covers running it in
 detail). It starts in production mode with the trial license already in
 place — no separate license step for the person trying the bundle.
 
+`make trial` builds straight into `dist/trial/<name>-<v>-<platform>/` inside
+the checkout, and that path is routinely too long: the launcher's database
+socket lives at `<root>/data/sockets/.s.PGSQL.5432`, and macOS caps a unix
+socket path at 103 bytes, so the bundle's own root must be at most 76.
+`make trial` checks this and, when the path is too long, prints a note and a
+command to move the bundle somewhere short before the first start, the same
+way `make desktop-install` does for an installed copy:
+
+```sh
+mv dist/trial/<name>-<v>-<platform> ~/Trial
+```
+
+Run the launcher from the new location, not the original.
+
 ## Seeding
 
 A plain `make trial` has **no demo loader** unless a dataset checkout was
@@ -80,7 +94,12 @@ prints the commands to seed the bundle by hand after the first start:
 ```sh
 git clone <url> "<bundle>/data/demo/dataset"
 git -C "<bundle>/data/demo/dataset" checkout <ref>
-make desktop-seed DATASET="<bundle>/data/demo/dataset"
+make desktop-seed DESKTOP_DEST="<bundle>" DATASET="<bundle>/data/demo/dataset"
 ```
+
+`DESKTOP_DEST` must point at the trial bundle itself — where the launcher is
+actually running from, which is `<bundle>` unless you moved it (see "First
+start" above) — not `make desktop-seed`'s own default (`~/Margince`), which is
+a separate `make desktop-install` copy that a trial bundle never uses.
 
 and a note that the bundle ships without a demo loader in that case.
