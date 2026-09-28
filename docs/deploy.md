@@ -173,7 +173,8 @@ Compose — for example an AWS EC2 instance.
 | `rollback` | Starts the previous release directory and points `current` back at it. Without a previous release, it stops the new release and fails — see "Rollback limits" below. |
 
 Server layout: `$HOST_DIR/releases/<v>/` holds the release's `compose.yaml`,
-`Caddyfile` reference, `config/margince.yaml`, and `.env` (mode 600).
+`compose.env`, `config/margince.yaml`, and `.env` (mode 600). The Caddyfile
+itself is not per-release; it lives in `$HOST_DIR/shared/caddy/`, below.
 `$HOST_DIR/current` is a symbolic link to the running release.
 `$HOST_DIR/shared/` holds `db-init.sh`, `db-bootstrap.sql`, `caddy/Caddyfile`,
 and `data.env` (the generated database passwords, created once, mode 600) —
@@ -223,11 +224,24 @@ environment wins.
 
 `rollback` restores the previous release directory and points `current` at
 it — it does **not** roll back the database: `api` applies migrations when it
-starts, and a migration is not automatically reversible. Without a previous
-release recorded (the first deployment to an environment, or a `preflight`
-failure before `apply` ran), `rollback` stops the new release, removes
-`current` if it pointed at it, and fails — there is nothing to fall back to,
-and the environment is left with nothing running rather than a guess.
+starts, and a migration is not automatically reversible.
+
+A failed `preflight` never runs `rollback` at all: `deploy.sh` stops
+immediately, before `apply` or any other step runs, so nothing was changed to
+roll back from.
+
+A failed `apply` does run `rollback`, but `rollback` needs `apply` to have
+recorded which release was running before it started (`host.sh`,
+`$DEPLOY_STATE_DIR/previous`). Two cases where that record says there is
+nothing to restore:
+
+- `apply` failed before it ever read the running release: `rollback` exits 1
+  immediately, saying so, and changes nothing on the server — it was never
+  touched.
+- `apply` read the running release and found none (the first deployment to an
+  environment): `rollback` stops the release `apply` had uploaded, clears
+  `current` if it points there, and exits 1 — there is nothing to fall back
+  to, and the environment is left with nothing running rather than a guess.
 
 ### Backups
 

@@ -3,7 +3,7 @@
 # CI.
 #
 # Scoped deliberately: the synthetic-tree shell tests need no submodule and
-# finish in about a second, and the pin check is one fetch. The composed gates
+# finish in a few minutes, and the pin check is one fetch. The composed gates
 # (compose, build, check-composition) are minutes and belong in `make check` and
 # CI, not in everyone's push. A hook slow enough to skip is a hook that gets
 # skipped.

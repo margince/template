@@ -739,7 +739,7 @@ DESKTOP_DEST ?= $(HOME)/Margince
 desktop-install: ## Copy the built folder somewhere it can run (DESKTOP_DEST=~/Margince)
 	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh install
 
-desktop-run: ## Start the installed desktop app in the foreground (DEST=)
+desktop-run: ## Start the installed desktop app in the foreground (DESKTOP_DEST=)
 	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh run
 
 ## desktop-connect — the same start, reachable by an agent.
@@ -760,7 +760,7 @@ desktop-run: ## Start the installed desktop app in the foreground (DEST=)
 ##
 ## It publishes the whole installation, not just /mcp: the agent's consent flow
 ## is a browser sign-in on the public address, so the login page is on it too.
-desktop-connect: ## Start it behind a public address, with MCP on (DEST=)
+desktop-connect: ## Start it behind a public address, with MCP on (DESKTOP_DEST=)
 	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh connect
 
 ## desktop-seed — the commercial demo dataset, into a RUNNING installation.

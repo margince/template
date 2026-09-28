@@ -35,10 +35,10 @@ at once:
 Matches `v1.2.0`, `v0.1.0`, `v10.0.12`, `v1.3.0-rc.1`. Does not match `1.2.0`,
 `v1.2`, `v1.2.0-rc.0`, `v1.2.0-rc1`, or `v1.2.0-beta.1`.
 
-Ordering follows semantic versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`, and
-`-rc.N` numbers compare numerically (`-rc.2` is newer than `-rc.1`, and newer
-than `-rc.10` is wrong — they compare as numbers, not as text). `make release`
-refuses a version that is not newer than every existing release tag.
+Ordering follows semantic versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`. The
+`-rc.N` numbers compare numerically, not as text: `-rc.10` is newer than
+`-rc.2`. `make release` refuses a version that is not newer than every
+existing release tag.
 
 A plain `v0.3.0` publishes as a normal release. A suffixed `v0.3.0-rc.1`
 publishes as a **pre-release**, so a build meant for testing does not become

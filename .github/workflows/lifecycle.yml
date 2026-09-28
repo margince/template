@@ -9,8 +9,9 @@
 # where ci.yml's job answers in well under a minute. Splitting it out keeps
 # the fast gate fast without dropping the slow one.
 #
-# Trial (T8) and release (T7) steps join `scripts/lifecycle.test.sh` when
-# those lanes exist; this workflow needs no change when they do.
+# Release and host deployment steps are part of `scripts/lifecycle.test.sh`.
+# Trial is covered separately, by `scripts/trial.test.sh` (run under
+# `make test-scripts`, not by this workflow).
 #
 # `.github/workflows/` is template-owned (.template-owned), so every instance
 # inherits this file unchanged and check-template rejects removing it. In an

@@ -54,6 +54,16 @@ it at setup time (`Makefile:71`). Fix: `brew install fswatch`.
 
 The submodule is empty (`scripts/lib.sh:20`). Run `make init`.
 
+### `instance.yaml: yaml: unmarshal errors: line N: field flavor not found in type main.Instance`
+
+An instance created before this template dropped per-instance license
+products still has a `flavor:` line in `instance.yaml`. The template no
+longer has that field, so once `make template-sync` pulls in the change,
+`flavor:` is an unknown key and every CLI call that reads `instance.yaml`
+refuses it (`scripts/cli/instance.go`, `Parse`; `scripts/cli/get.go:37` lists
+the keys it does accept). Fix: delete the `flavor:` line from `instance.yaml`
+and commit.
+
 ## Running the stack
 
 ### Port 8080 is already in use, or another checkout's stack is running
