@@ -5,8 +5,9 @@
 # The scratch instance holds this repository's scripts/, a stand-in
 # core/scripts/deploy/db-bootstrap.sql, and deploy/prod/ with host.env,
 # config/margince.yaml and secrets. Each release is rendered into
-# <srv>/releases/<v>/, the layout the server uses, with <srv>/shared/data.env
-# beside it, so the compose file's ../../shared/data.env resolves.
+# <tmp>/r/<v>/ and then installed the way the adapter uploads it: release/ to
+# <srv>/releases/<v>/, shared/ to <srv>/shared/, next to <srv>/shared/data.env,
+# so the compose file's ../../shared/ paths resolve.
 #
 # When `docker compose` is available, the rendered compose file is checked with
 # `docker compose config`, which reads files only: no daemon call, no network.
@@ -65,12 +66,23 @@ MARGINCE_REDIS=redis:6379
 EOF
 chmod 600 "$SRV/shared/data.env"
 
-# render <out> [VAR=value...] — run render.sh with extra environment; output
-# (stdout and stderr) in $TMP/out; prints the exit code.
+# rendered <release-dir> — the render.sh output directory for a release.
+rendered() { printf '%s/r/%s' "$TMP" "$(basename "$1")"; }
+
+# render <release-dir> [VAR=value...] — run render.sh with extra environment
+# into $(rendered <release-dir>); on success install release/ at <release-dir>
+# and shared/ in $SRV/shared/. Output (stdout and stderr) in $TMP/out; prints
+# the exit code. An empty <release-dir> passes no output directory.
 render() {
-  local out="$1"; shift
-  local rc=0
+  local dest="$1"; shift
+  local rc=0 out=""
+  [ -z "$dest" ] || out="$(rendered "$dest")"
   (cd "$INST" && env "$@" bash scripts/deploy/host/render.sh "$out") > "$TMP/out" 2>&1 || rc=$?
+  if [ "$rc" = 0 ] && [ ! -e "$dest" ]; then
+    mkdir -p "$dest"
+    cp -Rp "$out/release/." "$dest/"
+    cp -Rp "$out/shared/." "$SRV/shared/"
+  fi
   printf '%s' "$rc"
 }
 
@@ -89,21 +101,26 @@ no_secret_printed() {
 OUT="$SRV/releases/v1.0.0"
 rc="$(render "$OUT")"
 if [ "$rc" = 0 ]; then ok "render succeeds"; else fail "render succeeds (rc=$rc): $(cat "$TMP/out")"; fi
-for f in compose.yaml Caddyfile config/margince.yaml .env compose.env db-bootstrap.sql db-init.sh; do
-  if [ -f "$OUT/$f" ]; then ok "the release holds $f"; else fail "the release holds $f"; fi
+R1="$(rendered "$OUT")"
+listing="$(cd "$R1" && find . -type f | sort | tr '\n' ' ')"
+expected="./release/.env ./release/compose.env ./release/compose.yaml ./release/config/margince.yaml ./shared/caddy/Caddyfile ./shared/db-bootstrap.sql ./shared/db-init.sh "
+if [ "$listing" = "$expected" ]; then ok "the output has release/ and shared/ with exactly the expected files"; else fail "the output has release/ and shared/ with exactly the expected files: $listing"; fi
+if [ "$(mode_of "$R1/release/.env")" = 600 ]; then ok ".env has mode 600"; else fail ".env has mode 600 (got $(mode_of "$R1/release/.env"))"; fi
+for f in release/compose.yaml release/config/margince.yaml release/compose.env shared/caddy/Caddyfile shared/db-bootstrap.sql; do
+  if [ "$(mode_of "$R1/$f")" = 644 ]; then ok "$f has mode 644"; else fail "$f has mode 644 (got $(mode_of "$R1/$f"))"; fi
 done
-if [ "$(mode_of "$OUT/.env")" = 600 ]; then ok ".env has mode 600"; else fail ".env has mode 600 (got $(mode_of "$OUT/.env"))"; fi
-for f in compose.yaml Caddyfile config/margince.yaml compose.env db-bootstrap.sql; do
-  if [ "$(mode_of "$OUT/$f")" = 644 ]; then ok "$f has mode 644"; else fail "$f has mode 644 (got $(mode_of "$OUT/$f"))"; fi
+for d in . release release/config shared shared/caddy; do
+  if [ "$(mode_of "$R1/$d")" = 755 ]; then ok "directory $d has mode 755"; else fail "directory $d has mode 755 (got $(mode_of "$R1/$d"))"; fi
 done
-if [ "$(mode_of "$OUT/db-init.sh")" = 755 ]; then ok "db-init.sh has mode 755"; else fail "db-init.sh has mode 755 (got $(mode_of "$OUT/db-init.sh"))"; fi
-if cmp -s "$OUT/compose.yaml" "$SCRIPT_DIR/deploy/host/compose.yaml" && cmp -s "$OUT/Caddyfile" "$SCRIPT_DIR/deploy/host/Caddyfile"; then
-  ok "compose.yaml and Caddyfile are copied unchanged"
+if [ "$(mode_of "$R1/shared/db-init.sh")" = 755 ]; then ok "db-init.sh has mode 755"; else fail "db-init.sh has mode 755 (got $(mode_of "$R1/shared/db-init.sh"))"; fi
+if cmp -s "$R1/release/compose.yaml" "$SCRIPT_DIR/deploy/host/compose.yaml" && cmp -s "$R1/shared/caddy/Caddyfile" "$SCRIPT_DIR/deploy/host/Caddyfile" \
+    && cmp -s "$R1/shared/db-init.sh" "$SCRIPT_DIR/deploy/host/db-init.sh"; then
+  ok "compose.yaml, Caddyfile and db-init.sh are copied unchanged"
 else
-  fail "compose.yaml and Caddyfile are copied unchanged"
+  fail "compose.yaml, Caddyfile and db-init.sh are copied unchanged"
 fi
 if cmp -s "$OUT/config/margince.yaml" "$INST/deploy/prod/config/margince.yaml"; then ok "config/margince.yaml comes from DEPLOY_DIR"; else fail "config/margince.yaml comes from DEPLOY_DIR"; fi
-if cmp -s "$OUT/db-bootstrap.sql" "$INST/core/scripts/deploy/db-bootstrap.sql"; then ok "db-bootstrap.sql comes from core"; else fail "db-bootstrap.sql comes from core"; fi
+if cmp -s "$R1/shared/db-bootstrap.sql" "$INST/core/scripts/deploy/db-bootstrap.sql"; then ok "db-bootstrap.sql comes from core"; else fail "db-bootstrap.sql comes from core"; fi
 no_secret_printed "a successful render"
 
 if grep -qxF "MARGINCE_LICENSE=$LICENSE_VALUE" "$OUT/.env"; then
@@ -133,7 +150,7 @@ if [ "$(grep -c '^MARGINCE_LICENSE=' "$OUT/.env")" = 1 ]; then ok "each name is 
 
 # --- the output directory ---
 rc="$(render "$OUT")"
-if [ "$rc" != 0 ] && grep -q "$OUT" "$TMP/out"; then ok "a non-empty output directory is refused"; else fail "a non-empty output directory is refused (rc=$rc): $(cat "$TMP/out")"; fi
+if [ "$rc" != 0 ] && grep -q "$R1" "$TMP/out"; then ok "a non-empty output directory is refused"; else fail "a non-empty output directory is refused (rc=$rc): $(cat "$TMP/out")"; fi
 rc="$(render "")"
 if [ "$rc" != 0 ]; then ok "a missing output directory argument is refused"; else fail "a missing output directory argument is refused"; fi
 
@@ -142,7 +159,7 @@ OUT2="$SRV/releases/missing"
 rc="$(render "$OUT2" -u MARGINCE_ADMIN_PASSWORD)"
 if [ "$rc" = 1 ] && grep -q 'MARGINCE_ADMIN_PASSWORD' "$TMP/out"; then ok "a missing secret exits 1 naming it"; else fail "a missing secret exits 1 naming it (rc=$rc): $(cat "$TMP/out")"; fi
 no_secret_printed "a missing secret"
-if [ -e "$OUT2/.env" ]; then fail "a failed render leaves no .env"; else ok "a failed render leaves no .env"; fi
+if [ -e "$(rendered "$OUT2")" ]; then fail "a failed render leaves no output directory"; else ok "a failed render leaves no output directory"; fi
 rc="$(render "$OUT2" MARGINCE_ADMIN_PASSWORD=)"
 if [ "$rc" = 1 ] && grep -q 'MARGINCE_ADMIN_PASSWORD' "$TMP/out"; then ok "an empty secret exits 1 naming it"; else fail "an empty secret exits 1 naming it (rc=$rc)"; fi
 
@@ -154,7 +171,14 @@ if [ "$rc" = 1 ] && grep -q 'MARGINCE_ADMIN_PASSWORD' "$TMP/out" && ! grep -q 'l
 else
   fail "a value with a newline is refused naming the variable, not the value (rc=$rc): $(cat "$TMP/out")"
 fi
-if [ -e "$OUT2/.env" ]; then fail "a refused newline leaves no .env"; else ok "a refused newline leaves no .env"; fi
+if [ -e "$(rendered "$OUT2")" ]; then fail "a refused newline leaves no output directory"; else ok "a refused newline leaves no output directory"; fi
+rc="$(render "$OUT2" "MARGINCE_ADMIN_PASSWORD=cr1$(printf '\r')cr2-secret")"
+if [ "$rc" = 1 ] && grep -q 'MARGINCE_ADMIN_PASSWORD' "$TMP/out" && ! grep -q 'cr2-secret\|cr1' "$TMP/out"; then
+  ok "a value with a carriage return is refused naming the variable, not the value"
+else
+  fail "a value with a carriage return is refused naming the variable, not the value (rc=$rc): $(cat "$TMP/out")"
+fi
+if [ -e "$(rendered "$OUT2")" ]; then fail "a refused carriage return leaves no output directory"; else ok "a refused carriage return leaves no output directory"; fi
 
 # --- the secrets file ---
 cp "$INST/deploy/prod/secrets" "$TMP/secrets.bak"
@@ -259,8 +283,8 @@ EOF
 chmod +x "$TMP/pgbin/psql"
 rc=0
 ( set -a; . "$SRV/shared/data.env"; set +a
-  PATH="$TMP/pgbin:$PATH" STUB_PSQL_LOG="$TMP/psql.log" MARGINCE_BOOTSTRAP_SQL="$OUT/db-bootstrap.sql" \
-    sh "$OUT/db-init.sh" ) > "$TMP/out" 2>&1 || rc=$?
+  PATH="$TMP/pgbin:$PATH" STUB_PSQL_LOG="$TMP/psql.log" MARGINCE_BOOTSTRAP_SQL="$SRV/shared/db-bootstrap.sql" \
+    sh "$SRV/shared/db-init.sh" ) > "$TMP/out" 2>&1 || rc=$?
 if [ "$rc" = 0 ] && grep -qx 'owner=0123456789abcdef0123456789abcdef app=fedcba9876543210fedcba9876543210' "$TMP/psql.log"; then
   ok "db-init.sh takes the role passwords from data.env's DSNs"
 else
@@ -278,8 +302,41 @@ else
   ok "db-init.sh puts no password on a command line or in its output"
 fi
 rc=0
-( unset MARGINCE_DSN; MARGINCE_OWNER_DSN=x sh "$OUT/db-init.sh" ) > "$TMP/out" 2>&1 || rc=$?
+( unset MARGINCE_DSN; MARGINCE_OWNER_DSN=x sh "$SRV/shared/db-init.sh" ) > "$TMP/out" 2>&1 || rc=$?
 if [ "$rc" = 1 ]; then ok "db-init.sh fails without the DSNs"; else fail "db-init.sh fails without the DSNs (rc=$rc)"; fi
+
+# route_check — run the Caddyfile on a private Docker network (no internet)
+# with two stand-in upstreams named api and web, both `caddy respond` from
+# the local caddy:2 image, and check which one answers each path.
+route_check() {
+  local net="render-test-$$-$RANDOM" c path want got
+  local started=""
+  docker network create --internal "$net" >/dev/null || { fail "create a test network"; return; }
+  for c in api web; do
+    docker run -d --rm --name "$net-$c" --network "$net" --network-alias "$c" caddy:2 \
+      caddy respond --listen :8080 --body "$c" >/dev/null && started="$started $net-$c"
+  done
+  docker run -d --rm --name "$net-front" --network "$net" --network-alias front -e HOST_DOMAIN=http://front \
+    -v "$SRV/shared/caddy:/etc/caddy:ro" caddy:2 >/dev/null && started="$started $net-front"
+  # route <path> — the body that answers <path>, or the status for a 404.
+  route() {
+    docker run --rm --network "$net" caddy:2 sh -c \
+      'out="$(wget -q -O - "http://front$1" 2>&1)" && printf "%s" "$out" || { case "$out" in *404*) printf 404 ;; *) printf "error: %s" "$out" ;; esac; }' _ "$1"
+  }
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(route /v1/x)" = api ] && break; sleep 1; done
+  for pair in /v1:api /v1/auth/capabilities:api /oauth/authorize:api /mcp:api /mcp/x:api \
+      /.well-known/oauth-authorization-server:api /.well-known/oauth-protected-resource/mcp:api \
+      /webhooks/gmail:api /webhooks/graph:api \
+      /:web /v1x:web /mcpx:web /oauthx:web /.well-known/other:web /webhooks/gmailx:web /contacts/1:web \
+      /healthz:404 /readyz:404 /metrics:404 /metrics/x:404; do
+    path="${pair%:*}"; want="${pair##*:}"
+    got="$(route "$path")"
+    if [ "$got" = "$want" ]; then ok "Caddy routes $path to $want"; else fail "Caddy routes $path to $want (got '$got')"; fi
+  done
+  # shellcheck disable=SC2086 # the names contain no spaces
+  docker rm -f $started >/dev/null 2>&1 || true
+  docker network rm "$net" >/dev/null 2>&1 || true
+}
 
 # --- the compose file and the Caddyfile, when Docker is here ---
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -309,6 +366,41 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   else
     fail "the license from .env reaches the api unchanged"
   fi
+  # web holds no variable from .env or data.env; the worker holds no owner
+  # DSN, bootstrap admin password or superuser password.
+  web_json="$(sed -n '/^    "web": {/,/^    }/p' "$TMP/config.json")"
+  if [ -n "$web_json" ] && ! printf '%s' "$web_json" | grep -qE '"environment"|MARGINCE_|PASSWORD|DSN|env_file'; then
+    ok "web has no environment and no env_file"
+  else
+    fail "web has no environment and no env_file: $web_json"
+  fi
+  worker_json="$(sed -n '/^    "worker": {/,/^    }/p' "$TMP/config.json")"
+  for v in MARGINCE_ADMIN_PASSWORD MARGINCE_OWNER_DSN POSTGRES_PASSWORD; do
+    if printf '%s' "$worker_json" | grep -qF "\"$v\": \"\""; then ok "the worker's $v is empty"; else fail "the worker's $v is empty"; fi
+  done
+  api_json="$(sed -n '/^    "api": {/,/^    }/p' "$TMP/config.json")"
+  if printf '%s' "$api_json" | grep -qF "\"MARGINCE_ADMIN_PASSWORD\": \"$ADMIN_VALUE\""; then ok "the api keeps MARGINCE_ADMIN_PASSWORD"; else fail "the api keeps MARGINCE_ADMIN_PASSWORD"; fi
+
+  # postgres and caddy: the same definition in every release, so `up` from a
+  # new release directory (or a rollback) does not recreate them.
+  dc -f "$OUT4/compose.yaml" --env-file "$OUT4/compose.env" config --format json > "$TMP/config4.json" 2>/dev/null || true
+  for svc in postgres caddy redis; do
+    a="$(sed -n "/^    \"$svc\": {/,/^    }/p" "$TMP/config.json")"
+    b="$(sed -n "/^    \"$svc\": {/,/^    }/p" "$TMP/config4.json")"
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "$svc is defined the same in two releases"; else fail "$svc is defined the same in two releases"; fi
+  done
+  if sed -n '/^    "postgres": {/,/^    }/p' "$TMP/config.json" | grep -qF "$SRV/shared/db-init.sh" \
+      && sed -n '/^    "caddy": {/,/^    }/p' "$TMP/config.json" | grep -qF "\"source\": \"$SRV/shared/caddy\""; then
+    ok "postgres and caddy mount from shared/"
+  else
+    fail "postgres and caddy mount from shared/"
+  fi
+  if sed -n '/^    "postgres": {/,/^    }/p;/^    "caddy": {/,/^    }/p' "$TMP/config.json" | grep -qF "$SRV/releases/"; then
+    fail "postgres and caddy mount nothing from the release directory"
+  else
+    ok "postgres and caddy mount nothing from the release directory"
+  fi
+
   dc -f "$OUT3/compose.yaml" --env-file "$OUT3/compose.env" config --format json > "$TMP/config3.json" 2>/dev/null || true
   if grep -qF "\"MARGINCE_DSN\": \"$EXT_DSN\"" "$TMP/config3.json" && ! grep -qF '"MARGINCE_DSN": "postgres://margince_app' "$TMP/config3.json"; then
     ok "an external release's app uses the external MARGINCE_DSN"
@@ -317,14 +409,15 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   fi
 
   if docker image inspect caddy:2 >/dev/null 2>&1; then
-    if docker run --rm --network none -e HOST_DOMAIN=crm.example.test -v "$OUT/Caddyfile:/etc/caddy/Caddyfile:ro" \
+    if docker run --rm --network none -e HOST_DOMAIN=crm.example.test -v "$SRV/shared/caddy:/etc/caddy:ro" \
         caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$TMP/out" 2>&1; then
       ok "caddy validate accepts the Caddyfile"
     else
       fail "caddy validate accepts the Caddyfile: $(tail -5 "$TMP/out")"
     fi
+    route_check
   else
-    echo "notice: caddy:2 is not in the local image store; the Caddyfile validation is skipped"
+    echo "notice: caddy:2 is not in the local image store; the Caddyfile validation and routing checks are skipped"
   fi
 else
   echo "notice: docker compose is not available; the compose file checks are skipped"
@@ -332,7 +425,7 @@ fi
 
 # --- the Caddyfile's routes ---
 CF="$SCRIPT_DIR/deploy/host/Caddyfile"
-for p in '{$HOST_DOMAIN}' '/v1*' '/oauth*' '/.well-known*' '/mcp*' 'dynamic a api 8080' 'dynamic a web 8080' '/healthz' '/readyz' '/metrics'; do
+for p in '{$HOST_DOMAIN}' ' /v1 /v1/* /oauth/* /mcp /mcp/* ' '/.well-known/oauth-authorization-server*' '/.well-known/oauth-protected-resource*' 'dynamic a api 8080' 'dynamic a web 8080' '/healthz' '/readyz' '/metrics'; do
   if grep -qF -- "$p" "$CF"; then ok "the Caddyfile names $p"; else fail "the Caddyfile names $p"; fi
 done
 

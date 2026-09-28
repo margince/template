@@ -2,18 +2,29 @@
 # Section 9.6).
 #
 # Run from a release directory $HOST_DIR/releases/<v>/, which
-# scripts/deploy/host/render.sh builds:
+# scripts/deploy/host/render.sh builds (with $HOST_DIR/shared/):
 #
 #   docker compose -p margince-<name> --env-file compose.env up -d --remove-orphans
 #
-# Files:
-#   .env                 read by the api, web and worker containers only, with
+# Files in the release directory:
+#   .env                 read by the api and worker containers only, with
 #                        `format: raw`: every value reaches the container exactly
 #                        as written. Never an interpolation source: the Compose
 #                        dotenv parser rejects a value that starts with a quote.
 #   compose.env          the interpolation variables below; no secret.
-#   ../../shared/data.env  $HOST_DIR/shared/data.env, generated once on the
-#                        server and kept across releases (mode 600):
+#   config/margince.yaml mounted read-only into the api and worker.
+#
+# Files in ../../shared/ ($HOST_DIR/shared/), the same for every release:
+#   db-init.sh, db-bootstrap.sql   the postgres first-start bootstrap
+#   caddy/Caddyfile                the proxy configuration
+# postgres and caddy mount only these and data.env, so their definitions do
+# not change between releases and a deploy or a rollback does not recreate
+# them. A changed Caddyfile is applied with
+#   docker compose ... exec caddy caddy reload --config /etc/caddy/Caddyfile
+# The caddy/ directory is mounted, not the file, so a Caddyfile replaced by a
+# rename is still the file the container sees.
+#   data.env             generated once on the server and kept across releases
+#                        (mode 600):
 #                          POSTGRES_PASSWORD=<hex>
 #                          MARGINCE_OWNER_DSN=postgres://margince_owner:<hex>@postgres:5432/margince
 #                          MARGINCE_DSN=postgres://margince_app:<hex>@postgres:5432/margince
@@ -34,7 +45,8 @@
 # postgres runs core's db-bootstrap.sql once, on an empty volume (db-init.sh),
 # with the role passwords from data.env's DSNs. The api holds the owner DSN
 # (its entrypoint migrates as the owner, then serves as the app role). The
-# worker holds the app DSN only. Neither holds the superuser password.
+# worker holds the app DSN only, and not the bootstrap admin password. Neither
+# holds the superuser password. web holds no variable at all.
 #
 # Order (core/docs/deployment.md, "Order of operations"): postgres and redis
 # healthy, then api, then worker and web once the api answers /readyz.
@@ -92,6 +104,7 @@ services:
       MARGINCE_CONFIG: /app/config/margince.yaml
       # The worker runs no migrations and holds no owner credential.
       MARGINCE_OWNER_DSN: ""
+      MARGINCE_ADMIN_PASSWORD: ""
       POSTGRES_PASSWORD: ""
     depends_on:
       api:
@@ -101,9 +114,8 @@ services:
     image: ${IMAGE_WEB:?IMAGE_WEB is not set}
     restart: unless-stopped
     logging: *logging
-    env_file:
-      - path: .env
-        format: raw
+    # No env_file: nginx serves the SPA and reads no variable (core lists
+    # none for web), so web holds no secret.
     depends_on:
       api:
         condition: service_healthy
@@ -117,8 +129,8 @@ services:
       - path: ../../shared/data.env
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db-init.sh:/docker-entrypoint-initdb.d/10-margince.sh:ro
-      - ./db-bootstrap.sql:/margince/db-bootstrap.sql:ro
+      - ../../shared/db-init.sh:/docker-entrypoint-initdb.d/10-margince.sh:ro
+      - ../../shared/db-bootstrap.sql:/margince/db-bootstrap.sql:ro
     healthcheck:
       # Over TCP: during initialization the server listens on the socket only.
       test: ["CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-U", "postgres"]
@@ -151,7 +163,7 @@ services:
     environment:
       HOST_DOMAIN: ${HOST_DOMAIN:?HOST_DOMAIN is not set}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../shared/caddy:/etc/caddy:ro
       - caddydata:/data
       - caddyconfig:/config
     depends_on:

@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# deploy/host/render.sh — build one release directory of the host adapter
-# locally, for upload to $HOST_DIR/releases/<v>/ (design Section 9.6).
+# deploy/host/render.sh — build the files of one host adapter deployment
+# locally (design Section 9.6), in two parts:
+#
+#   <out-dir>/release/  upload to $HOST_DIR/releases/<v>/
+#   <out-dir>/shared/   upload to $HOST_DIR/shared/ (next to data.env)
 #
 # Reads DEPLOY_DIR (deploy/<env>/), INSTANCE_NAME, IMAGE_API, IMAGE_WEB and
 # IMAGE_WORKER, which scripts/deploy.sh exports, and the environment. Writes:
 #
-#   compose.yaml, Caddyfile   copied from scripts/deploy/host/
-#   db-init.sh                copied from scripts/deploy/host/ (mode 755)
-#   db-bootstrap.sql          copied from core/scripts/deploy/
-#   config/margince.yaml      copied from DEPLOY_DIR
-#   .env                      mode 600; read by the api, web and worker
-#                             containers (compose `format: raw`)
-#   compose.env               the compose interpolation variables; no secret
+#   release/compose.yaml          copied from scripts/deploy/host/
+#   release/config/margince.yaml  copied from DEPLOY_DIR
+#   release/.env                  mode 600; read by the api and worker
+#                                 containers (compose `format: raw`)
+#   release/compose.env           the compose interpolation variables; no secret
+#   shared/db-init.sh             copied from scripts/deploy/host/ (mode 755)
+#   shared/db-bootstrap.sql       copied from core/scripts/deploy/
+#   shared/caddy/Caddyfile        copied from scripts/deploy/host/
+#
+# The shared files are the only files the postgres and caddy services mount,
+# so a new release does not recreate them. A changed shared/caddy/Caddyfile
+# needs `caddy reload` in the running caddy container.
 #
 # .env holds one NAME=value line, written exactly, for:
 #   - each name in DEPLOY_DIR/secrets (blank lines and # comments skipped);
@@ -28,7 +36,8 @@
 # empty. HOST_DOMAIN, API_REPLICAS and WORKER_REPLICAS come from
 # DEPLOY_DIR/host.env (replicas default 1).
 #
-# A listed name without a value, or a value with a newline, exits 1 naming the
+# A listed name without a value, or a value with a newline or a carriage
+# return, exits 1 naming the
 # variable. No value is ever printed. On any failure the output directory is
 # removed again, so no partial .env remains.
 #
@@ -110,7 +119,7 @@ for name in $names; do
     continue
   fi
   case "$value" in
-    *$'\n'*) die "render: the value of $name contains a newline; a .env line cannot hold it" ;;
+    *$'\n'*|*$'\r'*) die "render: the value of $name contains a newline or a carriage return; a .env line cannot hold it" ;;
   esac
 done
 [ -z "$missing" ] || die "render: no value in the environment for:$missing (listed in $DEPLOY_DIR/secrets)"
@@ -126,8 +135,10 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
-mkdir -p "$out/config"
-chmod 755 "$out" "$out/config"
+rel="$out/release"
+shr="$out/shared"
+mkdir -p "$rel/config" "$shr/caddy"
+chmod 755 "$out" "$rel" "$rel/config" "$shr" "$shr/caddy"
 
 # generated_lines — the variables render.sh sets itself, NAME=value.
 generated_lines() {
@@ -150,18 +161,18 @@ generated_lines() {
     done
     has_name MARGINCE_PUBLIC_BASE_URL || printf '%s=%s\n' MARGINCE_PUBLIC_BASE_URL "https://$domain"
     generated_lines
-  } > "$out/.env"
+  } > "$rel/.env"
 )
-chmod 600 "$out/.env"
+chmod 600 "$rel/.env"
 
-generated_lines > "$out/compose.env"
-cp "$HOST_FILES/compose.yaml" "$out/compose.yaml"
-cp "$HOST_FILES/Caddyfile" "$out/Caddyfile"
-cp "$HOST_FILES/db-init.sh" "$out/db-init.sh"
-cp "$BOOTSTRAP_SQL" "$out/db-bootstrap.sql"
-cp "$DEPLOY_DIR/config/margince.yaml" "$out/config/margince.yaml"
-chmod 644 "$out/compose.env" "$out/compose.yaml" "$out/Caddyfile" "$out/db-bootstrap.sql" "$out/config/margince.yaml"
-chmod 755 "$out/db-init.sh"
+generated_lines > "$rel/compose.env"
+cp "$HOST_FILES/compose.yaml" "$rel/compose.yaml"
+cp "$DEPLOY_DIR/config/margince.yaml" "$rel/config/margince.yaml"
+cp "$HOST_FILES/Caddyfile" "$shr/caddy/Caddyfile"
+cp "$HOST_FILES/db-init.sh" "$shr/db-init.sh"
+cp "$BOOTSTRAP_SQL" "$shr/db-bootstrap.sql"
+chmod 644 "$rel/compose.env" "$rel/compose.yaml" "$rel/config/margince.yaml" "$shr/caddy/Caddyfile" "$shr/db-bootstrap.sql"
+chmod 755 "$shr/db-init.sh"
 
 if [ "$external" = 1 ]; then
   echo "render: $out (external database and Redis; COMPOSE_PROFILES empty)"

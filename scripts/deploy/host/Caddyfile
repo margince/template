@@ -4,14 +4,15 @@
 # core/docs/deployment.md, "Routing": one host for both services, because the
 # SPA calls /v1 same-origin and the MCP OAuth flow crosses api and web.
 #
-#   /healthz, /readyz, /metrics      404 here; they are for the server only
-#   /v1, /oauth, /.well-known, /mcp  api
-#   /webhooks/gmail, /webhooks/graph api (the provider calls them)
-#   every other path                 web
+#   /healthz, /readyz, /metrics         404 here; they are for the server only
+#   /v1, /v1/*, /oauth/*, /mcp, /mcp/*  api
+#   /.well-known/oauth-authorization-server*,
+#   /.well-known/oauth-protected-resource*  api (the MCP OAuth metadata)
+#   /webhooks/gmail, /webhooks/graph    api (the provider calls them)
+#   every other path                    web
 #
-# ACME HTTP-01 challenges under /.well-known/acme-challenge/ are answered by
-# Caddy itself before these routes, so the /.well-known prefix does not take
-# them from the certificate issuance.
+# Exact paths and slash-terminated prefixes, not bare prefixes: /v1x and /mcpx
+# are SPA paths, and /.well-known/acme-challenge/ is not the api's.
 #
 # `dynamic a` resolves the service name on each refresh, so requests are spread
 # over every replica that API_REPLICAS starts.
@@ -22,7 +23,7 @@
 		respond 404
 	}
 
-	@api path /v1* /oauth* /.well-known* /mcp* /webhooks/gmail /webhooks/gmail/* /webhooks/graph /webhooks/graph/*
+	@api path /v1 /v1/* /oauth/* /mcp /mcp/* /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource* /webhooks/gmail /webhooks/graph
 	handle @api {
 		reverse_proxy {
 			dynamic a api 8080 {
