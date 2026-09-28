@@ -416,6 +416,54 @@ else
 fi
 rm -rf "$K2DIR"
 
+# ── set_env_key never puts the generated value on a spawned process's argv ──
+#
+# The commented-KEY= rewrite branch of set_env_key used to run
+#   sed -i -e "s|...|KEY=value|" file
+# which puts the freshly generated secret on sed's own command line — visible
+# to any other user on the machine with `ps` for as long as that process runs.
+# It now rewrites with awk, which reads the key and value from its own
+# environment (ENVIRON), never from argv. A PATH shim in front of the real sed
+# and awk logs every argv either is called with; a regression shows up as the
+# generated value appearing in that log.
+ARGV_TMP="$(mktemp -d)"
+ARGV_LOG="$ARGV_TMP/argv.log"
+: > "$ARGV_LOG"
+SHIM="$ARGV_TMP/shim"
+mkdir -p "$SHIM"
+for tool in sed awk; do
+  real="$(command -v "$tool")"
+  cat >"$SHIM/$tool" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$ARGV_LOG"
+exec "$real" "\$@"
+SH
+  chmod +x "$SHIM/$tool"
+done
+
+ADIR="$ARGV_TMP/inst"
+mkdir -p "$ADIR"
+cat >"$ADIR/margince.env" <<'ENV'
+# Margince settings.
+# MARGINCE_KEYVAULT_ROOT_KEY=
+ENV
+cp "$KIT/setup.command" "$ADIR/Setup.command"
+( cd "$ADIR" && PATH="$SHIM:$PATH" bash "./Setup.command" --no-prompt >/dev/null 2>&1 </dev/null )
+avault="$(env_set "$ADIR" MARGINCE_KEYVAULT_ROOT_KEY)"
+
+if [[ "$avault" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+  ok "set_env_key still rewrites a commented KEY= line to the generated value"
+else
+  fail "set_env_key's rewrite of a commented MARGINCE_KEYVAULT_ROOT_KEY= line produced \"$avault\", wanted base64 of 32 bytes"
+fi
+if [ -n "$avault" ] && grep -qF -- "$avault" "$ARGV_LOG" 2>/dev/null; then
+  fail "the generated MARGINCE_KEYVAULT_ROOT_KEY value appeared on a spawned sed/awk process's argv:
+$(sed "s|$avault|<value>|" "$ARGV_LOG")"
+else
+  ok "the generated value never appears on a spawned sed/awk process's argv"
+fi
+rm -rf "$ARGV_TMP"
+
 # The openssl-missing note has to grow with the key it now also leaves unset,
 # or a folder without openssl is told to fix two keys and ships a third that
 # silently answers 503.

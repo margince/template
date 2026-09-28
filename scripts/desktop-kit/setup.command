@@ -104,10 +104,20 @@ set_env_key() {
     return 1
   fi
   if grep -q "^[[:space:]]*#[[:space:]]*$key=" "$file" 2>/dev/null; then
-    # A literal replacement: the value may carry / and + from base64, so the
-    # separator has to be something base64 cannot produce.
-    sed -i.bak -e "s|^[[:space:]]*#[[:space:]]*$key=.*|$key=$value|" "$file"
-    rm -f "$file.bak"
+    # A literal replacement, and the value never sits on a spawned process's
+    # command line (visible to any other user with `ps` for the life of that
+    # process): awk reads key and value from its own environment (ENVIRON)
+    # rather than from argv, writes to a temp file, then the temp file is
+    # renamed over the original.
+    local tmp="$file.tmp.$$" mode
+    mode="$(stat -f '%OLp' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null || echo 600)"
+    SET_ENV_KEY="$key" SET_ENV_VALUE="$value" awk '
+      BEGIN { k = ENVIRON["SET_ENV_KEY"]; v = ENVIRON["SET_ENV_VALUE"] }
+      $0 ~ ("^[[:space:]]*#[[:space:]]*" k "=") { print k "=" v; next }
+      { print }
+    ' "$file" >"$tmp"
+    chmod "$mode" "$tmp"
+    mv -f "$tmp" "$file"
   else
     printf '%s=%s\n' "$key" "$value" >>"$file"
   fi

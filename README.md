@@ -33,6 +33,9 @@ make local-admin-password
 ```
 
 `make local-down` stops it; `make local-down WIPE=1` also removes its data.
+Delete `.local/` only with `make local-down WIPE=1`; deleting it by hand
+leaves the data volumes, and the next `local-up` generates new database
+passwords that the old database rejects.
 See [docs/deploy.md](docs/deploy.md) for a real deployment with `make
 deploy-init` and the `host` adapter.
 

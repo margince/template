@@ -27,6 +27,10 @@
 #   admin-password  Prints the generated admin password from
 #                   .local/shared/instance.env. The only command that prints it.
 #
+# Delete .local/ only with `make local-down WIPE=1`; deleting it by hand
+# leaves the data volumes, and the next local-up generates new database
+# passwords that the old database rejects.
+#
 # Mode: MARGINCE_ENV=test (secrets lists MARGINCE_ENV), unless MARGINCE_LICENSE
 # is set in the environment; then secrets lists MARGINCE_LICENSE and the
 # stack runs in production mode with that license. The stack always uses its

@@ -303,7 +303,7 @@ host-admin-password: ## Print the generated first admin password of a host envir
 ## machine with the host adapter's compose and Caddy files: https://localhost,
 ## PostgreSQL, Redis, the generated keys and admin password. State is kept in
 ## .local/ (ignored by git); a second run keeps the keys, password and data.
-local-up: ## Run a built release on https://localhost (VERSION=; MARGINCE_LICENSE= for production mode)
+local-up: ## Run a built release on https://localhost (VERSION=; MARGINCE_LICENSE in the environment for production mode)
 	@bash scripts/local.sh up '$(subst ','\'',$(value VERSION))'
 
 local-down: ## Stop the local stack; WIPE=1 also removes its data and .local/
