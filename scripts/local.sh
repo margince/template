@@ -68,21 +68,38 @@ own_caddy_running() {
   [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" --filter label=com.docker.compose.service=caddy 2>/dev/null)" ]
 }
 
-# check_ports — ports 80 and 443 are free, or held by this project's caddy.
+# Internal, for local.test.sh only: the ports and the lsof command.
+PORTS="${LOCAL_PORTS:-$PORTS}"
+LSOF="${LOCAL_LSOF:-lsof}"
+
+# port_open <port> — 0 when something accepts a TCP connection on
+# 127.0.0.1:<port> (bash's /dev/tcp; bounded by `timeout` when it exists).
+port_open() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 3 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$1" 2>/dev/null
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+  fi
+}
+
+# check_ports — the ports are free, or held by this project's caddy. With
+# lsof the failure names the process; without it, a port that accepts a
+# connection is reported busy by number only.
 check_ports() {
   local port out busy=""
-  if ! command -v lsof >/dev/null 2>&1; then
-    say "lsof not found; not checking that ports $PORTS are free"
-    return 0
-  fi
   own_caddy_running && return 0
   for port in $PORTS; do
-    if out="$(lsof -nP "-iTCP:$port" -sTCP:LISTEN 2>/dev/null)" && [ -n "$out" ]; then
-      busy="$busy
+    if command -v "$LSOF" >/dev/null 2>&1; then
+      if out="$("$LSOF" -nP "-iTCP:$port" -sTCP:LISTEN 2>/dev/null)" && [ -n "$out" ]; then
+        busy="$busy
 port $port is in use by: $(printf '%s\n' "$out" | awk 'NR > 1 { printf "%s%s (pid %s)", sep, $1, $2; sep = ", " }')"
+      fi
+    elif port_open "$port"; then
+      busy="$busy
+port $port is in use (lsof is not installed, so the process cannot be named)"
     fi
   done
-  [ -z "$busy" ] || die "local: make local-up needs ports 80 and 443:$busy
+  [ -z "$busy" ] || die "local: make local-up needs ports ${PORTS// / and }:$busy
 stop that process first (or its stack, for example with make local-down)"
 }
 

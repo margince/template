@@ -106,6 +106,39 @@ else
   ok "a busy port fails, naming the process, before anything starts"
 fi
 
+# --- without lsof: a port that accepts a connection fails, by number ---
+# Two free high ports (LOCAL_PORTS and LOCAL_LSOF are local.sh's internal
+# test overrides); a real listener on the first one, on 127.0.0.1 only.
+reset
+read -r P1 P2 < <(python3 -c 'import socket
+s=[socket.socket() for _ in range(2)]
+[x.bind(("127.0.0.1",0)) for x in s]
+print(*[x.getsockname()[1] for x in s])')
+python3 -c 'import socket,sys,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(8)
+open(sys.argv[2], "w").close()
+time.sleep(60)' "$P1" "$TMP/listening" &
+LISTENER=$!
+for _ in $(seq 1 100); do [ -e "$TMP/listening" ] && break; sleep 0.05; done
+if run_make env LOCAL_LSOF=no-such-lsof LOCAL_PORTS="$P1 $P2" make local-up VERSION=v1.0.0; then
+  fail "local-up without lsof succeeded with port $P1 in use"
+elif [ -e "$L" ] || [ -n "$(compose_calls)" ]; then
+  fail "local-up without lsof and a busy port created .local/ or ran compose"
+elif ! grep -q "port $P1 is in use" "$TMP/out" || ! grep -q "lsof" "$TMP/out" || grep -q "port $P2 is in use" "$TMP/out"; then
+  fail "the busy-port failure without lsof does not name exactly port $P1 and lsof: $(cat "$TMP/out")"
+else
+  ok "without lsof, a busy port fails before anything starts, naming the port"
+fi
+kill "$LISTENER" 2>/dev/null || true
+wait "$LISTENER" 2>/dev/null || true
+reset
+if run_make env LOCAL_LSOF=no-such-lsof LOCAL_PORTS="$P1 $P2" make local-up VERSION=v1.0.0; then
+  ok "without lsof, free ports pass the check"
+else
+  fail "local-up without lsof failed with free ports: $(cat "$TMP/out")"
+fi
+
 # --- the first local-up ---
 reset
 export MARGINCE_DSN=postgres://x@ext/db MARGINCE_REDIS=ext:6379
