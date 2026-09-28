@@ -49,3 +49,7 @@
 # Trial bundles written by `make trial` (scripts/trial.sh). Each one holds a
 # license in its margince.env, so none is ever tracked.
 dist/
+
+# The local stack of make local-up (scripts/local.sh): generated keys, the
+# admin password and the rendered release files. Never tracked.
+/.local/

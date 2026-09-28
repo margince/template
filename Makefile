@@ -22,7 +22,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit new-instance deploy-init deploy host-bootstrap host-admin-password release license u u-fe u-check \
+	stage unstage compose watch new-unit new-instance deploy-init deploy host-bootstrap host-admin-password local-up local-down local-admin-password release license u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template check-public template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
@@ -299,6 +299,19 @@ host-bootstrap: ## Install Docker and Compose on a new server for a host environ
 host-admin-password: ## Print the generated first admin password of a host environment (ENV=)
 	@bash scripts/deploy/host/admin-password.sh '$(subst ','\'',$(value ENV))'
 
+## local-up — run the images of VERSION= (make package VERSION=<v>) on this
+## machine with the host adapter's compose and Caddy files: https://localhost,
+## PostgreSQL, Redis, the generated keys and admin password. State is kept in
+## .local/ (ignored by git); a second run keeps the keys, password and data.
+local-up: ## Run a built release on https://localhost (VERSION=; MARGINCE_LICENSE= for production mode)
+	@bash scripts/local.sh up '$(subst ','\'',$(value VERSION))'
+
+local-down: ## Stop the local stack; WIPE=1 also removes its data and .local/
+	@WIPE='$(subst ','\'',$(value WIPE))' bash scripts/local.sh down
+
+local-admin-password: ## Print the generated first admin password of the local stack
+	@bash scripts/local.sh admin-password
+
 license: ## Obtain a production license into a file (OUT=<file>); see docs/license.md
 	@test -n "$(OUT)" || { echo "license: pass OUT=<file>" >&2; exit 2; }
 	@bash scripts/license.sh production "$(OUT)"
@@ -441,6 +454,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/template-sync.test.sh
 	@bash scripts/new-instance.test.sh
 	@bash scripts/deploy-init.test.sh
+	@bash scripts/local.test.sh
 	@bash scripts/deploy.test.sh
 	@bash scripts/license.test.sh
 	@bash scripts/release.test.sh

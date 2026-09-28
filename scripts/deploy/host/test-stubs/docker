@@ -62,6 +62,7 @@ case "$op" in
   compose-version)
     v="$(cat "$S/compose-version" 2>/dev/null || echo 2.30.0)"
     case "$all" in *--short*) echo "$v" ;; *) echo "Docker Compose version v$v" ;; esac ;;
+  ps) if [ -f "$S/docker-ps" ]; then cat "$S/docker-ps"; fi ;;
   compose-ps)
     if [ -f "$S/ps-services" ]; then cat "$S/ps-services"; else printf 'api\nweb\nworker\ncaddy\n'; fi ;;
   *) ;;

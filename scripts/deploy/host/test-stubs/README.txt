@@ -28,7 +28,8 @@ docker   Appends each call's arguments to docker.log (one line). Operations:
          unset, $STUB_STATE/home-docker, never the real home directory).
          `compose version` prints $STUB_STATE/compose-version (default
          2.30.0). `compose ps` prints $STUB_STATE/ps-services (default
-         api web worker caddy, one per line).
+         api web worker caddy, one per line). `ps` (docker ps) prints
+         $STUB_STATE/docker-ps (default nothing).
 curl     Appends its arguments to curl.log and prints $STUB_STATE/curl-code
          (default 200). $STUB_STATE/fail.curl prints 000 and exits 7.
 timeout  Drops the duration and runs the rest.
