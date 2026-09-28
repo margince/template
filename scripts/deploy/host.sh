@@ -9,16 +9,21 @@
 #   check      host.env has HOST_SSH and HOST_DOMAIN; config/margince.yaml
 #              and secrets exist. No connection.
 #   preflight  The release files can be built (every name in secrets has a
-#              value); HOST_KNOWN_HOSTS is set; SSH connects; the server has
+#              value); in production mode (MARGINCE_ENV, when secrets lists
+#              it, is not dev or test) secrets lists MARGINCE_LICENSE;
+#              HOST_KNOWN_HOSTS is set; SSH connects; the server has
 #              Docker, `timeout`, and Docker Compose 2.30.0 or later; the
 #              server can log in to the registry and read the three image
 #              manifests. Nothing is uploaded.
 #   apply      Records the release `current` points to in
 #              $DEPLOY_STATE_DIR/previous (empty when there is none); builds
 #              the files with host/render.sh; uploads release/ to
-#              $HOST_DIR/releases/<v>/ and shared/ into $HOST_DIR/shared/
-#              (data.env is never replaced; it is created once, mode 600,
-#              when absent); logs in to the registry; runs compose pull and
+#              $HOST_DIR/releases/<v>/ and shared/ into $HOST_DIR/shared/;
+#              creates data.env (database passwords) and instance.env (vault,
+#              connector state and webhook keys, and the admin password
+#              unless secrets lists MARGINCE_ADMIN_PASSWORD) with
+#              host/gen-env.sh when absent: once, mode 600, never replaced,
+#              before `up`; logs in to the registry; runs compose pull and
 #              `up -d --remove-orphans`; installs a changed Caddyfile (staged
 #              as caddy/Caddyfile.new until `up` succeeds) and reloads caddy;
 #              points `current` at the release (new link renamed over it);
@@ -85,12 +90,23 @@ setting() {
 load() {
   TARGET="$(host_ssh_target)" || exit 1
   DOMAIN="$(host_env_get HOST_DOMAIN)" || fail "HOST_DOMAIN is not set in $DEPLOY_DIR/host.env"
-  HD="$(setting HOST_DIR "/opt/margince/$INSTANCE_NAME")"
-  HD="${HD%/}"
-  [[ "$HD" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
-    fail "HOST_DIR '$HD' must be an absolute path of letters, digits, '.', '_', '-' and '/'"
-  case "/$HD/" in */../*|*/./*) fail "HOST_DIR '$HD' must not contain . or .. components" ;; esac
+  HD="$(host_dir "$INSTANCE_NAME")" || exit 1
   PROJECT="margince-$INSTANCE_NAME"
+}
+
+# license_check — in production mode, secrets must list MARGINCE_LICENSE
+# (render.sh has already checked that every listed name has a value). The
+# containers get only what secrets lists, so MARGINCE_ENV counts only when
+# secrets lists it; unset, it is production (core parses it fail-closed:
+# only dev and test are not production).
+license_check() {
+  local mode=production
+  if host_secrets_lists MARGINCE_ENV; then
+    case "${MARGINCE_ENV:-}" in dev|test) mode="${MARGINCE_ENV}" ;; esac
+  fi
+  [ "$mode" = production ] || return 0
+  if host_secrets_lists MARGINCE_LICENSE && [ -n "${MARGINCE_LICENSE:-}" ]; then return 0; fi
+  fail "$DEPLOY_ENV runs in production mode and needs MARGINCE_LICENSE: list it in deploy/$DEPLOY_ENV/secrets and set it (or set MARGINCE_ENV=test for a test environment)"
 }
 
 need_state() {
@@ -184,6 +200,7 @@ preflight() {
     fail "the release files for $DEPLOY_VERSION cannot be built (see above)"
   fi
   rm -rf "$tmp"
+  license_check
   connect
   host_ssh true || fail "cannot connect to $TARGET over SSH (check HOST_SSH, HOST_SSH_KEY, HOST_KNOWN_HOSTS)"
   host_ssh "docker version --format '{{.Server.Version}}'" >/dev/null ||
@@ -239,7 +256,7 @@ EOF_NAMES
 apply() {
   load
   connect
-  local v="$DEPLOY_VERSION" prev out up script res timeout_s
+  local v="$DEPLOY_VERSION" prev out up script res timeout_s gen_opt=""
   timeout_s="$(number HOST_APPLY_TIMEOUT 600)"
   is_release_version "$v" || fail "DEPLOY_VERSION '$v' is not a release version"
 
@@ -263,6 +280,8 @@ apply() {
   out="$(mktemp -d "$DEPLOY_STATE_DIR/release.XXXXXX")"
   render_into "$out" || { rm -rf "$out"; fail "the release files for $v cannot be built"; }
 
+  host_secrets_lists MARGINCE_ADMIN_PASSWORD && gen_opt=" --no-admin-password"
+
   up="$HD/.upload-$v"
   host_ssh "mkdir -p $(host_q "$HD/releases") $(host_q "$HD/shared/caddy") && rm -rf $(host_q "$up")" ||
     { rm -rf "$out"; fail "cannot prepare $HD on $TARGET"; }
@@ -273,10 +292,12 @@ apply() {
   rm -rf "$out"
 
   # Install the upload. The running release directory, when it is the one
-  # being redeployed, is moved to .replaced-<v> for the rollback. data.env:
-  # created once (noclobber), never replaced. A changed Caddyfile is staged as
-  # caddy/Caddyfile.new and renamed over Caddyfile after `up` succeeds; on a
-  # first deployment (no Caddyfile) it is installed at once.
+  # being redeployed, is moved to .replaced-<v> for the rollback. data.env
+  # and instance.env: created once by gen-env.sh (noclobber) before `up` and
+  # never replaced, so a failed apply leaves them for the next one. A changed
+  # Caddyfile is staged as caddy/Caddyfile.new and renamed over Caddyfile
+  # after `up` succeeds; on a first deployment (no Caddyfile) it is installed
+  # at once.
   script="set -e
 hd=$(host_q "$HD"); v=$(host_q "$v"); up=$(host_q "$up"); prev=$(host_q "$prev")
 chmod 600 \"\$up/release/.env\"
@@ -301,21 +322,25 @@ else
   echo caddy=staged
 fi
 if [ ! -e \"\$hd/shared/data.env\" ]; then
-  (
-    umask 077
-    set -C
-    pg=\$(od -An -tx1 -N24 /dev/urandom | tr -d ' \\n')
-    owner=\$(od -An -tx1 -N24 /dev/urandom | tr -d ' \\n')
-    app=\$(od -An -tx1 -N24 /dev/urandom | tr -d ' \\n')
-    for x in \"\$pg\" \"\$owner\" \"\$app\"; do [ \${#x} -eq 48 ] || exit 1; done
-    printf 'POSTGRES_PASSWORD=%s\\nMARGINCE_OWNER_DSN=postgres://margince_owner:%s@postgres:5432/margince\\nMARGINCE_DSN=postgres://margince_app:%s@postgres:5432/margince\\nMARGINCE_REDIS=redis:6379\\n' \"\$pg\" \"\$owner\" \"\$app\" > \"\$hd/shared/data.env\"
-  )
-  chmod 600 \"\$hd/shared/data.env\"
+  sh \"\$up/shared/gen-env.sh\" data \"\$hd/shared/data.env\"
   echo data=created
+fi
+if [ ! -e \"\$hd/shared/instance.env\" ]; then
+  sh \"\$up/shared/gen-env.sh\" instance$gen_opt \"\$hd/shared/instance.env\"
+  echo instance=created
 fi
 rm -rf \"\$up\""
   res="$(host_ssh "$script")" || fail "installing releases/$v on $TARGET failed"
   case "$res" in *data=created*) say "created $HD/shared/data.env (database passwords, mode 600)" ;; esac
+  case "$res" in
+    *instance=created*)
+      if [ -n "$gen_opt" ]; then
+        say "created $HD/shared/instance.env (vault, connector state and webhook keys, mode 600; the admin password comes from secrets)"
+      else
+        say "created $HD/shared/instance.env (vault, connector state and webhook keys, admin password, mode 600; make host-admin-password ENV=$DEPLOY_ENV prints the password)"
+      fi
+      ;;
+  esac
   say "uploaded $HD/releases/$v"
 
   case "$res" in *replaced=yes*) say "kept the running copy of $v as releases/.replaced-$v until the next deployment" ;; esac

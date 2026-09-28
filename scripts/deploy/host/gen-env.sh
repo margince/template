@@ -1,0 +1,117 @@
+#!/bin/sh
+# deploy/host/gen-env.sh — create one generated environment file of a host
+# adapter installation (design Sections 9.6 and 9.7), once.
+#
+# POSIX sh: it runs on the server (uploaded in shared/ and run by the apply
+# step's install script) and on the developer's machine (make local-up). It
+# needs /dev/urandom, od, tr, head and dd; openssl or base64 for the base64
+# keys.
+#
+# Kinds:
+#   data      the database passwords:
+#               POSTGRES_PASSWORD=<48 hex>
+#               MARGINCE_OWNER_DSN=postgres://margince_owner:<48 hex>@postgres:5432/margince
+#               MARGINCE_DSN=postgres://margince_app:<48 hex>@postgres:5432/margince
+#               MARGINCE_REDIS=redis:6379
+#   instance  the instance keys and the first admin password:
+#               MARGINCE_KEYVAULT_ROOT_KEY=<base64 of 32 random bytes>
+#               MARGINCE_CONNECTOR_STATE_KEY=<hex of 32 random bytes>
+#               MARGINCE_WEBHOOK_KEY=<base64 of 32 random bytes>
+#               MARGINCE_ADMIN_PASSWORD=<24 characters of [A-Za-z0-9]>
+#             --no-admin-password leaves out the last line (secrets lists
+#             MARGINCE_ADMIN_PASSWORD).
+#
+# The file is written only when it does not exist: umask 077 and noclobber
+# (set -C), so it has mode 600 and an existing file is never replaced, not
+# even by a concurrent run. An existing file is left as it is and the exit
+# status is 0. No value is printed or passed to another program's arguments.
+#
+# Exit status: 0 created or already present; 1 a value could not be
+# generated (nothing is written) or the file could not be created; 2 usage.
+#
+# Usage: sh gen-env.sh data <file>
+#        sh gen-env.sh instance [--no-admin-password] <file>
+set -eu
+
+usage() {
+  echo "usage: gen-env.sh data <file> | gen-env.sh instance [--no-admin-password] <file>" >&2
+  exit 2
+}
+
+kind="${1:-}"
+[ "$#" -ge 2 ] || usage
+shift
+admin=1
+case "$kind" in
+  data) [ "$#" -eq 1 ] || usage ;;
+  instance)
+    if [ "$1" = --no-admin-password ]; then admin=0; shift; fi
+    [ "$#" -eq 1 ] || usage
+    ;;
+  *) usage ;;
+esac
+file="$1"
+case "$file" in -*|'') usage ;; esac
+
+[ ! -e "$file" ] || exit 0
+
+LC_ALL=C
+export LC_ALL
+
+# hex <bytes> — <bytes> random bytes as lowercase hexadecimal.
+hex() {
+  od -An -tx1 -N"$1" /dev/urandom | tr -d ' \n'
+}
+
+# b64_32 — 32 random bytes as standard base64 (44 characters).
+b64_32() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 32 | tr -d '\n'
+  else
+    dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\n'
+  fi
+}
+
+# alnum <n> — <n> random characters of [A-Za-z0-9].
+alnum() {
+  tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$1"
+}
+
+# check <value> <length> <kind> — exit 1 unless <value> has <length>
+# characters of the alphabet <kind> (hex, b64, alnum).
+check() {
+  [ "${#1}" -eq "$2" ] || { echo "gen-env.sh: a generated value has the wrong length" >&2; exit 1; }
+  case "$3" in
+    hex) case "$1" in *[!0-9a-f]*) echo "gen-env.sh: a generated value is not hexadecimal" >&2; exit 1 ;; esac ;;
+    alnum) case "$1" in *[!A-Za-z0-9]*) echo "gen-env.sh: a generated value is not alphanumeric" >&2; exit 1 ;; esac ;;
+    b64)
+      case "$1" in *=) ;; *) echo "gen-env.sh: a generated value is not base64 of 32 bytes" >&2; exit 1 ;; esac
+      case "${1%=}" in *[!A-Za-z0-9+/]*) echo "gen-env.sh: a generated value is not base64" >&2; exit 1 ;; esac
+      ;;
+  esac
+}
+
+if [ "$kind" = data ]; then
+  pg="$(hex 24)"; check "$pg" 48 hex
+  owner="$(hex 24)"; check "$owner" 48 hex
+  app="$(hex 24)"; check "$app" 48 hex
+  content="$(printf 'POSTGRES_PASSWORD=%s\nMARGINCE_OWNER_DSN=postgres://margince_owner:%s@postgres:5432/margince\nMARGINCE_DSN=postgres://margince_app:%s@postgres:5432/margince\nMARGINCE_REDIS=redis:6379' "$pg" "$owner" "$app")"
+else
+  vault="$(b64_32)"; check "$vault" 44 b64
+  state="$(hex 32)"; check "$state" 64 hex
+  webhook="$(b64_32)"; check "$webhook" 44 b64
+  content="$(printf 'MARGINCE_KEYVAULT_ROOT_KEY=%s\nMARGINCE_CONNECTOR_STATE_KEY=%s\nMARGINCE_WEBHOOK_KEY=%s' "$vault" "$state" "$webhook")"
+  if [ "$admin" = 1 ]; then
+    pw="$(alnum 24)"; check "$pw" 24 alnum
+    content="$(printf '%s\nMARGINCE_ADMIN_PASSWORD=%s' "$content" "$pw")"
+  fi
+fi
+
+# Written in one step. When noclobber refuses because a concurrent run has
+# just created the file, that file is kept.
+if ! ( umask 077; set -C; printf '%s\n' "$content" > "$file" ) 2>/dev/null; then
+  [ ! -s "$file" ] || exit 0
+  echo "gen-env.sh: cannot create $file" >&2
+  exit 1
+fi
+chmod 600 "$file"

@@ -65,6 +65,14 @@ MARGINCE_DSN=postgres://margince_app:fedcba9876543210fedcba9876543210@postgres:5
 MARGINCE_REDIS=redis:6379
 EOF
 chmod 600 "$SRV/shared/data.env"
+# instance.env as gen-env.sh writes it, with fixed stand-in values.
+INST_VAULT='AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
+INST_STATE='000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'
+INST_WEBHOOK='HyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4='
+INST_ADMIN='GeneratedAdminPassw0rd24'
+printf 'MARGINCE_KEYVAULT_ROOT_KEY=%s\nMARGINCE_CONNECTOR_STATE_KEY=%s\nMARGINCE_WEBHOOK_KEY=%s\nMARGINCE_ADMIN_PASSWORD=%s\n' \
+  "$INST_VAULT" "$INST_STATE" "$INST_WEBHOOK" "$INST_ADMIN" > "$SRV/shared/instance.env"
+chmod 600 "$SRV/shared/instance.env"
 
 # rendered <release-dir> — the render.sh output directory for a release.
 rendered() { printf '%s/r/%s' "$TMP" "$(basename "$1")"; }
@@ -103,7 +111,7 @@ rc="$(render "$OUT")"
 if [ "$rc" = 0 ]; then ok "render succeeds"; else fail "render succeeds (rc=$rc): $(cat "$TMP/out")"; fi
 R1="$(rendered "$OUT")"
 listing="$(cd "$R1" && find . -type f | sort | tr '\n' ' ')"
-expected="./release/.env ./release/compose.env ./release/compose.yaml ./release/config/margince.yaml ./shared/caddy/Caddyfile ./shared/db-bootstrap.sql ./shared/db-init.sh "
+expected="./release/.env ./release/compose.env ./release/compose.yaml ./release/config/margince.yaml ./shared/caddy/Caddyfile ./shared/db-bootstrap.sql ./shared/db-init.sh ./shared/gen-env.sh "
 if [ "$listing" = "$expected" ]; then ok "the output has release/ and shared/ with exactly the expected files"; else fail "the output has release/ and shared/ with exactly the expected files: $listing"; fi
 if [ "$(mode_of "$R1/release/.env")" = 600 ]; then ok ".env has mode 600"; else fail ".env has mode 600 (got $(mode_of "$R1/release/.env"))"; fi
 for f in release/compose.yaml release/config/margince.yaml release/compose.env shared/caddy/Caddyfile shared/db-bootstrap.sql; do
@@ -112,12 +120,14 @@ done
 for d in . release release/config shared shared/caddy; do
   if [ "$(mode_of "$R1/$d")" = 755 ]; then ok "directory $d has mode 755"; else fail "directory $d has mode 755 (got $(mode_of "$R1/$d"))"; fi
 done
-if [ "$(mode_of "$R1/shared/db-init.sh")" = 755 ]; then ok "db-init.sh has mode 755"; else fail "db-init.sh has mode 755 (got $(mode_of "$R1/shared/db-init.sh"))"; fi
+for f in shared/db-init.sh shared/gen-env.sh; do
+  if [ "$(mode_of "$R1/$f")" = 755 ]; then ok "$f has mode 755"; else fail "$f has mode 755 (got $(mode_of "$R1/$f"))"; fi
+done
 if cmp -s "$R1/release/compose.yaml" "$SCRIPT_DIR/deploy/host/compose.yaml" && cmp -s "$R1/shared/caddy/Caddyfile" "$SCRIPT_DIR/deploy/host/Caddyfile" \
-    && cmp -s "$R1/shared/db-init.sh" "$SCRIPT_DIR/deploy/host/db-init.sh"; then
-  ok "compose.yaml, Caddyfile and db-init.sh are copied unchanged"
+    && cmp -s "$R1/shared/db-init.sh" "$SCRIPT_DIR/deploy/host/db-init.sh" && cmp -s "$R1/shared/gen-env.sh" "$SCRIPT_DIR/deploy/host/gen-env.sh"; then
+  ok "compose.yaml, Caddyfile, db-init.sh and gen-env.sh are copied unchanged"
 else
-  fail "compose.yaml, Caddyfile and db-init.sh are copied unchanged"
+  fail "compose.yaml, Caddyfile, db-init.sh and gen-env.sh are copied unchanged"
 fi
 if cmp -s "$OUT/config/margince.yaml" "$INST/deploy/prod/config/margince.yaml"; then ok "config/margince.yaml comes from DEPLOY_DIR"; else fail "config/margince.yaml comes from DEPLOY_DIR"; fi
 if cmp -s "$R1/shared/db-bootstrap.sql" "$INST/core/scripts/deploy/db-bootstrap.sql"; then ok "db-bootstrap.sql comes from core"; else fail "db-bootstrap.sql comes from core"; fi
@@ -147,6 +157,30 @@ else
   ok "a local-data release leaves the database and Redis addresses to data.env"
 fi
 if [ "$(grep -c '^MARGINCE_LICENSE=' "$OUT/.env")" = 1 ]; then ok "each name is written once"; else fail "each name is written once"; fi
+if grep -qx 'MARGINCE_BLOBSTORE_PATH=/app/data/blobs' "$OUT/.env" && ! grep -q '^MARGINCE_BLOBSTORE_PATH=' "$OUT/compose.env"; then
+  ok ".env sets the default file store MARGINCE_BLOBSTORE_PATH=/app/data/blobs"
+else
+  fail ".env sets the default file store MARGINCE_BLOBSTORE_PATH=/app/data/blobs"
+fi
+if grep -qE '^MARGINCE_(KEYVAULT_ROOT_KEY|CONNECTOR_STATE_KEY|WEBHOOK_KEY)=' "$OUT/.env"; then
+  fail ".env leaves the generated keys to instance.env"
+else
+  ok ".env leaves the generated keys to instance.env"
+fi
+
+# --- the env_file order of api and worker in compose.yaml ---
+# x-app's env_file paths, in order, each with its format.
+envfiles="$(awk '/^x-app:/{a=1;next} a&&/^[^ ]/{a=0} a&&/^  env_file:/{e=1;next} e&&/^  [a-z]/{e=0} e&&/- path:/{printf "%s", $3} e&&/format:/{printf ":%s ", $2}' "$OUT/compose.yaml")"
+if [ "$envfiles" = "../../shared/data.env:raw ../../shared/instance.env:raw .env:raw " ]; then
+  ok "api and worker read data.env, then instance.env, then .env, all format: raw"
+else
+  fail "api and worker read data.env, then instance.env, then .env, all format: raw: '$envfiles'"
+fi
+if grep -q '<<: \*app' "$OUT/compose.yaml" && [ "$(grep -c '<<: \*app' "$OUT/compose.yaml")" = 2 ]; then
+  ok "only api and worker use the x-app block"
+else
+  fail "only api and worker use the x-app block"
+fi
 
 # --- the output directory ---
 rc="$(render "$OUT")"
@@ -235,6 +269,96 @@ OUT5="$SRV/releases/leading-quote"
 QUOTED='"starts with a quote ${notavar'
 rc="$(render "$OUT5" MARGINCE_ADMIN_PASSWORD="$QUOTED")"
 if [ "$rc" = 0 ] && grep -qxF "MARGINCE_ADMIN_PASSWORD=$QUOTED" "$OUT5/.env"; then ok ".env holds a value that starts with a quote unchanged"; else fail ".env holds a value that starts with a quote unchanged (rc=$rc)"; fi
+
+# --- the S3 file store ---
+cp "$INST/deploy/prod/secrets" "$TMP/secrets.bak"
+printf 'MARGINCE_BLOBSTORE_ENDPOINT\nMARGINCE_BLOBSTORE_REGION\n' >> "$INST/deploy/prod/secrets"
+OUT6="$SRV/releases/s3"
+rc="$(render "$OUT6" MARGINCE_BLOBSTORE_ENDPOINT=s3.example.test:443 MARGINCE_BLOBSTORE_REGION=eu-central-1)"
+if [ "$rc" = 0 ] && grep -qx 'MARGINCE_BLOBSTORE_ENDPOINT=s3.example.test:443' "$OUT6/.env" && ! grep -q '^MARGINCE_BLOBSTORE_PATH=' "$OUT6/.env"; then
+  ok "with MARGINCE_BLOBSTORE_ENDPOINT in secrets, .env has no default MARGINCE_BLOBSTORE_PATH"
+else
+  fail "with MARGINCE_BLOBSTORE_ENDPOINT in secrets, .env has no default MARGINCE_BLOBSTORE_PATH (rc=$rc): $(cat "$TMP/out")"
+fi
+if [ -f "$OUT6/compose.yaml" ] && ! grep -v '^[[:space:]]*#' "$OUT6/compose.yaml" | grep -q 'blobs' && ! grep -q '^[[:space:]]*# [<>]\{3\} default file store' "$OUT6/compose.yaml"; then
+  ok "with MARGINCE_BLOBSTORE_ENDPOINT in secrets, compose.yaml has no blobs volume or init service"
+else
+  fail "with MARGINCE_BLOBSTORE_ENDPOINT in secrets, compose.yaml has no blobs volume or init service: $(grep -n blobs "$OUT6/compose.yaml" 2>/dev/null)"
+fi
+cp "$TMP/secrets.bak" "$INST/deploy/prod/secrets"
+printf 'MARGINCE_BLOBSTORE_PATH\n' >> "$INST/deploy/prod/secrets"
+OUT7="$SRV/releases/own-path"
+rc="$(render "$OUT7" MARGINCE_BLOBSTORE_PATH=/app/data/blobs/mine)"
+if [ "$rc" = 0 ] && [ "$(grep -c '^MARGINCE_BLOBSTORE_PATH=' "$OUT7/.env")" = 1 ] && grep -qx 'MARGINCE_BLOBSTORE_PATH=/app/data/blobs/mine' "$OUT7/.env"; then
+  ok "a MARGINCE_BLOBSTORE_PATH listed in secrets replaces the default"
+else
+  fail "a MARGINCE_BLOBSTORE_PATH listed in secrets replaces the default (rc=$rc)"
+fi
+cp "$TMP/secrets.bak" "$INST/deploy/prod/secrets"
+printf 'MARGINCE_WEBHOOK_KEY\n' >> "$INST/deploy/prod/secrets"
+OUT8="$SRV/releases/own-webhook"
+CLIENT_WEBHOOK='Y2xpZW50LXdlYmhvb2sta2V5LXZhbHVlLTMyYnl0ZXM='
+rc="$(render "$OUT8" MARGINCE_WEBHOOK_KEY="$CLIENT_WEBHOOK")"
+if [ "$rc" = 0 ] && grep -qxF "MARGINCE_WEBHOOK_KEY=$CLIENT_WEBHOOK" "$OUT8/.env"; then ok "a MARGINCE_WEBHOOK_KEY listed in secrets is written to .env"; else fail "a MARGINCE_WEBHOOK_KEY listed in secrets is written to .env (rc=$rc)"; fi
+cp "$TMP/secrets.bak" "$INST/deploy/prod/secrets"
+
+# --- gen-env.sh: the generated files ---
+GEN="$INST/scripts/deploy/host/gen-env.sh"
+G="$TMP/gen"
+mkdir -p "$G"
+# gen <args...> — sh gen-env.sh; output in $TMP/out; prints the exit code.
+gen() { local rc=0; sh "$GEN" "$@" > "$TMP/out" 2>&1 || rc=$?; printf '%s' "$rc"; }
+rc="$(gen instance "$G/instance.env")"
+if [ "$rc" = 0 ] && [ -f "$G/instance.env" ] && [ "$(mode_of "$G/instance.env")" = 600 ]; then ok "gen-env.sh instance creates the file with mode 600"; else fail "gen-env.sh instance creates the file with mode 600 (rc=$rc): $(cat "$TMP/out")"; fi
+if [ "$(grep -c . "$G/instance.env" 2>/dev/null || true)" = 4 ] \
+   && grep -Eq '^MARGINCE_KEYVAULT_ROOT_KEY=[A-Za-z0-9+/]{43}=$' "$G/instance.env" \
+   && grep -Eq '^MARGINCE_CONNECTOR_STATE_KEY=[0-9a-f]{64}$' "$G/instance.env" \
+   && grep -Eq '^MARGINCE_WEBHOOK_KEY=[A-Za-z0-9+/]{43}=$' "$G/instance.env" \
+   && grep -Eq '^MARGINCE_ADMIN_PASSWORD=[A-Za-z0-9]{24}$' "$G/instance.env"; then
+  ok "instance.env has the vault key and webhook key (base64 of 32 bytes), the state key (64 hex) and a 24-character admin password"
+else
+  fail "instance.env has the four keys in their formats: $(sed 's/=.*//' "$G/instance.env" 2>/dev/null | tr '\n' ' ')"
+fi
+vault="$(sed -n 's/^MARGINCE_KEYVAULT_ROOT_KEY=//p' "$G/instance.env" 2>/dev/null || true)"
+if [ "$(printf '%s' "$vault" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" = 32 ] || [ "$(printf '%s' "$vault" | base64 -D 2>/dev/null | wc -c | tr -d ' ')" = 32 ]; then
+  ok "the vault key decodes to 32 bytes"
+else
+  fail "the vault key decodes to 32 bytes"
+fi
+if [ ! -s "$TMP/out" ]; then ok "gen-env.sh prints nothing"; else fail "gen-env.sh prints nothing: $(sed 's/=.*//' "$TMP/out")"; fi
+sum="$(cksum < "$G/instance.env" 2>/dev/null || true)"
+rc="$(gen instance "$G/instance.env")"
+if [ "$rc" = 0 ] && [ -n "$sum" ] && [ "$(cksum < "$G/instance.env")" = "$sum" ]; then ok "gen-env.sh keeps an existing instance.env byte for byte"; else fail "gen-env.sh keeps an existing instance.env (rc=$rc)"; fi
+rc="$(gen instance --no-admin-password "$G/instance2.env")"
+if [ "$rc" = 0 ] && [ "$(grep -c . "$G/instance2.env")" = 3 ] && ! grep -q '^MARGINCE_ADMIN_PASSWORD=' "$G/instance2.env"; then
+  ok "gen-env.sh instance --no-admin-password writes no admin password"
+else
+  fail "gen-env.sh instance --no-admin-password writes no admin password (rc=$rc)"
+fi
+if [ -n "$vault" ] && [ "$(sed -n 's/^MARGINCE_KEYVAULT_ROOT_KEY=//p' "$G/instance2.env" 2>/dev/null || true)" != "$vault" ]; then ok "two instance.env files get different keys"; else fail "two instance.env files get different keys"; fi
+rc="$(gen data "$G/data.env")"
+if [ "$rc" = 0 ] && [ "$(mode_of "$G/data.env")" = 600 ] && [ "$(grep -c . "$G/data.env")" = 4 ] \
+   && grep -Eq '^POSTGRES_PASSWORD=[0-9a-f]{48}$' "$G/data.env" \
+   && grep -Eq '^MARGINCE_OWNER_DSN=postgres://margince_owner:[0-9a-f]{48}@postgres:5432/margince$' "$G/data.env" \
+   && grep -Eq '^MARGINCE_DSN=postgres://margince_app:[0-9a-f]{48}@postgres:5432/margince$' "$G/data.env" \
+   && grep -qx 'MARGINCE_REDIS=redis:6379' "$G/data.env"; then
+  ok "gen-env.sh data writes data.env with mode 600 and hexadecimal passwords"
+else
+  fail "gen-env.sh data writes data.env with mode 600 and hexadecimal passwords (rc=$rc): $(cat "$TMP/out")"
+fi
+# Without openssl: dd and base64.
+mkdir -p "$TMP/noossl"
+for t in od tr head dd base64 chmod; do ln -s "$(command -v "$t")" "$TMP/noossl/$t"; done
+rc=0; PATH="$TMP/noossl" "$(command -v sh)" "$GEN" instance "$G/noossl.env" > "$TMP/out" 2>&1 || rc=$?
+if [ "$rc" = 0 ] && grep -Eq '^MARGINCE_KEYVAULT_ROOT_KEY=[A-Za-z0-9+/]{43}=$' "$G/noossl.env" && grep -Eq '^MARGINCE_WEBHOOK_KEY=[A-Za-z0-9+/]{43}=$' "$G/noossl.env"; then
+  ok "gen-env.sh writes the base64 keys without openssl"
+else
+  fail "gen-env.sh writes the base64 keys without openssl (rc=$rc): $(cat "$TMP/out")"
+fi
+rc="$(gen bogus "$G/x.env")"
+if [ "$rc" = 2 ] && [ ! -e "$G/x.env" ]; then ok "gen-env.sh refuses an unknown kind"; else fail "gen-env.sh refuses an unknown kind (rc=$rc)"; fi
+rc="$(gen instance "$G/missing-dir/instance.env")"
+if [ "$rc" != 0 ] && [ ! -e "$G/missing-dir" ]; then ok "gen-env.sh fails when the directory is missing"; else fail "gen-env.sh fails when the directory is missing (rc=$rc)"; fi
 
 # --- host_env_get ---
 cat > "$TMP/host.env" <<EOF
@@ -352,9 +476,16 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     fail "docker compose config -q passes with compose.env when a secret starts with a quote: $(cat "$TMP/out")"
   fi
   services="$(dc -f "$OUT/compose.yaml" --env-file "$OUT/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"
-  if [ "$services" = "api caddy postgres redis web worker " ]; then ok "a local-data release runs postgres and redis"; else fail "a local-data release runs postgres and redis: $services"; fi
+  if [ "$services" = "api blobs-init caddy postgres redis web worker " ]; then ok "a local-data release runs postgres and redis"; else fail "a local-data release runs postgres and redis: $services"; fi
   services="$(dc -f "$OUT3/compose.yaml" --env-file "$OUT3/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"
-  if [ "$services" = "api caddy web worker " ]; then ok "an external release runs no postgres or redis"; else fail "an external release runs no postgres or redis: $services"; fi
+  if [ "$services" = "api blobs-init caddy web worker " ]; then ok "an external release runs no postgres or redis"; else fail "an external release runs no postgres or redis: $services"; fi
+  services="$(dc -f "$OUT6/compose.yaml" --env-file "$OUT6/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"
+  if [ "$services" = "api caddy postgres redis web worker " ]; then ok "an S3 file store release runs no blobs-init"; else fail "an S3 file store release runs no blobs-init: $services"; fi
+  if dc -f "$OUT6/compose.yaml" --env-file "$OUT6/compose.env" config -q > "$TMP/out" 2>&1; then
+    ok "docker compose config -q passes for an S3 file store release"
+  else
+    fail "docker compose config -q passes for an S3 file store release: $(cat "$TMP/out")"
+  fi
   dc -f "$OUT/compose.yaml" --env-file "$OUT/compose.env" config --format json > "$TMP/config.json" 2>/dev/null || true
   if grep -q '"replicas": 3' "$TMP/config.json"; then ok "WORKER_REPLICAS reaches deploy.replicas"; else fail "WORKER_REPLICAS reaches deploy.replicas"; fi
   if grep -q '"image": "registry.example.test/acme/api:v1.0.0"' "$TMP/config.json"; then ok "IMAGE_API names the api image"; else fail "IMAGE_API names the api image"; fi
@@ -380,6 +511,66 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   done
   api_json="$(sed -n '/^    "api": {/,/^    }/p' "$TMP/config.json")"
   if printf '%s' "$api_json" | grep -qF "\"MARGINCE_ADMIN_PASSWORD\": \"$ADMIN_VALUE\""; then ok "the api keeps MARGINCE_ADMIN_PASSWORD"; else fail "the api keeps MARGINCE_ADMIN_PASSWORD"; fi
+  if printf '%s' "$api_json" | grep -qF "\"MARGINCE_ADMIN_PASSWORD\": \"$ADMIN_VALUE\"" && ! grep -qF "$INST_ADMIN" "$TMP/config.json"; then
+    ok "an admin password in secrets wins over instance.env's"
+  else
+    fail "an admin password in secrets wins over instance.env's"
+  fi
+  for svc in api worker; do
+    j="$(sed -n "/^    \"$svc\": {/,/^    }/p" "$TMP/config.json")"
+    if printf '%s' "$j" | grep -qF "\"MARGINCE_KEYVAULT_ROOT_KEY\": \"$INST_VAULT\"" \
+       && printf '%s' "$j" | grep -qF "\"MARGINCE_CONNECTOR_STATE_KEY\": \"$INST_STATE\"" \
+       && printf '%s' "$j" | grep -qF "\"MARGINCE_WEBHOOK_KEY\": \"$INST_WEBHOOK\""; then
+      ok "the $svc gets the three generated keys from instance.env"
+    else
+      fail "the $svc gets the three generated keys from instance.env"
+    fi
+    if printf '%s' "$j" | grep -qF '"MARGINCE_BLOBSTORE_PATH": "/app/data/blobs"' \
+       && printf '%s' "$j" | grep -qF '"source": "blobs"' && printf '%s' "$j" | grep -qF '"target": "/app/data/blobs"'; then
+      ok "the $svc uses the file store /app/data/blobs on the blobs volume"
+    else
+      fail "the $svc uses the file store /app/data/blobs on the blobs volume"
+    fi
+  done
+  if printf '%s' "$worker_json" | grep -qF '"MARGINCE_ADMIN_PASSWORD": ""' && ! printf '%s' "$worker_json" | grep -qF "$INST_ADMIN"; then
+    ok "the worker's admin password stays blank with instance.env"
+  else
+    fail "the worker's admin password stays blank with instance.env"
+  fi
+  if printf '%s' "$web_json" | grep -qE 'KEYVAULT|WEBHOOK|blobs'; then fail "web gets no generated key and no blobs volume"; else ok "web gets no generated key and no blobs volume"; fi
+  init_json="$(sed -n '/^    "blobs-init": {/,/^    }/p' "$TMP/config.json")"
+  if printf '%s' "$init_json" | grep -qF '"source": "blobs"' && printf '%s' "$init_json" | grep -qF '"user": "0:0"' \
+     && printf '%s' "$init_json" | grep -qF '10001:10001' && ! printf '%s' "$init_json" | grep -qE 'MARGINCE_|env_file'; then
+    ok "blobs-init gives the blobs volume to the image's app user (10001) and holds no variable"
+  else
+    fail "blobs-init gives the blobs volume to the image's app user: $init_json"
+  fi
+  if printf '%s' "$api_json" | grep -qF '"blobs-init"' && printf '%s' "$api_json" | grep -qF 'service_completed_successfully'; then
+    ok "the api starts after blobs-init completed"
+  else
+    fail "the api starts after blobs-init completed"
+  fi
+  if grep -qE '^    "blobs": \{' "$TMP/config.json" || grep -q '"blobs": {' "$TMP/config.json"; then ok "the blobs volume is declared"; else fail "the blobs volume is declared"; fi
+
+  # A value the client lists in secrets wins over instance.env.
+  dc -f "$OUT8/compose.yaml" --env-file "$OUT8/compose.env" config --format json > "$TMP/config8.json" 2>/dev/null || true
+  for svc in api worker; do
+    j="$(sed -n "/^    \"$svc\": {/,/^    }/p" "$TMP/config8.json")"
+    if printf '%s' "$j" | grep -qF "\"MARGINCE_WEBHOOK_KEY\": \"$CLIENT_WEBHOOK\"" && ! printf '%s' "$j" | grep -qF "$INST_WEBHOOK"; then
+      ok "the $svc gets the MARGINCE_WEBHOOK_KEY from secrets, not instance.env's"
+    else
+      fail "the $svc gets the MARGINCE_WEBHOOK_KEY from secrets, not instance.env's"
+    fi
+  done
+
+  # With an S3 endpoint: no default path, no blobs volume.
+  dc -f "$OUT6/compose.yaml" --env-file "$OUT6/compose.env" config --format json > "$TMP/config6.json" 2>/dev/null || true
+  if [ -s "$TMP/config6.json" ] && ! grep -qE 'MARGINCE_BLOBSTORE_PATH|"blobs"|/app/data/blobs|blobs-init' "$TMP/config6.json" \
+     && grep -qF '"MARGINCE_BLOBSTORE_ENDPOINT": "s3.example.test:443"' "$TMP/config6.json"; then
+    ok "an S3 file store release has no MARGINCE_BLOBSTORE_PATH and no blobs volume"
+  else
+    fail "an S3 file store release has no MARGINCE_BLOBSTORE_PATH and no blobs volume: $(grep -n 'blobs\|BLOBSTORE' "$TMP/config6.json" | head)"
+  fi
 
   # postgres and caddy: the same definition in every release, so `up` from a
   # new release directory (or a rollback) does not recreate them.

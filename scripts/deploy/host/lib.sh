@@ -125,3 +125,33 @@ host_ssh() { ssh "${HOST_SSH_OPTS[@]}" "$HOST_SSH_TARGET" "$@"; }
 
 # host_scp <args...> — scp with the same options.
 host_scp() { scp "${HOST_SSH_OPTS[@]}" "$@"; }
+
+# host_dir <instance-name> — the server directory: HOST_DIR from the
+# environment, else from host.env, else /opt/margince/<instance-name>, without
+# a trailing /. It must be an absolute path of letters, digits, `.`, `_`, `-`
+# and `/`, without . or .. components. Prints it; exit 1 with a message
+# otherwise.
+host_dir() {
+  local d="${HOST_DIR:-}"
+  [ -n "$d" ] || d="$(host_env_get HOST_DIR "/opt/margince/$1")"
+  d="${d%/}"
+  [[ "$d" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
+    { echo "HOST_DIR '$d' must be an absolute path of letters, digits, '.', '_', '-' and '/'" >&2; return 1; }
+  case "/$d/" in */../*|*/./*) echo "HOST_DIR '$d' must not contain . or .. components" >&2; return 1 ;; esac
+  printf '%s\n' "$d"
+}
+
+# host_secrets_lists <name> — 0 when $DEPLOY_DIR/secrets lists <name> (the
+# same reading as render.sh: blanks around a name removed, blank lines and #
+# comments skipped); 1 otherwise, also when the file is missing.
+host_secrets_lists() {
+  local file="${DEPLOY_DIR:?DEPLOY_DIR is not set}/secrets" line
+  [ -f "$file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ "$line" = "$1" ] && return 0
+  done < "$file"
+  return 1
+}

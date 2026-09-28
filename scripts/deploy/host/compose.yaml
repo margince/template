@@ -24,17 +24,27 @@
 # The caddy/ directory is mounted, not the file, so a Caddyfile replaced by a
 # rename is still the file the container sees.
 #   data.env             generated once on the server and kept across releases
-#                        (mode 600):
+#                        (mode 600, gen-env.sh data):
 #                          POSTGRES_PASSWORD=<hex>
 #                          MARGINCE_OWNER_DSN=postgres://margince_owner:<hex>@postgres:5432/margince
 #                          MARGINCE_DSN=postgres://margince_app:<hex>@postgres:5432/margince
 #                          MARGINCE_REDIS=redis:6379
+#   instance.env         generated once on the server and kept across releases
+#                        (mode 600, gen-env.sh instance; design Section 9.7):
+#                          MARGINCE_KEYVAULT_ROOT_KEY=<base64 of 32 bytes>
+#                          MARGINCE_CONNECTOR_STATE_KEY=<hex of 32 bytes>
+#                          MARGINCE_WEBHOOK_KEY=<base64 of 32 bytes>
+#                          MARGINCE_ADMIN_PASSWORD=<24 characters>  (only when
+#                            secrets does not list MARGINCE_ADMIN_PASSWORD)
+#                        Read by api and worker only.
 #
 # Interpolation variables (compose.env): INSTANCE_NAME, IMAGE_API, IMAGE_WEB, IMAGE_WORKER,
 # HOST_DOMAIN, API_REPLICAS, WORKER_REPLICAS, COMPOSE_PROFILES.
 #
-# Database and Redis addresses. The api and worker read data.env first and
-# .env second; a later file overrides an earlier one. data.env holds the
+# Precedence. The api and worker read data.env, then instance.env, then .env,
+# all with `format: raw`; a later file overrides an earlier one, so a value
+# the client lists in secrets (.env) wins over a generated one. An
+# `environment:` entry below wins over all three files. data.env holds the
 # addresses of the local postgres and redis services. .env holds MARGINCE_DSN,
 # MARGINCE_OWNER_DSN and MARGINCE_REDIS only when they are external (RDS,
 # ElastiCache): render.sh then writes them and sets COMPOSE_PROFILES empty, so
@@ -48,8 +58,20 @@
 # worker holds the app DSN only, and not the bootstrap admin password. Neither
 # holds the superuser password. web holds no variable at all.
 #
+# File storage (core/docs/reference/configuration.md, "Object storage"). By
+# default the api and worker use the filesystem store: render.sh writes
+# MARGINCE_BLOBSTORE_PATH=/app/data/blobs to .env, and the named volume
+# `blobs`, kept across releases, is mounted there. The image runs as the
+# user app (uid 10001, core's Dockerfile) and has no /app/data, so Docker
+# creates the mount point and a new volume owned by root; the one-shot
+# service blobs-init gives the volume to uid 10001 before the api and worker
+# start. The blocks between the "default file store" markers are removed by
+# render.sh when secrets lists MARGINCE_BLOBSTORE_ENDPOINT (S3 or
+# compatible); the volume itself is not deleted.
+#
 # Order (core/docs/deployment.md, "Order of operations"): postgres and redis
-# healthy, then api, then worker and web once the api answers /readyz.
+# healthy, and blobs-init completed, then api, then worker and web once the
+# api answers /readyz.
 
 # The project name. The caller also passes -p margince-<name>; this line keeps
 # the same project, and so the same volumes, if it does not.
@@ -66,10 +88,16 @@ x-app: &app
   logging: *logging
   env_file:
     - path: ../../shared/data.env
+      format: raw
+    - path: ../../shared/instance.env
+      format: raw
     - path: .env
       format: raw
   volumes:
     - ./config/margince.yaml:/app/config/margince.yaml:ro
+    # >>> default file store
+    - blobs:/app/data/blobs
+    # <<< default file store
 
 services:
   api:
@@ -94,6 +122,10 @@ services:
       redis:
         condition: service_healthy
         required: false
+      # >>> default file store
+      blobs-init:
+        condition: service_completed_successfully
+      # <<< default file store
 
   worker:
     <<: *app
@@ -109,6 +141,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      # >>> default file store
+      blobs-init:
+        condition: service_completed_successfully
+      # <<< default file store
 
   web:
     image: ${IMAGE_WEB:?IMAGE_WEB is not set}
@@ -119,6 +155,21 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  # >>> default file store
+  # One-shot: the blobs volume's root belongs to the app user (uid and gid
+  # 10001 in core's api and worker images) with mode 700. No variable, no
+  # network.
+  blobs-init:
+    image: ${IMAGE_API:?IMAGE_API is not set}
+    restart: "no"
+    logging: *logging
+    user: "0:0"
+    network_mode: none
+    entrypoint: ["sh", "-c", "chown 10001:10001 /app/data/blobs && chmod 700 /app/data/blobs"]
+    volumes:
+      - blobs:/app/data/blobs
+  # <<< default file store
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -175,3 +226,6 @@ volumes:
   redisdata:
   caddydata:
   caddyconfig:
+  # >>> default file store
+  blobs:
+  # <<< default file store

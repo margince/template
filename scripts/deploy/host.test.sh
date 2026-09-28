@@ -19,7 +19,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STUBS="$SCRIPT_DIR/deploy/host/test-stubs"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX ALLOW_DIRTY
-unset MARGINCE_DSN MARGINCE_REDIS MARGINCE_OWNER_DSN MARGINCE_PUBLIC_BASE_URL COMPOSE_PROFILES REGISTRY
+unset MARGINCE_DSN MARGINCE_REDIS MARGINCE_OWNER_DSN MARGINCE_PUBLIC_BASE_URL COMPOSE_PROFILES REGISTRY MARGINCE_ENV
+unset MARGINCE_KEYVAULT_ROOT_KEY MARGINCE_CONNECTOR_STATE_KEY MARGINCE_WEBHOOK_KEY MARGINCE_BLOBSTORE_ENDPOINT MARGINCE_BLOBSTORE_PATH
+unset MAKEFLAGS MAKELEVEL MFLAGS
 unset REGISTRY_USERNAME REGISTRY_PASSWORD HOST_VERIFY_TIMEOUT HOST_VERIFY_PUBLIC HOST_APPLY_TIMEOUT HOST_SSH_KEY
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
 export GIT_AUTHOR_NAME="Test Dev"     GIT_AUTHOR_EMAIL="dev@example.test"
@@ -43,6 +45,7 @@ REG_PASSWORD='reg-Pa55 $word #x "q"'
 INST="$TMP/inst"
 mkdir -p "$INST/core/scripts/deploy" "$INST/deploy/prod/config"
 cp -R "$SCRIPT_DIR" "$INST/scripts"
+cp "$SCRIPT_DIR/../Makefile" "$INST/Makefile"
 printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.2\ndeploy:\n  prod: { adapter: host }\n' > "$INST/instance.yaml"
 printf -- '-- stand-in bootstrap\nSELECT 1;\n' > "$INST/core/scripts/deploy/db-bootstrap.sql"
 printf 'version: 1\nworkspace:\n  name: Acme\n' > "$INST/deploy/prod/config/margince.yaml"
@@ -151,6 +154,31 @@ else
 fi
 if grep -q 'stub-private-key' "$STUB_STATE/ssh.log" "$TMP/out"; then fail "the SSH key is not on the command line or in the output"; else ok "the SSH key is not on the command line or in the output"; fi
 
+# --- instance.env: the generated keys ---
+IE="$HD/shared/instance.env"
+if [ -f "$IE" ] && [ "$(mode_of "$IE")" = 600 ]; then ok "shared/instance.env is created with mode 600"; else fail "shared/instance.env is created with mode 600"; fi
+if [ "$(grep -c . "$IE" 2>/dev/null || true)" = 3 ] \
+   && grep -Eq '^MARGINCE_KEYVAULT_ROOT_KEY=[A-Za-z0-9+/]{43}=$' "$IE" \
+   && grep -Eq '^MARGINCE_CONNECTOR_STATE_KEY=[0-9a-f]{64}$' "$IE" \
+   && grep -Eq '^MARGINCE_WEBHOOK_KEY=[A-Za-z0-9+/]{43}=$' "$IE"; then
+  ok "instance.env has the vault, state and webhook keys in their formats"
+else
+  fail "instance.env has the vault, state and webhook keys in their formats: $(sed 's/=.*//' "$IE" 2>/dev/null | tr '\n' ' ')"
+fi
+if grep -q '^MARGINCE_ADMIN_PASSWORD=' "$IE" 2>/dev/null; then
+  fail "with MARGINCE_ADMIN_PASSWORD in secrets, instance.env holds no admin password"
+else
+  ok "with MARGINCE_ADMIN_PASSWORD in secrets, instance.env holds no admin password"
+fi
+leaked=0
+while IFS= read -r line; do
+  val="${line#*=}"
+  [ -n "$val" ] || continue
+  if grep -rqF -- "$val" "$TMP/out" "$STUB_STATE"; then leaked=1; fi
+done < "$IE"
+if [ "$leaked" = 0 ]; then ok "the generated keys are not printed or on a command line"; else fail "the generated keys are not printed or on a command line"; fi
+if out | grep -q 'created .*shared/instance.env'; then ok "apply says it created instance.env"; else fail "apply says it created instance.env: $(out)"; fi
+
 # --- the secret value reaches .env unchanged and is never printed ---
 if grep -qxF "MARGINCE_LICENSE=$LICENSE_VALUE" "$HD/releases/v1.0.0/.env" 2>/dev/null; then
   ok "a secret with spaces, \$, quotes, # and a backslash reaches the server .env unchanged"
@@ -166,8 +194,11 @@ fi
 
 # --- second deployment ---
 sum1="$(cksum < "$HD/shared/data.env" 2>/dev/null || true)"
+isum1="$(cksum < "$HD/shared/instance.env" 2>/dev/null || true)"
 : > "$STUB_STATE/docker.log"
 if deploy v1.1.0; then ok "the second deployment succeeds"; else fail "the second deployment succeeds: $(out)"; fi
+if [ -n "$isum1" ] && [ "$(cksum < "$HD/shared/instance.env" 2>/dev/null || true)" = "$isum1" ]; then ok "shared/instance.env is created once and kept byte for byte"; else fail "shared/instance.env is created once and kept"; fi
+if out | grep -q 'instance.env'; then fail "a second deployment does not report creating instance.env"; else ok "a second deployment does not report creating instance.env"; fi
 if [ "$(current)" = releases/v1.1.0 ]; then ok "the second deployment points current to releases/v1.1.0"; else fail "current points to releases/v1.1.0: '$(current)'"; fi
 if [ -n "$sum1" ] && [ "$(cksum < "$HD/shared/data.env" 2>/dev/null || true)" = "$sum1" ]; then ok "shared/data.env is created once and kept"; else fail "shared/data.env is created once and kept"; fi
 if [ "$(releases)" = "v1.0.0 v1.1.0" ]; then ok "both release directories are kept"; else fail "both release directories are kept: $(releases)"; fi
@@ -237,6 +268,108 @@ if deploy v1.0.0 && [ "$(cat "$HD/shared/data.env")" = POSTGRES_PASSWORD=keep ];
 else
   fail "an existing shared/data.env is kept unchanged: $(out)"
 fi
+
+# --- an existing instance.env is never replaced ---
+fresh_server
+mkdir -p "$HD/shared"
+printf 'MARGINCE_KEYVAULT_ROOT_KEY=keep\n' > "$HD/shared/instance.env"; chmod 600 "$HD/shared/instance.env"
+if deploy v1.0.0 && [ "$(cat "$HD/shared/instance.env")" = MARGINCE_KEYVAULT_ROOT_KEY=keep ]; then
+  ok "an existing shared/instance.env is kept unchanged"
+else
+  fail "an existing shared/instance.env is kept unchanged: $(out)"
+fi
+
+# --- a failed apply, then a new apply: the generated files stay the same ---
+fresh_server
+fail_op compose-up
+if deploy v1.0.0; then fail "a first deployment whose compose up fails fails"; else ok "a first deployment whose compose up fails fails"; fi
+isum="$(cksum < "$HD/shared/instance.env" 2>/dev/null || true)"
+dsum="$(cksum < "$HD/shared/data.env" 2>/dev/null || true)"
+if [ -n "$isum" ] && [ -n "$dsum" ]; then ok "the failed apply created instance.env and data.env before up"; else fail "the failed apply created instance.env and data.env before up"; fi
+clear_fail compose-up
+if deploy v1.0.0 && [ "$(cksum < "$HD/shared/instance.env")" = "$isum" ] && [ "$(cksum < "$HD/shared/data.env")" = "$dsum" ]; then
+  ok "the next apply keeps instance.env and data.env byte for byte"
+else
+  fail "the next apply keeps instance.env and data.env byte for byte: $(out)"
+fi
+fail_op compose-up "releases/v1.1.0/"
+deploy v1.1.0 || true
+clear_fail compose-up
+if deploy v1.2.0 && [ "$(cksum < "$HD/shared/instance.env")" = "$isum" ] && [ "$(cksum < "$HD/shared/data.env")" = "$dsum" ]; then
+  ok "a failed and rolled-back apply, then a new apply, keep instance.env and data.env"
+else
+  fail "a failed and rolled-back apply, then a new apply, keep instance.env and data.env: $(out)"
+fi
+
+# --- the generated admin password, and make host-admin-password ---
+# admin_pw — make host-admin-password ENV=prod; output in $TMP/pw; prints nothing, returns its status.
+admin_pw() { (cd "$INST" && make --no-print-directory host-admin-password ENV=prod) > "$TMP/pw" 2>&1; }
+printf 'MARGINCE_LICENSE\n' > "$INST/deploy/prod/secrets"
+commit_all "$INST"
+fresh_server
+if deploy v1.0.0; then ok "a deployment without MARGINCE_ADMIN_PASSWORD in secrets succeeds"; else fail "a deployment without MARGINCE_ADMIN_PASSWORD in secrets succeeds: $(out)"; fi
+if [ "$(grep -c . "$HD/shared/instance.env" 2>/dev/null || true)" = 4 ] && grep -Eq '^MARGINCE_ADMIN_PASSWORD=[A-Za-z0-9]{24}$' "$HD/shared/instance.env"; then
+  ok "without MARGINCE_ADMIN_PASSWORD in secrets, instance.env holds a 24-character admin password"
+else
+  fail "without MARGINCE_ADMIN_PASSWORD in secrets, instance.env holds a 24-character admin password"
+fi
+gpw="$(sed -n 's/^MARGINCE_ADMIN_PASSWORD=//p' "$HD/shared/instance.env" 2>/dev/null || true)"
+if [ -n "$gpw" ] && ! grep -rqF -- "$gpw" "$TMP/out" "$STUB_STATE"; then ok "the generated admin password is not printed by the deployment"; else fail "the generated admin password is not printed by the deployment"; fi
+if grep -q '^MARGINCE_ADMIN_PASSWORD=' "$HD/releases/v1.0.0/.env"; then fail "the release .env holds no admin password"; else ok "the release .env holds no admin password"; fi
+: > "$STUB_STATE/ssh.log"
+if admin_pw && [ "$(cat "$TMP/pw")" = "$gpw" ]; then
+  ok "make host-admin-password prints the generated password and nothing else"
+else
+  fail "make host-admin-password prints the generated password and nothing else: $(sed "s/$gpw/<password>/" "$TMP/pw")"
+fi
+if [ -n "$gpw" ] && ! grep -qF -- "$gpw" "$STUB_STATE/ssh.log"; then ok "make host-admin-password puts no password on a command line"; else fail "make host-admin-password puts no password on a command line"; fi
+if (cd "$INST" && env HOST_KNOWN_HOSTS= make --no-print-directory host-admin-password ENV=prod) > "$TMP/pw" 2>&1; then
+  fail "make host-admin-password needs HOST_KNOWN_HOSTS"
+else
+  ok "make host-admin-password needs HOST_KNOWN_HOSTS"
+fi
+if (cd "$INST" && make --no-print-directory host-admin-password ENV=nope) > "$TMP/pw" 2>&1; then fail "make host-admin-password refuses an unknown environment"; else ok "make host-admin-password refuses an unknown environment"; fi
+fresh_server
+if admin_pw; then fail "make host-admin-password fails before the first deployment"; else ok "make host-admin-password fails before the first deployment"; fi
+if grep -q 'instance.env' "$TMP/pw"; then ok "it names instance.env"; else fail "it names instance.env: $(cat "$TMP/pw")"; fi
+printf 'MARGINCE_LICENSE\nMARGINCE_ADMIN_PASSWORD\n' > "$INST/deploy/prod/secrets"
+commit_all "$INST"
+deploy v1.0.0 || fail "setup: deploy v1.0.0: $(out)"
+if admin_pw && grep -q 'secrets' "$TMP/pw" && ! grep -qF "$ADMIN_VALUE" "$TMP/pw"; then
+  ok "make host-admin-password says the password comes from secrets, without printing it"
+else
+  fail "make host-admin-password says the password comes from secrets: $(cat "$TMP/pw")"
+fi
+
+# ---------------------------------------------------------------- license
+LICENSE_MSG='deploy: prod runs in production mode and needs MARGINCE_LICENSE: list it in deploy/prod/secrets and set it (or set MARGINCE_ENV=test for a test environment)'
+# with_secrets <content> — write deploy/prod/secrets and commit.
+with_secrets() { printf '%b' "$1" > "$INST/deploy/prod/secrets"; commit_all "$INST"; }
+with_secrets 'MARGINCE_ADMIN_PASSWORD\n'
+fresh_server
+if deploy v1.0.0; then fail "production mode without MARGINCE_LICENSE in secrets fails"; else ok "production mode without MARGINCE_LICENSE in secrets fails"; fi
+if out | grep -qxF "$LICENSE_MSG" && out | grep -q 'preflight failed'; then ok "the preflight failure says production mode needs MARGINCE_LICENSE"; else fail "the preflight failure says production mode needs MARGINCE_LICENSE: $(out)"; fi
+if [ ! -e "$STUB_STATE/ssh.log" ] && [ ! -e "$STUB_STATE/scp.log" ] && [ ! -e "$SRV/opt" ]; then ok "a missing license connects to nothing and uploads nothing"; else fail "a missing license connects to nothing and uploads nothing"; fi
+fresh_server
+if ! deploy v1.0.0 MARGINCE_ENV=test && out | grep -qxF "$LICENSE_MSG"; then
+  ok "MARGINCE_ENV=test in the environment but not in secrets is still production mode"
+else
+  fail "MARGINCE_ENV=test in the environment but not in secrets is still production mode: $(out)"
+fi
+with_secrets 'MARGINCE_ENV\nMARGINCE_ADMIN_PASSWORD\n'
+fresh_server
+if ! deploy v1.0.0 MARGINCE_ENV=production && out | grep -qxF "$LICENSE_MSG"; then ok "MARGINCE_ENV=production without a license fails"; else fail "MARGINCE_ENV=production without a license fails: $(out)"; fi
+fresh_server
+if ! deploy v1.0.0 MARGINCE_ENV=staging && out | grep -qxF "$LICENSE_MSG"; then ok "MARGINCE_ENV=staging is production mode"; else fail "MARGINCE_ENV=staging is production mode: $(out)"; fi
+for e in test dev; do
+  fresh_server
+  if deploy v1.0.0 -u MARGINCE_LICENSE MARGINCE_ENV=$e && grep -qx "MARGINCE_ENV=$e" "$HD/releases/v1.0.0/.env"; then
+    ok "MARGINCE_ENV=$e in secrets without a license passes"
+  else
+    fail "MARGINCE_ENV=$e in secrets without a license passes: $(out)"
+  fi
+done
+with_secrets 'MARGINCE_LICENSE\nMARGINCE_ADMIN_PASSWORD\n'
 
 # ---------------------------------------------------------------- rollback
 fresh_server

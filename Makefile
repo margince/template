@@ -22,7 +22,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit new-instance deploy host-bootstrap release license u u-fe u-check \
+	stage unstage compose watch new-unit new-instance deploy host-bootstrap host-admin-password release license u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template check-public template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
@@ -287,6 +287,9 @@ deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSIO
 host-bootstrap: ## Install Docker and Compose on a new server for a host environment (ENV=)
 	@# Single-quoted like deploy's arguments, so a quote in ENV stays data.
 	@bash scripts/deploy/host/bootstrap.sh '$(subst ','\'',$(value ENV))'
+
+host-admin-password: ## Print the generated first admin password of a host environment (ENV=)
+	@bash scripts/deploy/host/admin-password.sh '$(subst ','\'',$(value ENV))'
 
 license: ## Obtain a production license into a file (OUT=<file>); see docs/license.md
 	@test -n "$(OUT)" || { echo "license: pass OUT=<file>" >&2; exit 2; }

@@ -14,6 +14,9 @@
 #                                 containers (compose `format: raw`)
 #   release/compose.env           the compose interpolation variables; no secret
 #   shared/db-init.sh             copied from scripts/deploy/host/ (mode 755)
+#   shared/gen-env.sh             copied from scripts/deploy/host/ (mode 755);
+#                                 apply runs it to create data.env and
+#                                 instance.env once; not installed
 #   shared/db-bootstrap.sql       copied from core/scripts/deploy/
 #   shared/caddy/Caddyfile        copied from scripts/deploy/host/
 #
@@ -27,9 +30,19 @@
 #   - MARGINCE_DSN, MARGINCE_REDIS and MARGINCE_OWNER_DSN, when MARGINCE_DSN and
 #     MARGINCE_REDIS are both set (external database and Redis);
 #   - MARGINCE_PUBLIC_BASE_URL=https://<HOST_DOMAIN>, unless secrets lists it;
+#   - MARGINCE_BLOBSTORE_PATH=/app/data/blobs (the default file store), unless
+#     secrets lists it or MARGINCE_BLOBSTORE_ENDPOINT;
 #   - INSTANCE_NAME, IMAGE_API, IMAGE_WEB, IMAGE_WORKER, HOST_DOMAIN,
 #     API_REPLICAS, WORKER_REPLICAS, COMPOSE_PROFILES.
 # compose.env holds the last group only.
+#
+# release/compose.yaml is the template unchanged, except when secrets lists
+# MARGINCE_BLOBSTORE_ENDPOINT (S3 or compatible): then the blocks between the
+# "# >>> default file store" and "# <<< default file store" lines (the blobs
+# volume, its mounts, the blobs-init service) are left out.
+#
+# The generated keys (instance.env) are not written here; a name in secrets
+# that is also in instance.env wins because .env is read last.
 #
 # COMPOSE_PROFILES is `local-data` (the compose file's postgres and redis
 # services) unless MARGINCE_DSN and MARGINCE_REDIS are both set; then it is
@@ -124,6 +137,10 @@ for name in $names; do
 done
 [ -z "$missing" ] || die "render: no value in the environment for:$missing (listed in $DEPLOY_DIR/secrets)"
 
+# The default file store, unless the client configures S3 (or compatible).
+blob_endpoint=0
+has_name MARGINCE_BLOBSTORE_ENDPOINT && blob_endpoint=1
+
 # From here on files are written; a failure removes the output directory.
 created=0
 [ -d "$out" ] || created=1
@@ -160,22 +177,35 @@ generated_lines() {
       printf '%s=%s\n' "$name" "${!name}"
     done
     has_name MARGINCE_PUBLIC_BASE_URL || printf '%s=%s\n' MARGINCE_PUBLIC_BASE_URL "https://$domain"
+    [ "$blob_endpoint" = 1 ] || has_name MARGINCE_BLOBSTORE_PATH || printf '%s=%s\n' MARGINCE_BLOBSTORE_PATH /app/data/blobs
     generated_lines
   } > "$rel/.env"
 )
 chmod 600 "$rel/.env"
 
 generated_lines > "$rel/compose.env"
-cp "$HOST_FILES/compose.yaml" "$rel/compose.yaml"
+if [ "$blob_endpoint" = 1 ]; then
+  # Drop the default file store blocks; an unbalanced marker is an error.
+  awk '
+    /^[[:space:]]*# >>> default file store[[:space:]]*$/ { if (skip) exit 3; skip = 1; next }
+    /^[[:space:]]*# <<< default file store[[:space:]]*$/ { if (!skip) exit 3; skip = 0; next }
+    !skip { print }
+    END { if (skip) exit 3 }
+  ' "$HOST_FILES/compose.yaml" > "$rel/compose.yaml" || die "render: the default file store markers in $HOST_FILES/compose.yaml are not balanced"
+else
+  cp "$HOST_FILES/compose.yaml" "$rel/compose.yaml"
+fi
 cp "$DEPLOY_DIR/config/margince.yaml" "$rel/config/margince.yaml"
 cp "$HOST_FILES/Caddyfile" "$shr/caddy/Caddyfile"
 cp "$HOST_FILES/db-init.sh" "$shr/db-init.sh"
+cp "$HOST_FILES/gen-env.sh" "$shr/gen-env.sh"
 cp "$BOOTSTRAP_SQL" "$shr/db-bootstrap.sql"
 chmod 644 "$rel/compose.env" "$rel/compose.yaml" "$rel/config/margince.yaml" "$shr/caddy/Caddyfile" "$shr/db-bootstrap.sql"
-chmod 755 "$shr/db-init.sh"
+chmod 755 "$shr/db-init.sh" "$shr/gen-env.sh"
 
+if [ "$blob_endpoint" = 1 ]; then store="file store: MARGINCE_BLOBSTORE_ENDPOINT"; else store="file store: the blobs volume"; fi
 if [ "$external" = 1 ]; then
-  echo "render: $out (external database and Redis; COMPOSE_PROFILES empty)"
+  echo "render: $out (external database and Redis; COMPOSE_PROFILES empty; $store)"
 else
-  echo "render: $out (COMPOSE_PROFILES=local-data)"
+  echo "render: $out (COMPOSE_PROFILES=local-data; $store)"
 fi
