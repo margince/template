@@ -1,0 +1,292 @@
+# Deploy
+
+`make deploy ENV=<env> VERSION=<v>` deploys one release to one environment
+declared under `deploy:` in `instance.yaml`:
+
+```yaml
+deploy:
+  staging: { adapter: hook }
+  production: { adapter: host }
+```
+
+The environment name must match `^[a-z0-9]+(-[a-z0-9]+)*$`. Each environment
+needs a `deploy/<env>/` directory. The adapter is `hook` (your own scripts) or
+`host` (the built-in single-server adapter, over SSH and Docker Compose).
+
+## The four-step contract
+
+```
+preflight → apply → verify
+```
+
+A failed `preflight` stops the deployment immediately: nothing has changed,
+so there is no rollback. A failed `apply` or `verify` runs `rollback`, and the
+deployment still fails — non-zero exit — whether or not the rollback
+succeeds. An environment with no `rollback` step fails with `no rollback
+hook`: the environment may be half-deployed.
+
+Before any step, `scripts/deploy.sh`:
+
+1. Requires `VERSION` to match `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$`.
+2. Validates `instance.yaml`.
+3. Refuses a working tree with uncommitted changes (untracked files
+   included), unless `ALLOW_DIRTY=1`.
+4. Prints a notice, but continues, if `HEAD` is not the commit of the tag
+   `VERSION`: hooks and configuration always come from this checkout, not
+   from the release. `deploy.yml` (below) deploys from the tag itself, so
+   this notice never fires there.
+
+Every step of every adapter receives:
+
+| Variable | Set for | Value |
+|---|---|---|
+| `DEPLOY_ENV` | every step | The environment name (`ENV=`). |
+| `DEPLOY_VERSION` | every step | The release being deployed (`VERSION=`). |
+| `DEPLOY_STEP` | every step | The step's own name. |
+| `DEPLOY_DIR` | every step | Absolute path of `deploy/<env>/`. |
+| `DEPLOY_STATE_DIR` | every step | A temporary directory shared by the steps of one run, removed when the run ends. |
+| `INSTANCE_NAME` | every step | `name` from `instance.yaml`. |
+| `IMAGE_REPO` | every step | The image namespace (see [create-an-instance.md](create-an-instance.md#8-image-names)). |
+| `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER` | every step | `$IMAGE_REPO/<role>:$DEPLOY_VERSION`. |
+| `DEPLOY_FAILED_STEP` | `rollback` only | The step that failed (`apply` or `verify`). |
+
+`make deploy` runs with `ENV`, `VERSION`, `MAKEFLAGS`, `MAKELEVEL`, and
+`MFLAGS` removed from the environment, so a hook that runs `make` itself does
+not inherit them as overrides. Read `DEPLOY_ENV` and `DEPLOY_VERSION` instead.
+
+## The `hook` adapter
+
+`deploy/<env>/hooks/<step>.sh`, run with `bash` (no executable bit needed).
+`apply.sh` is required; `preflight.sh`, `verify.sh`, and `rollback.sh` are
+optional — a missing one is reported as skipped, not failed.
+
+```
+deploy/staging/
+└── hooks/
+    ├── apply.sh       required
+    ├── preflight.sh   optional
+    ├── verify.sh      optional
+    └── rollback.sh    optional
+```
+
+Example `apply.sh`:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+echo "deploying $IMAGE_API"
+echo "deploying $IMAGE_WEB"
+echo "deploying $IMAGE_WORKER"
+# ... pull and run the images on the target host
+```
+
+`deploy/<env>/` holds configuration values only — hostnames, replica counts,
+the names of required secrets — never secret values. Hooks read secret
+values from the environment (from your shell locally, or from
+[`deploy.yml`](#deployyml) in CI).
+
+Run it locally:
+
+```sh
+make deploy ENV=staging VERSION=v1.2.3
+```
+
+## The `host` adapter
+
+The built-in adapter for one Linux server, deployed over SSH with Docker
+Compose — for example an AWS EC2 instance.
+
+### End to end on AWS EC2
+
+1. **Launch the instance.** Ubuntu 24.04 or Amazon Linux 2023, any size that
+   fits your workload. Open its security group to:
+
+   | Port | Purpose |
+   |---|---|
+   | 22 | SSH (the adapter and `make host-bootstrap`) |
+   | 80 | HTTP (Caddy's ACME challenge and redirect to HTTPS) |
+   | 443 | HTTPS (the application) |
+
+2. **DNS.** Point `HOST_DOMAIN` (an A or AAAA record) at the instance's
+   public address. Caddy requests a certificate for it automatically on
+   first start, which needs port 80 reachable from the internet.
+
+3. **Instance files**, committed in `deploy/<env>/`:
+
+   | File | Content |
+   |---|---|
+   | `host.env` | `HOST_SSH=user@host` (required), `HOST_DOMAIN=<domain>` (required), `HOST_DIR` (default `/opt/margince/<name>`), `API_REPLICAS`, `WORKER_REPLICAS` (default 1). Read as plain `KEY=VALUE` lines, never executed. |
+   | `config/margince.yaml` | The instance configuration for this environment. |
+   | `secrets` | Names of environment variables written to the server's `.env`, one per line (for example `MARGINCE_LICENSE`). Values come from the environment of `make deploy`, never from this file. A listed name with no value fails `preflight`. |
+
+   `HOST_SSH` must be exactly `user@host` — letters, digits, `.`, `_`, `-`
+   only. No IPv6 literal and no port; use a hostname or an A/AAAA-resolvable
+   name if you need one.
+
+4. **Credentials**, from the environment only (never committed):
+
+   | Variable | Meaning |
+   |---|---|
+   | `HOST_SSH_KEY` | The private key, optional when the SSH agent already holds one. |
+   | `HOST_KNOWN_HOSTS` | Required. Host key checking is never disabled. Get it with `ssh-keyscan -H <host>`, and verify the printed fingerprint against the instance's console output (or the key AWS shows you) before trusting it — `ssh-keyscan` does not verify anything by itself. |
+   | `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | Only when the registry needs a login. |
+
+5. **`make host-bootstrap ENV=<env>`.** Installs Docker Engine and the
+   Compose plugin over SSH on a fresh Ubuntu 22.04/24.04 or Amazon Linux 2023
+   server, and adds the SSH user to the `docker` group. Safe to run again on
+   an already-prepared server — it reports "nothing to change" and does
+   nothing. On Ubuntu, a conflicting distribution package (`docker.io`,
+   `docker-compose-v2`, `podman-docker`, ...) stops the run with the package
+   names and the removal command; `host-bootstrap` never removes software
+   itself.
+
+   ```sh
+   HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host> 2>/dev/null)" \
+     make host-bootstrap ENV=production
+   ```
+
+6. **External database and cache (optional).** By default the `host` adapter
+   runs PostgreSQL and Redis as containers on the same server, with named
+   volumes. To use an external RDS PostgreSQL instance and ElastiCache Redis
+   instead, set `MARGINCE_DSN`, `MARGINCE_REDIS`, and `MARGINCE_OWNER_DSN` in
+   the environment of `make deploy` (list their names in `secrets`, or pass
+   them directly — the adapter treats them like any other secret). When both
+   `MARGINCE_DSN` and `MARGINCE_REDIS` are set, the local `postgres` and
+   `redis` containers are not started.
+
+7. **Deploy.**
+
+   ```sh
+   HOST_KNOWN_HOSTS="$(cat known_hosts_line)" \
+   MARGINCE_LICENSE="$(cat production.license)" \
+     make deploy ENV=production VERSION=v1.2.3
+   ```
+
+### What each step does
+
+| Step | Action |
+|---|---|
+| `check` | `host.env` has `HOST_SSH` and `HOST_DOMAIN`; `config/margince.yaml` and `secrets` exist. No connection made. |
+| `preflight` | The release files can be built (every name in `secrets` has a value); `HOST_KNOWN_HOSTS` is set; SSH connects; the server has Docker, `timeout`, and Docker Compose 2.30.0 or later; the server can log in to the registry and read the three image manifests. Nothing is uploaded. |
+| `apply` | Records the release `current` points to (for rollback); builds the release files; uploads them; logs in to the registry; runs `compose pull` and `compose up -d --remove-orphans`; installs a changed Caddyfile once `up` succeeds and reloads Caddy; points `current` at the new release; prunes old release directories. |
+| `verify` | Within `HOST_VERIFY_TIMEOUT` (default 300s): the api answers `/readyz` and the worker is running, on the server; then, unless `HOST_VERIFY_PUBLIC=0`, `https://$HOST_DOMAIN/` answers a status below 500. |
+| `rollback` | Starts the previous release directory and points `current` back at it. Without a previous release, it stops the new release and fails — see "Rollback limits" below. |
+
+Server layout: `$HOST_DIR/releases/<v>/` holds the release's `compose.yaml`,
+`Caddyfile` reference, `config/margince.yaml`, and `.env` (mode 600).
+`$HOST_DIR/current` is a symbolic link to the running release.
+`$HOST_DIR/shared/` holds `db-init.sh`, `db-bootstrap.sql`, `caddy/Caddyfile`,
+and `data.env` (the generated database passwords, created once, mode 600) —
+files every release mounts unchanged, so postgres and caddy are not recreated
+on each deploy. Every `docker compose` call on the server uses
+`--env-file compose.env` from the release directory.
+
+Caddy routes `/v1`, `/oauth`, `/mcp`, the two `/.well-known/oauth-*` metadata
+paths, `/webhooks/gmail`, and `/webhooks/graph` to `api` (exact paths and
+slash-terminated prefixes, not bare prefixes), and every other path to `web`.
+`/healthz`, `/readyz`, and `/metrics` are not routed publicly.
+`MARGINCE_PUBLIC_BASE_URL` defaults to `https://$HOST_DOMAIN` unless `secrets`
+lists it.
+
+Redeploying the version that is already running keeps the old copy of that
+release directory as `releases/.replaced-<v>`, so a rollback of a bad
+redeploy still has something to restore; it is removed by the next `apply`.
+Pruning keeps the five highest-numbered release directories, plus whichever
+directories `current` and the previous release point at, even if that pushes
+the count above five.
+
+Registry logins on the server use a `DOCKER_CONFIG` directory scoped to that
+one step, removed again when the step ends — no registry credential is left
+on the server afterwards. `docker compose up -d` is bounded by
+`HOST_APPLY_TIMEOUT` (default 600 seconds) with the server's own `timeout`
+command, so a stuck start does not hold the deployment open; readiness itself
+is `verify`'s job, not `apply`'s.
+
+Docker Compose **2.30.0 or later** is required (the rendered `compose.yaml`
+uses `env_file` entries with `format: raw`, which older Compose does not
+support). `make host-bootstrap` installs a version that satisfies this;
+`preflight` checks it either way.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HOST_DIR` | `/opt/margince/<name>` | Where releases and shared files live on the server. |
+| `API_REPLICAS`, `WORKER_REPLICAS` | 1 | Container replica counts. |
+| `HOST_APPLY_TIMEOUT` | 600 | Seconds `docker compose up -d` may take. |
+| `HOST_VERIFY_TIMEOUT` | 300 | Seconds `verify` waits for readiness. |
+| `HOST_VERIFY_INTERVAL` | 5 | Seconds between `verify`'s polls. |
+| `HOST_VERIFY_PUBLIC` | 1 | `0` skips the public `https://$HOST_DOMAIN/` check. |
+
+These may be set in `host.env` or in the environment of `make deploy`; the
+environment wins.
+
+### Rollback limits
+
+`rollback` restores the previous release directory and points `current` at
+it — it does **not** roll back the database: `api` applies migrations when it
+starts, and a migration is not automatically reversible. Without a previous
+release recorded (the first deployment to an environment, or a `preflight`
+failure before `apply` ran), `rollback` stops the new release, removes
+`current` if it pointed at it, and fails — there is nothing to fall back to,
+and the environment is left with nothing running rather than a guess.
+
+### Backups
+
+Database backups on the deployment target are **the client's own
+responsibility** — this template does not take them. For the `host`
+adapter's local PostgreSQL volume, the client typically takes periodic EBS
+snapshots of the underlying volume (or the whole instance) outside of
+anything `make deploy` runs. Using external RDS instead (see step 6 above)
+moves backups to RDS's own automated snapshot feature.
+
+## `deploy.yml`
+
+`.github/workflows/deploy.yml` is a manually triggered workflow
+(`workflow_dispatch`, one `environment` input) that runs `make deploy` in the
+GitHub Environment named by `environment`. Dispatch it **from the release
+tag**: Actions → deploy → Run workflow → "Use workflow from" → Tags →
+`v1.2.3`. The checkout is that tag, so the hooks and `deploy/<env>/` that run
+are the ones in the release.
+
+Create each environment ahead of time (repository Settings → Environments);
+the workflow does not create one.
+
+| Setting | Value |
+|---|---|
+| Deployment branches and tags | Selected branches and tags, with the tag rule `v*`. |
+| Required reviewers | Required for `production`. |
+| Secrets and variables | The values this environment's steps read — for the `host` adapter, at least `HOST_KNOWN_HOSTS`, `HOST_SSH_KEY` (unless the runner otherwise has a usable key), and every name listed in `deploy/<env>/secrets`. |
+
+The job:
+
+1. Confirms it was dispatched from a release tag.
+2. Confirms the environment name is well-formed.
+3. Checks out the tag (no submodule push credential persisted).
+4. Confirms the environment is under `deploy:` in `instance.yaml` at that tag.
+5. Exports the environment's variables and secrets as environment variables
+   of the same name, except a short reserved list (below).
+6. Runs `make deploy ENV=<environment> VERSION=<tag>`.
+
+A name is exported only if it matches `^[A-Z_][A-Z0-9_]*$` and is none of the
+exact names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`,
+`NODE_OPTIONS`, `CDPATH`, `PROMPT_COMMAND`, `TMPDIR`, `MFLAGS`,
+`MAKE_TERMOUT`, `MAKE_TERMERR`; none with the prefix `LD_`, `DYLD_`,
+`GITHUB_`, `RUNNER_`, `ACTIONS_`, or `GIT_`; and none matching
+`^GO[A-Z0-9]*$` or `^MAKE[A-Z0-9]*$` (Go's and make's own variables). This
+keeps a hook from being handed a name that would silently change how `make`,
+git, or the shell itself behaves. A skipped name is printed to the log; its
+value never is.
+
+## Setting this up on GitHub
+
+Before the first deployment, someone with repository admin rights needs to:
+
+- Create a GitHub Environment per entry under `deploy:` in `instance.yaml`
+  (for example `staging`, `production`), with the branch/tag and reviewer
+  rules above.
+- Add that environment's secrets and variables — at minimum
+  `HOST_KNOWN_HOSTS` and, for the `host` adapter, `HOST_SSH_KEY` unless the
+  runner already has a usable key, plus every secret name listed in
+  `deploy/<env>/secrets`.
+- Optionally, set the repository variables `vars.REGISTRY` and secrets
+  `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` (see [release.md](release.md)) so
+  released images are pushed somewhere `deploy.yml` can pull them from.

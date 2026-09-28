@@ -1,7 +1,7 @@
 # Client Instance Template — Design Specification
 
 - **Date:** 2026-09-24. Revised 2026-09-28: the template is public and depends on no private repository or service.
-- **Status:** Design under review. Implementation status is in Section 13.
+- **Status:** Approved design; implemented. Implementation status is in Section 13.
 - **Repository:** `margince-template`. It is developed as a private repository and is published in the public `margince` organization when it is ready.
 
 ## 1. Background
@@ -164,7 +164,11 @@ needed, removed before the repository is published.
 Consequences for existing files:
 
 - The lifecycle workflow guards on the absence of `.template-version`, not on
-  a repository name.
+  a repository name. A job-level `if:` cannot call `hashFiles()` before any
+  checkout, so the guard is a per-step output instead: the first step checks
+  out without submodules, the second records whether `.template-version`
+  exists, and every later step — the lifecycle test script included —
+  repeats that check.
 - `make new-instance PUSH=1` requires `OWNER=`; there is no default owner.
 - `make template-sync` names no default template URL; `make new-instance`
   records the URL in the instance's `template` remote.
@@ -185,13 +189,13 @@ Consequences for existing files:
 | `make template-sync` | Merges the template's `main` and records it. | Done |
 | `make update-core REF=<tag>` | Moves core to a release tag and records it. | Done |
 | `make package VERSION=<v>` | Builds the three role images. | Done; T13 renames the images |
-| `make smoke VERSION=<v>` | Runs the three images with a temporary PostgreSQL and Redis and checks them. | T7 |
-| `make release VERSION=<v>` | Checks and pushes a release tag. | T7 |
+| `make smoke VERSION=<v>` | Runs the three images with a temporary PostgreSQL and Redis and checks them. | Done |
+| `make release VERSION=<v>` | Checks and pushes a release tag. | Done |
 | `make desktop VERSION=<v>` | Builds the desktop bundle. | Done |
-| `make license OUT=<file>` | Obtains a production license into a file. | T16 |
-| `make trial VERSION=<v>` | Builds a trial bundle with a trial license. | T8 |
-| `make deploy ENV=<env> VERSION=<v>` | Deploys a release to an environment. | Done; `host` adapter in T15 |
-| `make host-bootstrap ENV=<env>` | Installs Docker and Compose on a new server. | T15 |
+| `make license OUT=<file>` | Obtains a production license into a file. | Done |
+| `make trial VERSION=<v>` | Builds a trial bundle with a trial license. | Done |
+| `make deploy ENV=<env> VERSION=<v>` | Deploys a release to an environment. | Done |
+| `make host-bootstrap ENV=<env>` | Installs Docker and Compose on a new server. | Done |
 | `make test-scripts`, `make test-cli`, `make test-lifecycle` | Script, CLI, and end-to-end tests. | Done |
 
 ## 9. Workflows
@@ -216,22 +220,33 @@ the local tag is deleted.
 
 1. **Check:** verifies the tag and that it is on `main`, then runs
    `full-check.yml`.
-2. **Images:** `make package VERSION=<v>` for `linux/amd64`, or for the
-   platforms in the repository variable `PLATFORMS`.
-3. **Smoke test:** `make smoke VERSION=<v>` starts the three images with a
-   temporary PostgreSQL and Redis on a private Docker network, waits until
-   `api` answers `/readyz`, `web` answers `/`, and `worker` is running, and
-   removes everything it started, on success and on failure. On failure it
-   prints the last 100 log lines of each container. The environment for the
-   images is the one core's own release workflow uses for its smoke test.
-4. **Push:** only when the repository variable `REGISTRY` is set. Logs in
-   with the secrets `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` and pushes
-   the images with tag `<v>`.
+2. **Images:** `make package VERSION=<v>` for `linux/amd64` (the runner's own
+   platform), loaded into the local image store.
+3. **Smoke test:** `make smoke VERSION=<v>` starts the three `linux/amd64`
+   images with a temporary PostgreSQL and Redis on a private Docker network,
+   waits until `api` answers `/readyz`, `web` answers `/`, and `worker` is
+   running (`SMOKE_TIMEOUT`, default 180 seconds, bounds each wait;
+   `SMOKE_SETTLE`, default 10 seconds, is how long the worker must keep
+   running), and removes everything it started, on success and on failure. On
+   failure it prints the last 100 log lines of each container. The
+   environment for the images is the one core's own release workflow uses for
+   its smoke test. Only `linux/amd64` is smoke-tested; any other platform in
+   `PLATFORMS` is pushed in the next step without a smoke test of its own.
+4. **Push:** only when the repository variable `REGISTRY` is set, for every
+   platform in `PLATFORMS` (default `linux/amd64`). `REGISTRY` must start
+   with the registry host (for example `docker.io/acme`): the push step logs
+   in to `${REGISTRY%%/*}` with the secrets `REGISTRY_USERNAME` and
+   `REGISTRY_PASSWORD` (password on standard input), then pushes the images
+   with tag `<v>`. The pushed image list (one `<repo>/<role>:<v>@<digest>`
+   line per role, or the not-pushed note) is written to a build artifact
+   rather than a job output, because GitHub drops a job output that contains
+   a secret's value and an image name can contain the registry user name.
 5. **Desktop bundles:** macOS and Windows, as today.
 6. **GitHub Release:** created after all jobs pass, with the bundles attached
-   and notes that list the core version, the instance commit, and the image
-   digests (or "images were not pushed: REGISTRY is not set"). A `-rc.N`
-   version is published as a pre-release.
+   and notes — built from the image-list artifact — that list the core
+   version, the instance commit, and the image digests (or "images were not
+   pushed: REGISTRY is not set"). A `-rc.N` version is published as a
+   pre-release.
 
 Images carry the labels `com.margince.instance.name`,
 `com.margince.instance.revision`, `com.margince.core.revision`,
@@ -342,47 +357,79 @@ instance, over SSH with Docker Compose.
 
 | File | Content |
 |---|---|
-| `host.env` | `HOST_SSH` (`user@host`, required), `HOST_DOMAIN` (required), `HOST_DIR` (default `/opt/margince/<name>`), `API_REPLICAS` and `WORKER_REPLICAS` (default 1). Read as `KEY=VALUE` lines; not executed. |
+| `host.env` | `HOST_SSH` (`user@host` only — no IPv6 literal, no port — required), `HOST_DOMAIN` (required), `HOST_DIR` (default `/opt/margince/<name>`), `API_REPLICAS` and `WORKER_REPLICAS` (default 1), and optionally `HOST_APPLY_TIMEOUT`, `HOST_VERIFY_TIMEOUT`, `HOST_VERIFY_INTERVAL`, `HOST_VERIFY_PUBLIC`. Read as `KEY=VALUE` lines; not executed. |
 | `config/margince.yaml` | The instance configuration for this environment. |
-| `secrets` | Names of the environment variables written to the server's `.env`, one per line, for example `MARGINCE_LICENSE`. Values come from the environment of `make deploy`. A listed name without a value fails `preflight`. |
+| `secrets` | Names of the environment variables written to the release directory's `.env`, one per line, for example `MARGINCE_LICENSE`. Values come from the environment of `make deploy`. A listed name without a value fails `preflight`. |
 
-**Credentials** from the environment: `HOST_SSH_KEY` (private key; optional
-when the SSH agent has one), `HOST_KNOWN_HOSTS` (required; host key checking
-is never disabled), `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` (when the
-registry needs a login).
+**Credentials** from the environment only, never from `host.env` or a file in
+`deploy/<env>/`: `HOST_SSH_KEY` (private key; optional when the SSH agent has
+one), `HOST_KNOWN_HOSTS` (required; host key checking is never disabled),
+`REGISTRY_USERNAME` and `REGISTRY_PASSWORD` (when the registry needs a
+login).
 
-**Template files** in `scripts/deploy/host/`: `compose.yaml` and `Caddyfile`.
-The compose project is `margince-<name>`. Services:
+**Template files** in `scripts/deploy/host/`: `compose.yaml`, `Caddyfile`,
+and `db-init.sh`. The compose project is `margince-<name>`; every `docker
+compose` invocation runs with `--env-file compose.env`. Services:
 
 - `api`, `web`, `worker` from `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER`, with
-  `API_REPLICAS` and `WORKER_REPLICAS`.
+  `API_REPLICAS` and `WORKER_REPLICAS`. `api` and `worker` read the release's
+  `.env` (`format: raw`, so no value is reinterpreted); `web` gets no
+  `env_file` at all — it holds no variable and no secret. The worker's
+  `MARGINCE_OWNER_DSN` and `MARGINCE_ADMIN_PASSWORD` are blanked in
+  `compose.yaml`: it runs no migration and does not need the bootstrap admin
+  password.
 - `postgres` (pgvector, PostgreSQL 16, initialized with core's
-  `scripts/deploy/db-bootstrap.sql`) and `redis`, with named volumes, in the
-  compose profile `local-data`. The profile is not started when
-  `MARGINCE_DSN` and `MARGINCE_REDIS` are both set, for example for RDS and
-  ElastiCache. The generated database passwords are stored once in
-  `$HOST_DIR/shared/data.env` and kept across releases.
+  `scripts/deploy/db-bootstrap.sql` through `shared/db-init.sh`) and `redis`,
+  with named volumes, in the compose profile `local-data`. The profile is not
+  started when `MARGINCE_DSN` and `MARGINCE_REDIS` are both set, for example
+  for RDS and ElastiCache.
 - `caddy` on ports 80 and 443, with automatic HTTPS for `HOST_DOMAIN`. It
-  routes `/v1`, `/oauth`, `/.well-known`, and `/mcp` to `api` and every other
-  path to `web`. `/healthz`, `/readyz`, and `/metrics` are not routed.
+  routes `/v1`, `/oauth`, `/mcp`, the two `/.well-known/oauth-*` metadata
+  paths, `/webhooks/gmail`, and `/webhooks/graph` to `api` — exact paths and
+  slash-terminated prefixes, never a bare prefix match — and every other path
+  to `web`. `/healthz`, `/readyz`, and `/metrics` are not routed.
+  `MARGINCE_PUBLIC_BASE_URL` defaults to `https://$HOST_DOMAIN` unless
+  `secrets` lists it.
 
 **Server layout:** `$HOST_DIR/releases/<v>/` holds `compose.yaml`,
-`Caddyfile`, `config/margince.yaml`, and `.env` (mode 600).
-`$HOST_DIR/current` is a symbolic link to the running release. The last five
-releases are kept.
+`config/margince.yaml`, `.env` (mode 600), and `compose.env` (the
+interpolation variables; no secret). `$HOST_DIR/shared/` holds
+`db-init.sh`, `db-bootstrap.sql`, `caddy/Caddyfile`, and `data.env` (the
+generated database passwords, created once and kept across releases, mode
+600) — mounted, unchanged, by `postgres` and `caddy` from every release, so
+neither service is recreated on a deploy. `$HOST_DIR/current` is a symbolic
+link to the running release. Redeploying the version already running keeps
+its previous copy as `releases/.replaced-<v>` until the next `apply`, so a
+rollback of a bad redeploy has something to restore. Pruning keeps the five
+highest-numbered release directories, plus `current` and the previous
+release.
+
+Registry logins on the server use a `DOCKER_CONFIG` directory scoped to the
+step (`$HOST_DIR/.docker-<step>-<pid>`), removed again when the step ends, so
+no registry credential is left on the server. `docker compose up -d` is
+bounded by `HOST_APPLY_TIMEOUT` (default 600 seconds) with the server's own
+`timeout`; readiness is `verify`'s responsibility, not `apply`'s.
 
 | Step | Action |
 |---|---|
 | `check` | `host.env` has `HOST_SSH` and `HOST_DOMAIN`; `config/margince.yaml` and `secrets` exist. |
-| `preflight` | Every name in `secrets` has a value; `HOST_KNOWN_HOSTS` is set; SSH connects; the server has Docker and the Compose plugin; the server can log in to the registry and read the three image manifests. |
-| `apply` | Records the release that `current` points to in `$DEPLOY_STATE_DIR`; uploads the release directory; runs `docker compose pull` and `docker compose up -d --remove-orphans` for it; points `current` at it. |
-| `verify` | Within `HOST_VERIFY_TIMEOUT` (default 300 seconds): `api` answers `/readyz` inside the server, `worker` is running, and `https://$HOST_DOMAIN/` answers with a status below 500. `HOST_VERIFY_PUBLIC=0` skips the public check. |
-| `rollback` | Starts the recorded previous release directory and points `current` back at it. Without a previous release, it stops the new release and fails. The database is not rolled back: `api` applies migrations when it starts. |
+| `preflight` | The release files can be built (every name in `secrets` has a value); `HOST_KNOWN_HOSTS` is set; SSH connects; the server has Docker, `timeout`, and Docker Compose 2.30.0 or later; the server can log in to the registry and read the three image manifests. Nothing is uploaded. |
+| `apply` | Records the release that `current` points to in `$DEPLOY_STATE_DIR`; builds and uploads the release directory and the shared files; logs in to the registry; runs `docker compose pull` and `docker compose up -d --remove-orphans` for the release; stages a changed Caddyfile as `caddy/Caddyfile.new` and installs it (reloading `caddy`) only after `up` succeeds; points `current` at the release; prunes old release directories. |
+| `verify` | Within `HOST_VERIFY_TIMEOUT` (default 300 seconds), polling every `HOST_VERIFY_INTERVAL` (default 5) seconds: `api` answers `/readyz` inside the server and `worker` is running; then, unless `HOST_VERIFY_PUBLIC=0`, `https://$HOST_DOMAIN/` answers with a status below 500. |
+| `rollback` | Removes a staged, not-yet-installed `Caddyfile.new`; restores `releases/.replaced-<v>` when the previous release is the one just redeployed; starts the recorded previous release directory and points `current` back at it. Without a previous release, it stops the new release and fails. The database is not rolled back: `api` applies migrations when it starts. |
+
+Docker Compose **2.30.0 or later** is required: the rendered `compose.yaml`
+uses `env_file` entries with `format: raw`, which older Compose does not
+support.
 
 `make host-bootstrap ENV=<env>` installs Docker Engine and the Compose plugin
 on Ubuntu 22.04 or 24.04 or Amazon Linux 2023 over SSH and adds the SSH user
 to the `docker` group. It can run again without changing a prepared server.
-The server's security group opens ports 22, 80, and 443; the guide says so.
+On Ubuntu, an installed distribution package that conflicts with Docker's own
+(`docker.io`, `docker-compose-v2`, `podman-docker`, and similar) stops the
+run, naming the packages and the command to remove them; `host-bootstrap`
+never removes software itself. The server's security group opens ports 22,
+80, and 443; the guide says so.
 
 ## 10. Versioning
 
@@ -428,15 +475,15 @@ versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`.
 |---|---|---|
 | T1–T6, T9, T11 | Tooling import, `instance.yaml` and CLI, generalized scripts, `instance.mk`, core pin by tag, drift check, deployment contract and `hook` adapter, instance creation. | Done |
 | T10 part 1 | Lifecycle test and `lifecycle.yml`. | Done |
-| T13 | Remove `flavor` and private references; `make check-public`; optional dataset source; `-rc.N` accepted by `make deploy`. | Open |
-| T7 | `make release`, `make smoke`, `release.yml` images, smoke test, push, GitHub Release. | Open; needs T13 |
-| T15 | `host` adapter, `DEPLOY_STATE_DIR`, `make host-bootstrap`. | Open; needs T13 |
-| T16 | `scripts/license.sh`, `make license`. | Open |
-| T8 | `make trial` and `data.dataset`. | Open; needs T16 |
-| T10 part 2 | Lifecycle test: release and `host` deployment. | Open; needs T7, T15 |
-| T12 | Guides: release, deploy (hook and host), license, trial. | Open; last |
+| T13 | Remove `flavor` and private references; `make check-public`; optional dataset source; `-rc.N` accepted by `make deploy`. | Done |
+| T7 | `make release`, `make smoke`, `release.yml` images, smoke test, push, GitHub Release. | Done |
+| T15 | `host` adapter, `DEPLOY_STATE_DIR`, `make host-bootstrap`. | Done |
+| T16 | `scripts/license.sh`, `make license`. | Done |
+| T8 | `make trial` and `data.dataset`. | Done |
+| T10 part 2 | Lifecycle test: release and `host` deployment. | Done |
+| T12 | Guides: release, deploy (hook and host), license, trial. | Done |
 
-Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12.
+Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12. All complete.
 
 ## 14. Rejected Alternatives
 

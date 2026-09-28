@@ -736,7 +736,7 @@ trial: ## Build a trial desktop bundle with a trial license (VERSION=, FORCE=1)
 ## capped at 103 bytes and the launcher refuses a folder that busts it.
 DESKTOP_DEST ?= $(HOME)/Margince
 
-desktop-install: ## Copy the built folder somewhere it can run (DEST=~/Margince)
+desktop-install: ## Copy the built folder somewhere it can run (DESKTOP_DEST=~/Margince)
 	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh install
 
 desktop-run: ## Start the installed desktop app in the foreground (DEST=)

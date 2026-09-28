@@ -20,13 +20,13 @@ All template issues are in `margince-template`.
 | T6 | #6 | Drift check | `.template-version`, `make check-template`. | An edited template-owned file fails `make check`. | T1 | Done |
 | T9 | #9 | Deployment contract | `make deploy`, `deploy.yml`, four steps, `hook` adapter. | A failing verify rolls back. | T2 | Done |
 | T11 | #11 | New instance | `make new-instance`, `make template-sync`. | A new instance passes `make check`. | T2, T6 | Done |
-| T10 | #10 | Template CI and lifecycle test | Part 1: `make test-lifecycle`, `lifecycle.yml`. Part 2: release and `host` steps. | `lifecycle.yml` passes. | T7, T15 | Part 1 done |
-| T13 | #19 | Public-ready template | Remove `flavor` and private references; `make check-public`; optional dataset source; `-rc.N` in `make deploy`. | `make check-public` passes and catches a planted reference. | — | Open |
-| T7 | #7 | Release | `make release`, `make smoke`, `release.yml` images, smoke test, push to `REGISTRY`, GitHub Release. | Tests pass; the wiring test covers `release.yml`. | T13 | Open |
-| T15 | #20 | `host` adapter | Single-server deployment with Docker Compose and Caddy; `DEPLOY_STATE_DIR`; `make host-bootstrap`. | `host.test.sh` covers every step. | T13 | Open |
-| T16 | #21 | License client | `scripts/license.sh`, `make license`. | `license.test.sh` covers the behavior table. | — | Open |
-| T8 | #8 | Laptop trial | `make trial`, `data.dataset`. | `trial.test.sh` passes; the bundle starts in production mode. | T16 | Open |
-| T12 | #12 | Guides | Release, deploy, license, trial. | `make check-docs` passes. | T7, T8, T15, T16 | Open |
+| T10 | #10 | Template CI and lifecycle test | Part 1: `make test-lifecycle`, `lifecycle.yml`. Part 2: release and `host` steps. | `lifecycle.yml` passes. | T7, T15 | Done |
+| T13 | #19 | Public-ready template | Remove `flavor` and private references; `make check-public`; optional dataset source; `-rc.N` in `make deploy`. | `make check-public` passes and catches a planted reference. | — | Done |
+| T7 | #7 | Release | `make release`, `make smoke`, `release.yml` images, smoke test, push to `REGISTRY`, GitHub Release. | Tests pass; the wiring test covers `release.yml`. | T13 | Done |
+| T15 | #20 | `host` adapter | Single-server deployment with Docker Compose and Caddy; `DEPLOY_STATE_DIR`; `make host-bootstrap`. | `host.test.sh` covers every step. | T13 | Done |
+| T16 | #21 | License client | `scripts/license.sh`, `make license`. | `license.test.sh` covers the behavior table. | — | Done |
+| T8 | #8 | Laptop trial | `make trial`, `data.dataset`. | `trial.test.sh` passes; the bundle starts in production mode. | T16 | Done |
+| T12 | #12 | Guides | Release, deploy, license, trial. | `make check-docs` passes. | T7, T8, T15, T16 | Done |
 
 ## Outside the template
 

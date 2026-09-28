@@ -10,10 +10,12 @@ repository.
 - The design is in `docs/superpowers/specs/2026-09-24-client-instance-template-design.md`.
   Do not implement anything that contradicts it. Propose a spec change instead.
 - The template works as Margince Default (no extensions). `make new-instance`
-  creates a client instance, `make template-sync` keeps it in step, and
-  `make deploy` deploys it. `make test-lifecycle` (CI: `lifecycle.yml`) runs
-  that whole lifecycle. Trial and release are planned (see
-  docs/superpowers/plans/2026-09-24-issue-breakdown.md).
+  creates a client instance, `make template-sync` keeps it in step, `make
+  release` cuts a release, `make trial` builds a laptop trial bundle, and
+  `make deploy` deploys it (`hook` or the built-in `host` adapter).
+  `make test-lifecycle` (CI: `lifecycle.yml`) runs that whole lifecycle. See
+  docs/superpowers/plans/2026-09-24-issue-breakdown.md for issue status and
+  docs/README.md for every guide.
 
 ## Rules
 
