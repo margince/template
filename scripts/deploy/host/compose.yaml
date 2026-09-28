@@ -1,0 +1,165 @@
+# compose.yaml — one Margince instance on one server (host adapter, design
+# Section 9.6).
+#
+# Run from a release directory $HOST_DIR/releases/<v>/, which
+# scripts/deploy/host/render.sh builds:
+#
+#   docker compose -p margince-<name> --env-file compose.env up -d --remove-orphans
+#
+# Files:
+#   .env                 read by the api, web and worker containers only, with
+#                        `format: raw`: every value reaches the container exactly
+#                        as written. Never an interpolation source: the Compose
+#                        dotenv parser rejects a value that starts with a quote.
+#   compose.env          the interpolation variables below; no secret.
+#   ../../shared/data.env  $HOST_DIR/shared/data.env, generated once on the
+#                        server and kept across releases (mode 600):
+#                          POSTGRES_PASSWORD=<hex>
+#                          MARGINCE_OWNER_DSN=postgres://margince_owner:<hex>@postgres:5432/margince
+#                          MARGINCE_DSN=postgres://margince_app:<hex>@postgres:5432/margince
+#                          MARGINCE_REDIS=redis:6379
+#
+# Interpolation variables (compose.env): INSTANCE_NAME, IMAGE_API, IMAGE_WEB, IMAGE_WORKER,
+# HOST_DOMAIN, API_REPLICAS, WORKER_REPLICAS, COMPOSE_PROFILES.
+#
+# Database and Redis addresses. The api and worker read data.env first and
+# .env second; a later file overrides an earlier one. data.env holds the
+# addresses of the local postgres and redis services. .env holds MARGINCE_DSN,
+# MARGINCE_OWNER_DSN and MARGINCE_REDIS only when they are external (RDS,
+# ElastiCache): render.sh then writes them and sets COMPOSE_PROFILES empty, so
+# the local-data services do not start. One definition of each service serves
+# both cases.
+#
+# Database roles (core/docs/deployment.md, "The two-role database model"):
+# postgres runs core's db-bootstrap.sql once, on an empty volume (db-init.sh),
+# with the role passwords from data.env's DSNs. The api holds the owner DSN
+# (its entrypoint migrates as the owner, then serves as the app role). The
+# worker holds the app DSN only. Neither holds the superuser password.
+#
+# Order (core/docs/deployment.md, "Order of operations"): postgres and redis
+# healthy, then api, then worker and web once the api answers /readyz.
+
+# The project name. The caller also passes -p margince-<name>; this line keeps
+# the same project, and so the same volumes, if it does not.
+name: margince-${INSTANCE_NAME:?INSTANCE_NAME is not set}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app: &app
+  restart: unless-stopped
+  logging: *logging
+  env_file:
+    - path: ../../shared/data.env
+    - path: .env
+      format: raw
+  volumes:
+    - ./config/margince.yaml:/app/config/margince.yaml:ro
+
+services:
+  api:
+    <<: *app
+    image: ${IMAGE_API:?IMAGE_API is not set}
+    deploy:
+      replicas: ${API_REPLICAS:-1}
+    environment:
+      MARGINCE_CONFIG: /app/config/margince.yaml
+      POSTGRES_PASSWORD: ""
+    healthcheck:
+      # /readyz: 200 once Postgres and Redis answer and the schema is current.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 300s
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+      redis:
+        condition: service_healthy
+        required: false
+
+  worker:
+    <<: *app
+    image: ${IMAGE_WORKER:?IMAGE_WORKER is not set}
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+    environment:
+      MARGINCE_CONFIG: /app/config/margince.yaml
+      # The worker runs no migrations and holds no owner credential.
+      MARGINCE_OWNER_DSN: ""
+      POSTGRES_PASSWORD: ""
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    image: ${IMAGE_WEB:?IMAGE_WEB is not set}
+    restart: unless-stopped
+    logging: *logging
+    env_file:
+      - path: .env
+        format: raw
+    depends_on:
+      api:
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    profiles: [local-data]
+    restart: unless-stopped
+    logging: *logging
+    env_file:
+      - path: ../../shared/data.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db-init.sh:/docker-entrypoint-initdb.d/10-margince.sh:ro
+      - ./db-bootstrap.sql:/margince/db-bootstrap.sql:ro
+    healthcheck:
+      # Over TCP: during initialization the server listens on the socket only.
+      test: ["CMD", "pg_isready", "-q", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  redis:
+    image: redis:7
+    profiles: [local-data]
+    restart: unless-stopped
+    logging: *logging
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HOST_DOMAIN: ${HOST_DOMAIN:?HOST_DOMAIN is not set}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - api
+      - web
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:

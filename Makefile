@@ -419,6 +419,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/release.test.sh
 	@bash scripts/package.test.sh
 	@bash scripts/smoke.test.sh
+	@bash scripts/deploy/host/render.test.sh
 	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores

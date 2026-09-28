@@ -1,0 +1,45 @@
+# Caddyfile — the host adapter's HTTPS entry point (design Section 9.6).
+#
+# One site, HOST_DOMAIN, with an automatic certificate. Routes follow
+# core/docs/deployment.md, "Routing": one host for both services, because the
+# SPA calls /v1 same-origin and the MCP OAuth flow crosses api and web.
+#
+#   /healthz, /readyz, /metrics      404 here; they are for the server only
+#   /v1, /oauth, /.well-known, /mcp  api
+#   /webhooks/gmail, /webhooks/graph api (the provider calls them)
+#   every other path                 web
+#
+# ACME HTTP-01 challenges under /.well-known/acme-challenge/ are answered by
+# Caddy itself before these routes, so the /.well-known prefix does not take
+# them from the certificate issuance.
+#
+# `dynamic a` resolves the service name on each refresh, so requests are spread
+# over every replica that API_REPLICAS starts.
+
+{$HOST_DOMAIN} {
+	@internal path /healthz /healthz/* /readyz /readyz/* /metrics /metrics/*
+	handle @internal {
+		respond 404
+	}
+
+	@api path /v1* /oauth* /.well-known* /mcp* /webhooks/gmail /webhooks/gmail/* /webhooks/graph /webhooks/graph/*
+	handle @api {
+		reverse_proxy {
+			dynamic a api 8080 {
+				refresh 5s
+			}
+			lb_policy round_robin
+			lb_try_duration 10s
+		}
+	}
+
+	handle {
+		reverse_proxy {
+			dynamic a web 8080 {
+				refresh 5s
+			}
+			lb_policy round_robin
+			lb_try_duration 10s
+		}
+	}
+}
