@@ -264,7 +264,18 @@ new-instance: ## Create a client instance repository from this template (NAME=, 
 		bash scripts/new-instance.sh
 
 release: ## Tag and push a release (VERSION=vX.Y.Z or vX.Y.Z-rc.N); release.yml builds it
-	@bash scripts/release.sh "$(VERSION)"
+	@# env -u: as with deploy below, make exports its command-line variables
+	@# and its own MAKEFLAGS to the recipe. release.sh's own `git push` runs
+	@# this repository's pre-push hook when one is installed, an unrelated
+	@# `make test-scripts` that would otherwise inherit MAKEFLAGS and
+	@# silently re-apply RELEASE_CHECK_TARGET (or VERSION) as if they were
+	@# ITS OWN command-line overrides. release.sh receives its settings as
+	@# plain, non-MAKEFLAGS environment variables instead.
+	@env -u VERSION -u MAKEFLAGS -u MAKELEVEL -u MFLAGS \
+		RELEASE_REMOTE='$(subst ','\'',$(value RELEASE_REMOTE))' \
+		RELEASE_BRANCH='$(subst ','\'',$(value RELEASE_BRANCH))' \
+		RELEASE_CHECK_TARGET='$(subst ','\'',$(value RELEASE_CHECK_TARGET))' \
+		bash scripts/release.sh '$(subst ','\'',$(value VERSION))'
 
 deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSION=, ALLOW_DIRTY=1)
 	@# env -u: make exports its command-line variables (ENV, VERSION) and its
