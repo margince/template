@@ -162,13 +162,26 @@ else
   fail "the worker starts after the api is ready (readyz line $ready_line, worker line $worker_line)"
 fi
 api_run="$(grep -E '^docker run .* acme/api:v1.0.0' "$STUB_LOG" || true)"
-for v in MARGINCE_OWNER_DSN MARGINCE_DSN MARGINCE_REDIS MARGINCE_ENV MARGINCE_CONFIG MARGINCE_ADMIN_PASSWORD; do
+for v in MARGINCE_OWNER_DSN MARGINCE_DSN MARGINCE_REDIS MARGINCE_ENV MARGINCE_CONFIG MARGINCE_ADMIN_PASSWORD \
+         MARGINCE_KEYVAULT_ROOT_KEY MARGINCE_CONNECTOR_STATE_KEY MARGINCE_WEBHOOK_KEY; do
   if printf '%s\n' "$api_run" | grep -qE -- "-e $v( |$)"; then ok "api receives $v"; else fail "api receives $v: $api_run"; fi
 done
-if grep -qE 'postgres://|PASSWORD=' "$STUB_LOG"; then
-  fail "a DSN or password reaches docker's argv: $(grep -E 'postgres://|PASSWORD=' "$STUB_LOG")"
+# The vault, connector-state and webhook keys, so /readyz exercises the vault
+# probe and the worker's webhook delivery lane is on too — the smoke test used
+# to run every image without them.
+worker_run="$(grep -E '^docker run .* acme/worker:v1.0.0' "$STUB_LOG" || true)"
+for v in MARGINCE_KEYVAULT_ROOT_KEY MARGINCE_CONNECTOR_STATE_KEY MARGINCE_WEBHOOK_KEY; do
+  if printf '%s\n' "$worker_run" | grep -qE -- "-e $v( |$)"; then ok "worker receives $v"; else fail "worker receives $v: $worker_run"; fi
+done
+if grep -qE 'postgres://|PASSWORD=|MARGINCE_(KEYVAULT_ROOT_KEY|CONNECTOR_STATE_KEY|WEBHOOK_KEY)=' "$STUB_LOG"; then
+  fail "a DSN, password or generated key reaches docker's argv: $(grep -E 'postgres://|PASSWORD=|MARGINCE_(KEYVAULT_ROOT_KEY|CONNECTOR_STATE_KEY|WEBHOOK_KEY)=' "$STUB_LOG")"
 else
-  ok "no DSN or password reaches docker's argv"
+  ok "no DSN, password or generated key reaches docker's argv"
+fi
+if grep -qE 'postgres://|PASSWORD=|MARGINCE_(KEYVAULT_ROOT_KEY|CONNECTOR_STATE_KEY|WEBHOOK_KEY)=' "$TMP/out"; then
+  fail "a DSN, password or generated key reaches smoke's own output: $(cat "$TMP/out")"
+else
+  ok "no DSN, password or generated key reaches smoke's own output"
 fi
 if grep -q '^docker logs' "$STUB_LOG"; then fail "success prints no container logs"; else ok "success prints no container logs"; fi
 

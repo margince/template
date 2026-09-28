@@ -18,9 +18,12 @@
 # failure. On failure the last 100 log lines of each Margince container are
 # printed first.
 #
-# The database passwords are random per run. They reach the containers through
-# `docker run -e NAME` (the value comes from this process's environment), so no
-# password or DSN appears in a command line.
+# The database passwords, and the vault, connector-state and webhook keys, are
+# random per run. They reach the containers through `docker run -e NAME` (the
+# value comes from this process's environment), so no password, DSN or key
+# appears in a command line. The three keys are what make /readyz exercise the
+# keyvault probe (core/docs/reference/configuration.md, "Secret vault") instead
+# of running with no vault, the way earlier releases of this test did.
 #
 # Environment:
 #   SMOKE_TIMEOUT  seconds to wait for each of PostgreSQL, api /readyz, web / (default 180)
@@ -56,6 +59,16 @@ done
 [ -z "$missing" ] || die "smoke: image(s) not found locally:$missing — run 'make package VERSION=$VERSION' first"
 
 rand() { od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
+
+# b64_32 — 32 random bytes as standard base64, the same shape gen-env.sh writes
+# for MARGINCE_KEYVAULT_ROOT_KEY and MARGINCE_WEBHOOK_KEY.
+b64_32() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 32 | tr -d '\n'
+  else
+    dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\n'
+  fi
+}
 
 PREFIX="margince-smoke-$(rand 4)"
 NET="$PREFIX"
@@ -128,6 +141,7 @@ SMOKE_APP_PW="$(rand 16)"
 
 # The api and worker environment (core/docs/deployment.md, "Configuration").
 export MARGINCE_OWNER_DSN MARGINCE_DSN MARGINCE_REDIS MARGINCE_ENV MARGINCE_CONFIG MARGINCE_ADMIN_PASSWORD
+export MARGINCE_KEYVAULT_ROOT_KEY MARGINCE_CONNECTOR_STATE_KEY MARGINCE_WEBHOOK_KEY
 MARGINCE_OWNER_DSN="postgres://margince_owner:$SMOKE_OWNER_PW@$PG:5432/margince"
 MARGINCE_DSN="postgres://margince_app:$SMOKE_APP_PW@$PG:5432/margince"
 MARGINCE_REDIS="$REDIS:6379"
@@ -136,6 +150,12 @@ MARGINCE_REDIS="$REDIS:6379"
 MARGINCE_ENV=test
 MARGINCE_CONFIG=/app/config/margince.yaml
 MARGINCE_ADMIN_PASSWORD="$(rand 16)"
+# The vault, connector-state and webhook keys (constraints.md formats): with
+# MARGINCE_KEYVAULT_ROOT_KEY set, the api gains the /readyz keyvault probe
+# instead of booting with no vault at all.
+MARGINCE_KEYVAULT_ROOT_KEY="$(b64_32)"
+MARGINCE_CONNECTOR_STATE_KEY="$(rand 32)"
+MARGINCE_WEBHOOK_KEY="$(b64_32)"
 
 # The first-boot configuration: an empty database needs workspace and
 # bootstrap_admin. password_file is where the api entrypoint writes
@@ -178,6 +198,7 @@ printf 'smoke: starting api\n'
 start "$API" 1 -p 127.0.0.1::8080 \
   -e MARGINCE_OWNER_DSN -e MARGINCE_DSN -e MARGINCE_REDIS -e MARGINCE_ENV \
   -e MARGINCE_CONFIG -e MARGINCE_ADMIN_PASSWORD \
+  -e MARGINCE_KEYVAULT_ROOT_KEY -e MARGINCE_CONNECTOR_STATE_KEY -e MARGINCE_WEBHOOK_KEY \
   -v "$CFG_DIR/margince.yaml:/app/config/margince.yaml:ro" \
   "$API_IMAGE"
 api_addr="$(published "$API")"
@@ -186,7 +207,9 @@ wait_for "api /readyz" "$API" http_ok "http://$api_addr/readyz"
 printf 'smoke: api is ready\n'
 
 printf 'smoke: starting worker and web\n'
-start "$WORKER" 1 -e MARGINCE_DSN -e MARGINCE_REDIS -e MARGINCE_ENV "$WORKER_IMAGE"
+start "$WORKER" 1 -e MARGINCE_DSN -e MARGINCE_REDIS -e MARGINCE_ENV \
+  -e MARGINCE_KEYVAULT_ROOT_KEY -e MARGINCE_CONNECTOR_STATE_KEY -e MARGINCE_WEBHOOK_KEY \
+  "$WORKER_IMAGE"
 start "$WEB" 1 -p 127.0.0.1::8080 "$WEB_IMAGE"
 web_addr="$(published "$WEB")"
 [ -n "$web_addr" ] || die "smoke: web has no published port"

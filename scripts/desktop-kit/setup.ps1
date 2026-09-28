@@ -296,13 +296,14 @@ function Write-ConfigYaml {
   }
 }
 
-# Two keys that are this installation's alone. Neither may ship in a downloaded
-# folder: one key shared by every installation would seal every recipient's
-# credentials under a value anyone with the download already has.
+# Three keys that are this installation's alone. Neither may ship in a
+# downloaded folder: one key shared by every installation would seal every
+# recipient's credentials, and sign every recipient's webhooks, under a value
+# anyone with the download already has.
 #
-# The lengths are contracts, not preferences. The keyvault key is decoded as
-# base64 and must be EXACTLY 32 bytes for AES-256; the state key is an HMAC key
-# the api floors at 32 characters and refuses below it.
+# The lengths are contracts, not preferences. The keyvault and webhook keys are
+# decoded as base64 and must be EXACTLY 32 bytes for AES-256; the state key is
+# an HMAC key the api floors at 32 characters and refuses below it.
 function New-RandomBytes([int]$Count) {
   $bytes = New-Object 'System.Byte[]' $Count
   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
@@ -317,6 +318,10 @@ function New-InstallationKeys {
   $state = -join ((New-RandomBytes 32) | ForEach-Object { $_.ToString('x2') })
   if (Set-EnvKey 'MARGINCE_CONNECTOR_STATE_KEY' $state) {
     Say 'generated MARGINCE_CONNECTOR_STATE_KEY - the Gmail and Calendar consent flows sign with it'
+  }
+  $webhook = [Convert]::ToBase64String((New-RandomBytes 32))
+  if (Set-EnvKey 'MARGINCE_WEBHOOK_KEY' $webhook) {
+    Say 'generated MARGINCE_WEBHOOK_KEY - webhook subscription signing secrets are sealed with it'
   }
   if (Set-EnvKey 'MARGINCE_PUBLIC_BASE_URL' ("http://127.0.0.1:" + (Get-AppPort))) {
     Say 'set MARGINCE_PUBLIC_BASE_URL - the address Google redirects back to'

@@ -270,19 +270,22 @@ EOF
 
 # ───────────────────────────── this installation's keys ───────────────────
 
-# Two keys that are this installation's alone. Neither may ship in a downloaded
-# folder: one key shared by every installation would seal every recipient's
-# credentials under a value anyone with the download already has.
+# Three keys that are this installation's alone. Neither may ship in a
+# downloaded folder: one key shared by every installation would seal every
+# recipient's credentials, and sign every recipient's webhooks, under a value
+# anyone with the download already has.
 #
-# The lengths are contracts, not preferences. The keyvault key is decoded as
-# base64 and must be EXACTLY 32 bytes for AES-256; the state key is an HMAC key
-# the api floors at 32 characters and refuses below it.
+# The lengths are contracts, not preferences. The keyvault and webhook keys are
+# decoded as base64 and must be EXACTLY 32 bytes for AES-256; the state key is
+# an HMAC key the api floors at 32 characters and refuses below it.
 generate_keys() {
   command -v openssl >/dev/null || {
     say "note — openssl is missing, so this installation's keys are left unset."
-    say "       Extension credentials answer 500 and Gmail cannot connect until they are:"
+    say "       Extension credentials answer 500, Gmail cannot connect and webhook"
+    say "       subscriptions answer 503 until they are:"
     say "           openssl rand -base64 32   # MARGINCE_KEYVAULT_ROOT_KEY"
     say "           openssl rand -hex 32      # MARGINCE_CONNECTOR_STATE_KEY"
+    say "           openssl rand -base64 32   # MARGINCE_WEBHOOK_KEY"
     return 0
   }
   if set_env_key MARGINCE_KEYVAULT_ROOT_KEY "$(openssl rand -base64 32)"; then
@@ -290,6 +293,9 @@ generate_keys() {
   fi
   if set_env_key MARGINCE_CONNECTOR_STATE_KEY "$(openssl rand -hex 32)"; then
     say "generated MARGINCE_CONNECTOR_STATE_KEY — the Gmail and Calendar consent flows sign with it"
+  fi
+  if set_env_key MARGINCE_WEBHOOK_KEY "$(openssl rand -base64 32)"; then
+    say "generated MARGINCE_WEBHOOK_KEY — webhook subscription signing secrets are sealed with it"
   fi
   if set_env_key MARGINCE_PUBLIC_BASE_URL "http://127.0.0.1:$(app_port)"; then
     say "set MARGINCE_PUBLIC_BASE_URL — the address Google redirects back to"
