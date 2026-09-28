@@ -15,6 +15,14 @@ remote="${RELEASE_REMOTE:-origin}"
 branch="${RELEASE_BRANCH:-main}"
 target="${RELEASE_CHECK_TARGET:-check}"
 
+# Read into the locals above, then removed from the environment: `git push`
+# below runs this repository's pre-push hook when one is installed, which
+# runs `make test-scripts` — a second, unrelated `make`/`release.sh`
+# invocation that would otherwise inherit these as real environment
+# variables (every child process does) and silently run a different check
+# target or push to a different remote than IT intended.
+unset RELEASE_REMOTE RELEASE_BRANCH RELEASE_CHECK_TARGET
+
 is_release_version "$version" ||
   die "release: VERSION '$version' does not match $RELEASE_VERSION_RE, e.g. v1.2.0 or v1.2.0-rc.1"
 
