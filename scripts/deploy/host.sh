@@ -25,7 +25,10 @@
 #              $HOST_DIR/releases/<v>/ and shared/ into $HOST_DIR/shared/;
 #              creates data.env (database passwords) and instance.env (vault,
 #              connector state and webhook keys, and the admin password
-#              unless secrets lists MARGINCE_ADMIN_PASSWORD) with
+#              unless secrets lists MARGINCE_ADMIN_PASSWORD, or unless a
+#              release was already running on this target before
+#              instance.env existed, in which case no admin password is
+#              generated either: core ignores it once a company exists) with
 #              host/gen-env.sh when absent: once, mode 600, never replaced,
 #              before `up`; logs in to the registry; runs compose pull and
 #              `up -d --remove-orphans`; installs a changed Caddyfile (staged
@@ -305,7 +308,18 @@ apply() {
   out="$(mktemp -d "$DEPLOY_STATE_DIR/release.XXXXXX")"
   render_into "$out" || { rm -rf "$out"; fail "the release files for $v cannot be built"; }
 
-  host_secrets_lists MARGINCE_ADMIN_PASSWORD && gen_opt=" --no-admin-password"
+  if host_secrets_lists MARGINCE_ADMIN_PASSWORD; then
+    gen_opt=" --no-admin-password"
+  elif [ -n "$prev" ] && ! host_ssh "[ -e $(host_q "$HD/shared/instance.env") ]"; then
+    # A release was already running before shared/instance.env existed on
+    # this target (an environment deployed by an older version of this
+    # template, or one where instance.env was removed by hand). core ignores
+    # MARGINCE_ADMIN_PASSWORD once a company already exists
+    # (core/scripts/deploy/api-entrypoint.sh), so a freshly generated
+    # password here would never take effect. Generate none: host-admin-password
+    # then says so instead of printing a password that is not in effect.
+    gen_opt=" --no-admin-password"
+  fi
 
   up="$HD/.upload-$v"
   host_ssh "mkdir -p $(host_q "$HD/releases") $(host_q "$HD/shared/caddy") && rm -rf $(host_q "$up")" ||

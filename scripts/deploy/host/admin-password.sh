@@ -10,6 +10,12 @@
 # only the password, on one line. The password travels on the SSH output,
 # never on a command line.
 #
+# instance.env holds no MARGINCE_ADMIN_PASSWORD line when the environment's
+# first apply ran while a release was already running on the target from
+# before instance.env existed (host.sh generates none then: core ignores it
+# once a company exists). This script says so rather than printing nothing
+# or a password that never took effect.
+#
 # HOST_DIR comes from the environment, else from host.env, else
 # /opt/margince/<name>.
 #
@@ -52,5 +58,5 @@ pw="$(host_ssh "if [ -f $(host_q "$file") ]; then sed -n 's/^MARGINCE_ADMIN_PASS
   cat "$state/err" >&2
   die "host-admin-password: cannot read $file on $target over SSH (exit $rc)"
 }
-[ -n "$pw" ] || die "host-admin-password: $file on $target holds no MARGINCE_ADMIN_PASSWORD (it was created while secrets listed MARGINCE_ADMIN_PASSWORD)"
+[ -n "$pw" ] || die "host-admin-password: no generated admin password: this environment was provisioned before instance.env existed, or secrets provides MARGINCE_ADMIN_PASSWORD"
 printf '%s\n' "$pw"

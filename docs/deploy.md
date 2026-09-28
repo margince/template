@@ -198,11 +198,24 @@ sealed under the value you removed will not open with it. Plan a key
 rotation deliberately (reseal the data under the new key) rather than by
 simply dropping the name from `secrets`.
 
-`make host-admin-password ENV=<env>` prints the admin password: the
-generated one from `instance.env`, or a note that it comes from `secrets`
-when `MARGINCE_ADMIN_PASSWORD` is listed there. It never prints a value that
-is not the one actually in effect, and it fails, naming the file, before the
-environment's first deployment (`instance.env` does not exist yet).
+`MARGINCE_ADMIN_PASSWORD` is a **first-boot** credential only. Core's `api`
+entrypoint reads it once, to bootstrap the admin account while the
+installation has no company yet, then never again — including once you
+change that account's password in the app (see
+[troubleshooting.md](troubleshooting.md) for the log line that confirms
+this). There is no way back to "in effect" other than the application's own
+password-reset flow.
+
+`make host-admin-password ENV=<env>` prints it: the generated value from
+`instance.env`, or a note that it comes from `secrets` when
+`MARGINCE_ADMIN_PASSWORD` is listed there. It never prints a value that is
+not the one actually in effect, and it fails, naming the file, before the
+environment's first deployment (`instance.env` does not exist yet). An
+environment whose first `apply` ran while a release was already running on
+the target from before `instance.env` existed has **no** generated admin
+password at all — see "Upgrading an environment that predates the generated
+instance keys" below — and `host-admin-password` says so instead of
+printing a password that was never in effect.
 
 ### File storage
 
@@ -257,8 +270,10 @@ Server layout: `$HOST_DIR/releases/<v>/` holds the release's `compose.yaml`,
 itself is not per-release; it lives in `$HOST_DIR/shared/caddy/`, below.
 `$HOST_DIR/current` is a symbolic link to the running release.
 `$HOST_DIR/shared/` holds `db-init.sh`, `db-bootstrap.sql`, `caddy/Caddyfile`,
-and `data.env` (the generated database passwords, created once, mode 600) —
-files every release mounts unchanged, so postgres and caddy are not recreated
+`data.env` (the generated database passwords, created once, mode 600), and
+`instance.env` (the generated vault, connector state and webhook keys, and
+first admin password, created once, mode 600) — files every release mounts
+unchanged, so postgres and caddy are not recreated
 on each deploy. Every `docker compose` call on the server uses
 `--env-file compose.env` from the release directory.
 
@@ -337,6 +352,14 @@ release keeps running exactly as it did before the upgrade (it ignores the
 now-existing `instance.env`); the generated `instance.env` itself is not
 rolled back and is still what the next `apply` — of the same or a later
 version — uses, unedited.
+
+That same first `apply` after the upgrade generates no
+`MARGINCE_ADMIN_PASSWORD` at all, even without `secrets` listing it: the
+installation already has a company by then, so core ignores the credential
+outright (see "Generated instance keys and the first admin password"
+above), and generating one would only mislead `make host-admin-password`
+into printing a password that was never in effect. `host-admin-password`
+says so instead.
 
 ### Backups
 

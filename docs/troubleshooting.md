@@ -301,6 +301,17 @@ version of this template, before `instance.env` existed:
   for what removing a name like this from `secrets` does on an environment
   that already has a generated `instance.env`.
 
+### `entrypoint: MARGINCE_ADMIN_PASSWORD is set, but this installation already has a company … unset MARGINCE_ADMIN_PASSWORD`
+
+Expected, and harmless, the first time the `api` container starts after a
+first boot that used the template's generated `MARGINCE_ADMIN_PASSWORD`
+(`core/scripts/deploy/api-entrypoint.sh`): the bootstrap credential did its
+one job — creating the admin account — and every start after that finds a
+company already exists, so the credential is neither written nor read again.
+No action needed. See "Generated instance keys and the first admin password"
+in [deploy.md](deploy.md) for what the password is for and how long it stays
+valid.
+
 ## The core submodule
 
 ### `git status` shows `core` as modified

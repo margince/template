@@ -341,6 +341,43 @@ else
   fail "make host-admin-password says the password comes from secrets: $(cat "$TMP/pw")"
 fi
 
+# --- an apply over a running release without instance.env: no generated admin password ---
+# Simulates an environment that already ran a release before shared/instance.env
+# existed (an older version of this template, or the file removed by hand):
+# `current` still points at a running release, but instance.env is gone. core
+# ignores MARGINCE_ADMIN_PASSWORD once a company already exists, so a freshly
+# generated one here would never take effect (core/scripts/deploy/api-entrypoint.sh).
+rm -f "$HD/shared/instance.env"
+printf 'MARGINCE_LICENSE\n' > "$INST/deploy/prod/secrets"
+commit_all "$INST"
+if deploy v1.1.0; then
+  ok "an apply over a running release without instance.env succeeds"
+else
+  fail "an apply over a running release without instance.env succeeds: $(out)"
+fi
+if [ "$(grep -c . "$HD/shared/instance.env" 2>/dev/null || true)" = 3 ] \
+   && grep -Eq '^MARGINCE_KEYVAULT_ROOT_KEY=' "$HD/shared/instance.env" \
+   && grep -Eq '^MARGINCE_CONNECTOR_STATE_KEY=' "$HD/shared/instance.env" \
+   && grep -Eq '^MARGINCE_WEBHOOK_KEY=' "$HD/shared/instance.env" \
+   && ! grep -q '^MARGINCE_ADMIN_PASSWORD=' "$HD/shared/instance.env"; then
+  ok "the recreated instance.env holds the three keys but no admin password"
+else
+  fail "the recreated instance.env holds the three keys but no admin password: $(cat "$HD/shared/instance.env" 2>/dev/null)"
+fi
+if admin_pw; then
+  fail "make host-admin-password fails for an environment provisioned before instance.env existed"
+else
+  ok "make host-admin-password fails for an environment provisioned before instance.env existed"
+fi
+if grep -q 'no generated admin password' "$TMP/pw" && grep -q 'instance.env existed' "$TMP/pw"; then
+  ok "make host-admin-password explains there is no generated password, and why"
+else
+  fail "make host-admin-password explains there is no generated password, and why: $(cat "$TMP/pw")"
+fi
+# restore secrets for the tests that follow
+printf 'MARGINCE_LICENSE\nMARGINCE_ADMIN_PASSWORD\n' > "$INST/deploy/prod/secrets"
+commit_all "$INST"
+
 # ---------------------------------------------------------------- license
 LICENSE_MSG='deploy: prod runs in production mode and needs MARGINCE_LICENSE: list it in deploy/prod/secrets and set it (or list MARGINCE_ENV in deploy/prod/secrets and set it to test for a test environment)'
 # with_secrets <content> — write deploy/prod/secrets and commit.
