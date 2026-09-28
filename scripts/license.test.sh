@@ -190,6 +190,56 @@ if printf '%s' "$out" | grep -qF 'jwt-value'; then fail "the license value never
 if grep -qF 'tok-secret-123' "$CURL_STUB_DIR/args"; then fail "the account token never appears in curl's arguments"; else ok "the account token never appears in curl's arguments"; fi
 if grep -qF 'tok-secret-123' "$CURL_STUB_DIR/stdin"; then ok "the account token reaches curl through standard input (the -K - config)"; else fail "the account token reaches curl through standard input (the -K - config)"; fi
 
+file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+
+# --- a pre-existing file's mode is forced to 600 after a successful write,
+# even though it was created wider (e.g. 644) ---
+reset_stub
+f="$TMP/existing-644-var"
+printf 'old-content' > "$f"; chmod 644 "$f"
+license_rc trial "$f" MARGINCE_TRIAL_LICENSE=abc
+if [ "$(file_mode "$f")" = 600 ] && [ "$(cat "$f")" = abc ]; then
+  ok "an existing 644 file is mode 600 after the MARGINCE_TRIAL_LICENSE shortcut writes it"
+else
+  fail "an existing 644 file is mode 600 after the MARGINCE_TRIAL_LICENSE shortcut writes it (mode=$(file_mode "$f"))"
+fi
+
+reset_stub
+stub_answer 201 '{"license":"jwt-value","expires_at":"2026-12-31T00:00:00Z"}'
+f="$TMP/existing-644-201"
+printf 'old-content' > "$f"; chmod 644 "$f"
+license_rc trial "$f" MARGINCE_LICENSE_API=http://license.example.test MARGINCE_ACCOUNT_TOKEN=tok-secret-123
+if [ "$(file_mode "$f")" = 600 ] && grep -qF 'jwt-value' "$f"; then
+  ok "an existing 644 file is mode 600 after a 201 answer writes it"
+else
+  fail "an existing 644 file is mode 600 after a 201 answer writes it (mode=$(file_mode "$f"))"
+fi
+
+# --- a token holding a double quote and a backslash reaches curl escaped ---
+reset_stub
+stub_answer 201 '{"license":"jwt-value","expires_at":"2026-12-31T00:00:00Z"}'
+f="$TMP/escaped-token"
+special_token='tok"back\slash'
+out="$(license_out trial "$f" MARGINCE_LICENSE_API=http://license.example.test MARGINCE_ACCOUNT_TOKEN="$special_token")" && rc=0 || rc=$?
+expected_stdin='header = "Authorization: Bearer tok\"back\\slash"'
+got_stdin="$(cat "$CURL_STUB_DIR/stdin")"
+if [ "$rc" -eq 0 ] && [ "$got_stdin" = "$expected_stdin" ]; then
+  ok "a token with a double quote and a backslash reaches curl's config correctly escaped"
+else
+  fail "a token with a double quote and a backslash reaches curl's config correctly escaped (rc=$rc): got [$got_stdin] want [$expected_stdin]"
+fi
+
+# --- a token holding a control character (a newline) is refused before curl runs ---
+reset_stub
+f="$TMP/newline-token"
+bad_token=$'tok\nInjected-directive: evil'
+out="$(license_out trial "$f" MARGINCE_LICENSE_API=http://license.example.test MARGINCE_ACCOUNT_TOKEN="$bad_token")" && rc=0 || rc=$?
+if [ "$rc" -eq 1 ]; then ok "a token with an embedded newline is refused"; else fail "a token with an embedded newline is refused (rc=$rc): $out"; fi
+if [ -e "$CURL_STUB_DIR/args" ]; then fail "a token with an embedded newline never reaches curl"; else ok "a token with an embedded newline never reaches curl"; fi
+if printf '%s' "$out" | grep -qF 'Injected-directive'; then fail "the token's value never appears in output"; else ok "the token's value never appears in output"; fi
+if printf '%s' "$out" | grep -qF 'MARGINCE_ACCOUNT_TOKEN'; then ok "the refusal names MARGINCE_ACCOUNT_TOKEN"; else fail "the refusal names MARGINCE_ACCOUNT_TOKEN: $out"; fi
+if [ -e "$f" ]; then fail "a token with an embedded newline writes no file"; else ok "a token with an embedded newline writes no file"; fi
+
 # --- a pre-existing file is left unchanged after a failure ---
 reset_stub
 stub_answer 403 '{"error":"account suspended"}'

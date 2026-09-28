@@ -18,6 +18,23 @@ cd "$ROOT"
 
 usage() { echo "license: usage: bash scripts/license.sh <trial|production> <file>" >&2; exit 2; }
 
+# write_secret_file <path> <content> — <path> holds <content> and ends up
+# mode 600, whether or not it existed before (and whatever mode it had). A
+# temp file in the same directory, created under umask 077 and then forced
+# to 600, is renamed over the target: a failure never touches an existing
+# file, and the mode is not merely "no wider than the umask" but forced.
+write_secret_file() {
+  local target="$1" content="$2" tmp
+  tmp="$(mktemp "$(dirname "$target")/.license.XXXXXX")" ||
+    die "license: cannot create a temporary file next to $target"
+  if ! ( umask 077 && printf '%s' "$content" > "$tmp" ); then
+    rm -f "$tmp"
+    die "license: cannot write $tmp"
+  fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$target"
+}
+
 kind="${1:-}"
 file="${2:-}"
 case "$kind" in
@@ -35,7 +52,7 @@ else
 fi
 
 if [ -n "$value" ]; then
-  ( umask 077 && printf '%s' "$value" > "$file" )
+  write_secret_file "$file" "$value"
   echo "license: using \$$var (no request made)"
   exit 0
 fi
@@ -67,10 +84,25 @@ trap 'rm -f "$body_file"' EXIT
 api="${MARGINCE_LICENSE_API%/}"
 token="$MARGINCE_ACCOUNT_TOKEN"
 
+# A control character (in particular a newline) in the token would let it
+# inject extra directives into curl's config file. Refuse it outright,
+# naming the variable but never its value, before any request is attempted.
+if [[ "$token" =~ [[:cntrl:]] ]]; then
+  echo "license: MARGINCE_ACCOUNT_TOKEN contains a control character; refusing to send it" >&2
+  exit 1
+fi
+
+# curl's config file recognizes backslash escapes inside a double-quoted
+# value, so a literal backslash or double quote in the token must be escaped
+# (backslash first, so escaping the quote does not re-escape it) — otherwise
+# a `"` truncates the header silently and a `\n`/`\t` sequence is interpreted.
+token_escaped="${token//\\/\\\\}"
+token_escaped="${token_escaped//\"/\\\"}"
+
 # -K - reads the Authorization header from standard input, so the token
 # appears in no argv and in no file on disk.
 http_code=""
-if http_code="$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+if http_code="$(printf 'header = "Authorization: Bearer %s"\n' "$token_escaped" \
     | curl -sS -o "$body_file" -w '%{http_code}' -K - -X POST \
         -H 'Content-Type: application/json' \
         --data "$json" \
@@ -108,7 +140,7 @@ sys.stdout.write(data.get("expires_at") or "")
     echo "license: the license service answered 201 with no license" >&2
     exit 1
   fi
-  ( umask 077 && printf '%s' "$license" > "$file" )
+  write_secret_file "$file" "$license"
   printf 'license: %s license written to %s\n' "$kind" "$file"
   [ -n "$expires_at" ] && printf 'license: expires %s\n' "$expires_at"
   exit 0
