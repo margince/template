@@ -77,6 +77,25 @@ instance_validate() {
 RELEASE_VERSION_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$'
 is_release_version() { [[ "${1:-}" =~ $RELEASE_VERSION_RE ]]; }
 
+# version_newer <a> <b> — 0 when release version a is newer than b (semver;
+# vX.Y.Z-rc.N is older than vX.Y.Z; rc numbers compare numerically).
+version_newer() {
+  local a="${1#v}" b="${2#v}" ar=0 br=0 i
+  case "$a" in *-rc.*) ar="${a##*-rc.}"; a="${a%-rc.*}" ;; esac
+  case "$b" in *-rc.*) br="${b##*-rc.}"; b="${b%-rc.*}" ;; esac
+  local IFS=.
+  set -- $a $b
+  for i in 1 2 3; do
+    eval "local x=\${$i} y=\${$((i+3))}"
+    [ "$x" -gt "$y" ] && return 0
+    [ "$x" -lt "$y" ] && return 1
+  done
+  # Same X.Y.Z: a final release (rc 0) is newer than any rc of it.
+  [ "$ar" -eq 0 ] && [ "$br" -ne 0 ] && return 0
+  [ "$ar" -ne 0 ] && [ "$br" -ne 0 ] && [ "$ar" -gt "$br" ] && return 0
+  return 1
+}
+
 # image_repo — <REGISTRY>/<name>, or <name> without REGISTRY.
 #
 # core's docker-bake.hcl names the images ${REPO}/api, ${REPO}/web and

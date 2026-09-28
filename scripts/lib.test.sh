@@ -379,6 +379,33 @@ for v in 1.2.0 v1.2 v1.2.0-rc.0 v1.2.0-rc1 v1.2.0-beta.1; do
   if is_release_version "$v"; then fail "is_release_version refuses $v"; else ok "is_release_version refuses $v"; fi
 done
 
+# --- version_newer ---
+
+expect_newer() {
+  local a="$1" b="$2"
+  if version_newer "$a" "$b"; then ok "version_newer: $a > $b"; else fail "version_newer: $a > $b"; fi
+}
+expect_not_newer() {
+  local a="$1" b="$2"
+  if version_newer "$a" "$b"; then fail "version_newer: $a is not newer than $b"; else ok "version_newer: $a is not newer than $b"; fi
+}
+
+expect_newer v1.2.0 v1.1.9
+expect_newer v1.10.0 v1.9.0
+expect_newer v2.0.0 v1.99.99
+expect_newer v1.2.0 v1.2.0-rc.3
+expect_newer v1.2.0-rc.10 v1.2.0-rc.9
+expect_newer v1.2.1-rc.1 v1.2.0
+
+expect_not_newer v1.2.0 v1.2.0
+expect_not_newer v1.2.0-rc.1 v1.2.0
+expect_not_newer v1.1.0 v1.2.0
+
+# IFS must not leak out of version_newer (it is set `local IFS=.` inside).
+IFS_before="$IFS"
+version_newer v1.2.0 v1.1.9 >/dev/null
+if [ "$IFS" = "$IFS_before" ]; then ok "version_newer does not leak IFS"; else fail "version_newer does not leak IFS"; fi
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%s case(s) failed\n' "$FAILURES" >&2
   exit 1

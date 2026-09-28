@@ -22,7 +22,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit new-instance deploy license u u-fe u-check \
+	stage unstage compose watch new-unit new-instance deploy release license u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template check-public template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
@@ -263,6 +263,9 @@ new-instance: ## Create a client instance repository from this template (NAME=, 
 		OWNER='$(subst ','\'',$(value OWNER))' \
 		bash scripts/new-instance.sh
 
+release: ## Tag and push a release (VERSION=vX.Y.Z or vX.Y.Z-rc.N); release.yml builds it
+	@bash scripts/release.sh "$(VERSION)"
+
 deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSION=, ALLOW_DIRTY=1)
 	@# env -u: make exports its command-line variables (ENV, VERSION) and its
 	@# own MAKEFLAGS to the recipe, and a hook that runs make would inherit
@@ -413,6 +416,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/new-instance.test.sh
 	@bash scripts/deploy.test.sh
 	@bash scripts/license.test.sh
+	@bash scripts/release.test.sh
 	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores
