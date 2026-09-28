@@ -1,723 +1,453 @@
 # Client Instance Template — Design Specification
 
-- **Date:** 2026-09-24
-- **Status:** Complete. Open decisions are listed in Section 17 and implementation status in Section 18.
-- **Repository:** `gradionhq/margince-template`
+- **Date:** 2026-09-24. Revised 2026-09-28: the template is public and depends on no private repository or service.
+- **Status:** Design under review. Implementation status is in Section 13.
+- **Repository:** `margince-template`. It is developed as a private repository and is published in the public `margince` organization when it is ready.
 
 ## 1. Background
 
-A Margince client runs an *instance*. An instance consists of the upstream core
-product, the client's extensions, configuration, data, and a deployment
-definition.
+A Margince client runs an *instance*: the public Margince core, the client's
+extensions, configuration, data, and a deployment definition. Clients build
+their instances on public Margince, so the template that creates and runs an
+instance must be public as well.
 
-Three instance repositories currently exist: `incap`, `afs`, and
-`margince-automation-world`. (`gradionhq/margince-gradion` is the former name of
-`margince-automation-world`.) Section 14 defines which of them adopt the
-template. They are inconsistent:
-
-- `incap` and `afs` provide approximately 12 make targets.
-- `margince-automation-world` provides approximately 70 documented make
-  targets, including a development stack, desktop builds, secret scanning, role
-  image builds, and release workflows. It contains five extensions.
-- Its `main` pins a core commit from before core moved the `craft` tool out of
-  `cli/craft`. `scripts/lint.sh` needs a small change to run against core
-  `v0.0.2` (see Section 7).
-
-Related responsibilities are spread across other repositories:
-
-- Release image builds are in `margince-release`. Constellation PR #421 is
-  porting them into `margince-constellation`.
-- The Gradion deployment is in `margince-d13-deploy`.
-
-No document defines which repository is responsible for which function.
-
-This specification introduces an **instance template** that defines the
-standard structure and tooling for all instances. The template is derived from
-the existing tooling in `margince-automation-world`, which is in active use. The
-specification also defines the responsibility of each repository.
+The template provides one standard structure and one set of tooling for every
+instance. It is itself a working instance without extensions, called
+**Margince Default**. The tooling was copied from an instance that is in
+active use and then generalized (issues T1–T3).
 
 ## 2. Goals
 
 1. Each Margince core release is identified by a git tag.
-2. Each instance pins a specific core version by tag. An instance does not
-   track a branch.
-3. A single command builds a trial version of an instance that runs on a
-   laptop. Clients use the trial version for evaluation before sign-off.
-4. A single command sets up a development environment for extension
-   development.
-5. An instance can build, test, and deploy itself to a target environment. The
-   deployment uses separate `api`, `web`, and `worker` images so that each
-   component scales independently.
-6. The responsibility of each repository is documented. Each responsibility is
-   assigned to exactly one repository.
+2. Each instance pins a specific core release by tag.
+3. One command builds a trial version of an instance that runs on a laptop.
+4. One command sets up a development environment for extension development.
+5. An instance builds, tests, releases, and deploys itself. The `api`, `web`,
+   and `worker` components are separate images and separate services.
+6. The responsibility of each repository is documented.
+7. The template and everything it needs are public.
 
 ## 3. Non-Goals
 
 - Changes to how core composes extensions (`gen-composition`), builds images,
-  or builds the desktop bundle. The template invokes these mechanisms. It does
-  not replace them.
-- Changes to Constellation licensing or distribution services, except those
-  required by the trial and release workflows.
-- A separately versioned tooling repository or CLI. See Section 16.
-- Rewriting existing scripts. Existing scripts are reused and changed only
-  where they contain client-specific values. See Section 7.
+  or builds the desktop bundle. The template invokes these mechanisms.
+- The implementation of the Margince license service. The template defines
+  the API contract it uses (Section 9.3); the service is built separately.
+- Built-in deployment targets other than one Linux server (Section 9.6).
+  Other targets use hook scripts.
+- Database backups on the deployment target.
 
 ## 4. Decisions
 
 | Topic | Decision |
 |---|---|
-| Propagation of template changes | Each instance is a fork of the template. Template changes are applied with `git merge template/main`. |
-| Propagation of core upgrades | The existing `make update-core REF=<tag>` command, restricted to tags. |
-| Image builds | Builds run only in the template and in instances, in their own CI. Nothing is built in the Constellation repository. The template uses Constellation's tools and services (release-management CLI, licenser, registry, dist service); it does not run builds there. |
-| Version scheme | Core release tags stay `v0.0.x`. Template and instance releases use the Constellation version scheme `YYYY.edition` (for example `2026.3`), so the dist service, licensing, and upgrades accept them. There are no scheduled or hourly builds. See Section 11. |
-| Flavors | Each instance is registered in Constellation as a **flavor**, namespaced by vendor (for example `acme/margince`). Core is `margince/margince`. Licenses are issued per flavor. Instance images are published under the flavor namespace. |
-| Release verification | Every release, core or flavor, is verified by the Constellation release harness: a valid license, pullable containers, downloadable binaries, downloadable SBOMs. |
-| Source of the template tooling | The files of `margince-automation-world` (`scripts/`, `Makefile`, `.github/workflows/`, `.githooks/`, `.gitignore`, `.gitleaks.toml`, tooling docs) are copied into the template from `origin/main` commit `644ee45`. `config/` is not copied: it is not tracked there, and `make config` generates it from core's examples. |
-| Template git history | The template starts with new git history. The history of `margince-automation-world` is not imported, because it contains the code of five client extensions, and every future client fork would inherit that code. The initial import commit records the source repository and commit of each copied file. |
-| `margince-release` | Archived. |
-| Constellation PR #421 | Closed. Dist releases are drafted and published with Constellation's release-management CLI. The PR #421 commands (`verdict`, `promote`, `notes`, `tag-sources`, `cleanup`) are reused in the template CLI only for functions that the release-management CLI does not provide: image promotion, release notes, and removal of candidate images. |
-| District 13 deployment of Margince Default | Owned by a new instance repository created from the template with `make new-instance` (issue D1). It is not placed in the template: `deploy/` is instance-owned, and a real environment in the template would be copied into every new instance. |
-| `margince-automation-world` | Adopts the template after M1 (issue I1): it merges the template with `--allow-unrelated-histories`, moves `zalo-lab` to `instance.mk`, and adds `instance.yaml` and `.template-version`. It is the most active instance; without migration its tooling diverges from the template. |
-| Deployment | Each client uses one deployment process. The template defines standard deployment steps. The instance provides configuration values and, where required, hook scripts. |
+| Visibility | The template is public. No file names a private repository, host, or service (Section 7). |
+| Location of the tooling | All tooling is in the template repository. It can be split into smaller repositories later. |
+| Propagation of template changes | An instance starts from the template's git history and merges template changes with `make template-sync`. |
+| Propagation of core upgrades | `make update-core REF=<tag>`, restricted to core release tags. |
+| Builds | Builds run in the CI of the template and of each instance. No other service builds an instance. |
+| Version scheme | Core release tags are `v0.0.x`. Template and instance releases are `vX.Y.Z`, optionally `-rc.N` (Section 10). |
+| Image registry | The client's own registry, set with `REGISTRY`. Nothing is pushed when `REGISTRY` is not set. |
+| Licensing | A license authorizes running Margince core. It is obtained from the public Margince license API (Section 9.3) or supplied by hand. There is no per-instance product ("flavor"). |
+| Deployment | The four-step contract with the `hook` adapter and the built-in `host` adapter for one Linux server. |
+| Demo datasets | Optional. The source is configured per instance. The template refers to no dataset repository. |
 
 ## 5. Repository Responsibilities
 
-| Repository | Responsible for | Not responsible for |
+| Repository | Visibility | Responsible for |
 |---|---|---|
-| `margince/margince` (core) | Product source code; release tags; role image definitions (`Dockerfile`, `docker-bake.hcl`); desktop all-in-one build; `gen-composition`; extension SDK. | Any client-specific content. |
-| `margince-template` (new) | Standard directory layout; lifecycle commands; development environment; CI workflows; deployment interface; core version pin. The template is itself a functional instance without extensions, referred to as **Margince Default**. | Client-specific code. |
-| Client instance (fork of the template) | `instance.yaml`, `instance.mk`, `extensions/`, `config/`, `data/`, `deploy/`, `docs/client/`. | Modifications to template-owned files. Tooling changes are made in the template and merged into the instance. |
-| `margince-constellation` | Customer records; flavors; license issuance per flavor (trial and production); the release-management CLI and the release harness that instance CI runs; license-gated container registry and artifact downloads; `upgrade-cli`. | Instance composition or instance builds. |
-| `margince-demo-database` | Demo datasets. An instance references a dataset by name and version in `data/`. | — |
-| `margince-qc` | Acceptance tests against a specified build. Can target any instance. | — |
-| `margince-d13-deploy` | Deploys vanilla core (Margince Default) to District 13. Replaced by the `d13` adapter and the `deploy/` directory of a new instance repository created from the template (Section 4), then archived. | — |
-| `margince-release` | — | Archived. |
+| `margince/margince` (core) | Public | Product source, release tags, image build definition (`Dockerfile`, `docker-bake.hcl`), desktop build, extension SDK. |
+| `margince-template` | Public | Standard layout, lifecycle commands, development environment, CI workflows, deployment contract and adapters, license client, core pin. |
+| Client instance | Private, in the client's organization | `instance.yaml`, `instance.mk`, `extensions/`, `config/`, `data/`, `deploy/`, `docs/client/`. Template-owned files are changed in the template and merged. |
+| Margince license service | Public endpoint, private code | Issues trial and production licenses through the API in Section 9.3. |
 
-## 6. Template Structure and Path Ownership
+Margince's own deployments are ordinary client instances created from the
+template. Their deployment scripts are in their own repositories.
 
-Each path is owned by either the template or the instance. No path is owned by
-both. This rule minimizes merge conflicts when an instance merges template
-changes.
-
-The structure keeps the existing layout of `margince-automation-world`. The
-tooling directory remains `scripts/`.
+## 6. Structure and Path Ownership
 
 ```
-margince-template/                   (client forks use the same structure)
+margince-template/                   (instances use the same structure)
 ├── core/                  ◆ git submodule, pinned to a core tag
-├── .template-owned        ○ list of template-owned paths (Section 6.1)
+├── .template-owned        ○ list of template-owned paths
 ├── .template-version      ● template commit last merged (instances only)
-├── instance.yaml          ● instance metadata: name, core version,
-│                            deployment targets, flavor
+├── instance.yaml          ● instance metadata
 ├── instance.mk            ● optional client-specific make targets
-├── extensions/            ● client extension units (empty in the template)
-├── config/                ● margince.yaml and per-environment overlays
-├── data/                  ● seed and demo dataset references
-├── deploy/                ● one directory per environment: values and optional hooks
-├── docs/client/           ● client-specific documentation
-├── Makefile               ○ lifecycle targets; includes instance.mk if present
-├── scripts/               ○ lifecycle scripts and their tests
-│   ├── cli/               ○ Go CLI (instance.yaml access, release commands)
-│   ├── desktop-kit/       ○ launcher files for the desktop bundle
-│   ├── unit-skeleton/     ○ template for new extension units
-│   └── deploy/            ○ deployment adapters
-├── .github/workflows/     ○ ci.yml, full-check.yml, lifecycle.yml, release.yml,
-│                            deploy.yml, desktop-macos.yml, desktop-windows.yml
-├── .githooks/, .gitleaks.toml, .gitignore   ○
-├── AGENTS.md, CLAUDE.md   ○ contributor and agent instructions
-└── docs/*.md              ○ template usage documentation
+├── extensions/            ● extension units (empty in the template)
+├── config/                ● generated by make config; client overlays
+├── data/                  ● dataset references
+├── deploy/                ● one directory per environment
+├── docs/client/           ● client documentation
+├── Makefile               ○ lifecycle targets; includes instance.mk
+├── scripts/               ○ lifecycle scripts, adapters, Go CLI, tests
+├── .github/workflows/     ○ ci, full-check, lifecycle, release, deploy, desktop-*
+├── .githooks/, .gitleaks.toml, .gitignore, AGENTS.md, CLAUDE.md   ○
+└── docs/*.md              ○ guides
 
-○ Template-owned. Instances must not modify these paths.
-● Instance-owned. The template provides `instance.yaml` and an empty
-  `extensions/`. The instance creates the other paths when it needs them.
-◆ Modified only by `make update-core REF=<tag>`.
+○ Template-owned. Instances do not modify these paths.
+● Instance-owned. The template provides instance.yaml and an empty extensions/.
+◆ Changed only by make update-core REF=<tag>.
 ```
 
-`.template-owned` is the authoritative list of template-owned paths. A path
-that is not listed there is instance-owned.
+`.template-owned` is the authoritative list of template-owned paths, one git
+pathspec per line. A path that is not listed is instance-owned.
 
-### 6.1 Drift Check
+### 6.1 Drift Check and Synchronization
 
-`.template-owned` lists the template-owned paths, one git pathspec per line.
-`make check-template` reads this list from the commit named in
-`.template-version`, not from the instance's working tree, so an instance
-cannot remove a path from the list by editing it locally.
-
-`.template-version` holds one commit id: the template commit that was last
-merged into the instance. `make check-template` fails if any
-`.template-owned` path differs from that commit — an edit, a removal, or an
-untracked or newly added file inside an owned directory all count as drift.
-`make check` includes `make check-template`.
-
-The template itself carries no `.template-version`: it is the source of
-template-owned paths, so there is nothing to compare it with, and
-`make check-template` reports this and exits 0.
+`.template-version` holds the template commit last merged into the instance.
+`make check-template` reads `.template-owned` from that commit and fails if
+any listed path differs from it: an edit, a removal, or an added file inside
+an owned directory. `make check` includes it. The template has no
+`.template-version`; there `make check-template` reports this and exits 0.
 
 `make template-sync` merges the template's `main` into the instance and
-updates `.template-version` to the merged commit, which is how an instance
-picks up a template-owned change before `make check-template` next runs.
-The instance keeps its own `core` gitlink; the sync prints the template's
-core pin, and `make update-core` follows it. A conflict on an instance-owned
-path keeps the instance's side; a conflict on a template-owned path takes the
-template's side; a conflict on any other path stops the sync.
+writes the merged commit to `.template-version`. A conflict on an
+instance-owned path keeps the instance's side; a conflict on a template-owned
+path takes the template's side; any other conflict stops the sync. The
+instance keeps its own `core` gitlink; the sync prints the template's core
+pin, and `make update-core` follows it.
 
 ### 6.2 `instance.yaml`
 
-Example (all values are illustrative):
-
 ```yaml
-name: acme                       # used in image names and the trial bundle name
-display_name: Acme               # used by make new-instance only (README.md); not shown in the desktop bundle
-core: v0.0.2                     # must match the tag of the core/ submodule
+name: acme                     # image names, bundle names, compose project
+display_name: Acme             # README of a new instance
+core: v0.0.2                   # must match the tag of core/
 data:
-  dataset: margince-demo-database/acme@v1    # optional
-flavor: acme/margince            # Constellation flavor: license product and image namespace
+  dataset: <git-url>@<ref>     # optional (T8)
 deploy:
-  staging:    { adapter: hook }
-  production: { adapter: hook }
+  production: { adapter: host }
 ```
 
-There is no `units` key. A directory under `extensions/` is an enabled unit,
-as in the existing tooling (`scripts/stage.sh`). A second list would duplicate
-that and could disagree with it.
-
-Scripts read `instance.yaml` through the Go CLI (`scripts/cli`), run with
-`GOWORK=off` because the editor `go.work` at the repository root does not list
-it. Go is already a required tool, so this adds no dependency.
-
-`make check-instance` (part of `make check`) validates the following:
-
-- `name` matches `^[a-z0-9]+(-[a-z0-9]+)*$` and has at most 32 characters.
-- `display_name` is present and is one line.
-- `core` is one of the tags that point at `core/` HEAD.
-- `flavor` has the form `<vendor>/margince`.
-- No unknown key is present.
-- Each environment under `deploy` matches `^[a-z0-9]+(-[a-z0-9]+)*$`, has an
-  `adapter` of `hook` (`d13` is refused, naming issue D1, until that adapter
-  exists), and has a matching `deploy/<env>/` directory (added with the
-  `deploy` key in T9).
-
-`make deploy` runs the same validation, without the `core` check
-(`cli validate`), before it reads the adapter (Section 10.4).
-
-Sections are added to the schema by the issue that uses them: `data` (T8),
-`deploy` (T9). The template's own file is:
+The template's own file:
 
 ```yaml
 name: margince-default
 display_name: Margince Default
 core: v0.0.2
-flavor: margince/margince
 ```
 
-The image namespace is derived from `flavor`: `<registry>/<flavor>` when a
-registry is supplied, `<flavor>` otherwise. Core's `docker-bake.hcl` appends
-`/api`, `/web`, and `/worker` to that namespace, so an instance's images are
-`<registry>/<flavor>/api`, `/web`, and `/worker` — for example
-`myregistry.example.com/acme/margince/api`. The registry host is supplied at
-build time (`REGISTRY=<host> make package`), not stored in `instance.yaml`.
+Scripts read the file through the Go CLI in `scripts/cli`, run with
+`GOWORK=off`. `make check-instance` (part of `make check`) validates:
+
+- `name` matches `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters.
+- `display_name` is present and one line.
+- `core` is one of the tags at `core/` HEAD.
+- No unknown key is present.
+- `data.dataset`, when present, has the form `<git-url>@<ref>`.
+- Each environment under `deploy` matches `^[a-z0-9]+(-[a-z0-9]+)*$`, has an
+  `adapter` of `hook` or `host`, and has a `deploy/<env>/` directory.
+
+A directory under `extensions/` is an enabled unit; there is no unit list.
+
+Images are named `<REGISTRY>/<name>/api`, `/web`, and `/worker`, or
+`<name>/<role>` when `REGISTRY` is not set.
 
 ### 6.3 `instance.mk`
 
-`instance.mk` contains make targets that only one client needs. An example is
-the `zalo-lab` target in `margince-automation-world`. The template `Makefile`
-ends with `-include instance.mk`. `make check-template` runs
-`scripts/check-instance-mk.sh`, which fails in the following cases:
+The `Makefile` ends with `-include instance.mk`. `make check-template` fails
+when `instance.mk` redefines a template target, assigns a variable whose name
+does not start with `INSTANCE_`, or prevents `make` from reading the
+`Makefile`.
 
-- `instance.mk` redefines a template target.
-- `instance.mk` assigns a variable whose name does not start with `INSTANCE_`.
-- `make` cannot read the `Makefile` with `instance.mk` included.
+## 7. Public-Only Rule
 
-## 7. Reuse of Existing Scripts
+The template contains no reference to a private repository, private host, or
+private service, and no credential. `make check-public` (part of `make check`
+in the template only) fails when a tracked file outside `docs/superpowers/`
+matches a pattern in `scripts/check-public.patterns`. The patterns cover the
+organization names, internal hostnames, and internal service names that must
+not appear. The patterns file itself is excluded from the check; it lists
+names only, not links, credentials, or configuration. `docs/superpowers/` holds design history; it is reviewed and, where
+needed, removed before the repository is published.
 
-The following table lists each script in `margince-automation-world/scripts/`
-and the action taken when it is copied into the template. Each script keeps its
-`*.test.sh` test file.
+Consequences for existing files:
 
-| Script | Function | Action |
-|---|---|---|
-| `lib.sh` | Shared shell functions | Keep |
-| `lib.test.sh` | Tests for `lib.sh` | Change: the path-rewrite cases create synthetic units instead of assuming `zalo-oa` and `dispact-connector` exist |
-| `stage.sh`, `unstage.sh` | Copy units into `core/extensions/` and remove them | Keep |
-| `sync-manifests.sh`, `check-manifests.sh` | Keep unit manifests committed and current | Keep |
-| `check-core-clean.sh` | Verify `core/` is unmodified after a build | Keep |
-| `check-docs.sh` | Verify every `make` target named in the docs exists | Keep |
-| `preflight.sh`, `toolcheck.sh` | Verify required tools and versions | Keep |
-| `config-init.sh`, `config-check.sh`, `config-sync.sh` | Create and synchronize `.env.local` and `config/` with core examples | Keep |
-| `core-contrib.sh` | Create branches and pull requests for core contributions | Keep |
-| `fe-ds-gates.sh`, `fmt.sh` | Design-system gates and formatting for unit code | Keep |
-| `gitleaks-pin.sh`, `secret-scan.sh` | Pinned secret scanner | Keep |
-| `secret-scan.test.sh`, `.gitleaks.toml` | Prove the secret policy still catches | Change: remove the `zalo-personal` allowlist; the test plants tokens into synthetic files |
-| `gowork.sh`, `tsconfig-editor.sh` | Generate editor workspace files | Keep |
-| `test-integration-ext.sh` | Integration tests for units | Keep |
-| `desktop-kit/` | Desktop bundle launcher files | Keep |
-| `lint.sh` | Lint unit code | Change: run craft through `core/scripts/craft-pin.sh`; core `v0.0.2` has no `cli/craft` |
-| `package.sh` | Build `api`, `web`, `worker` images with units | Generalize: read the image name and registry from `instance.yaml`; rename labels `com.gradion.*` to `com.margince.instance.*` |
-| `new-unit.sh` | Create a new unit | Change (T1): render `scripts/unit-skeleton/*.tmpl` instead of copying `extensions/gradion`; add `new-unit.test.sh` |
-| `desktop.sh`, `build-info.sh` | Build, install, and inspect the desktop bundle | Change: neutral text (no client names). `display_name` is used by `new-instance` only. |
+- The lifecycle workflow guards on the absence of `.template-version`, not on
+  a repository name.
+- `make new-instance PUSH=1` requires `OWNER=`; there is no default owner.
+- `make template-sync` names no default template URL; `make new-instance`
+  records the URL in the instance's `template` remote.
+- The desktop workflows seed a demo dataset only when the repository
+  variable `DATASET_REPOSITORY` and the secret `DATASET_DEPLOY_KEY` are set.
+  Otherwise the bundle ships without data.
 
-The `Makefile` is copied with the following changes:
-
-- The header comment describes the template, not Gradion.
-- The `zalo-lab` target is removed. It moves to `instance.mk` in
-  `margince-automation-world`.
-- The `new-unit` description refers to `scripts/unit-skeleton/`.
-- The new targets in Section 9 are added.
-
-`.gitignore` loses the `.zalolab/` rule. The tooling docs (`adding-an-extension`,
-`contributing-to-core`, `desktop-build`, `glossary`, `release`,
-`troubleshooting`) are copied and their client references replaced. Every
-`make <target>` named in `README.md`, `CLAUDE.md`, or `docs/*.md` must exist,
-because `scripts/check-docs.sh` enforces it.
-
-New components that do not exist in `margince-automation-world`:
-
-| Component | Function |
-|---|---|
-| `scripts/cli/` | Go CLI: reads and validates `instance.yaml`; the reused PR #421 commands are added in T7. Run with `go run`. |
-| `scripts/check-template.sh`, `scripts/check-instance-mk.sh` | Drift check and `instance.mk` check (Sections 6.1 and 6.3). |
-| `scripts/new-instance.sh`, `scripts/template-sync.sh` | Create an instance; merge template changes into it (Sections 6.1 and 14). |
-| `scripts/deploy.sh`, `scripts/deploy/` | Deployment steps and adapters; `hook` exists, `d13` is issue D1 (Section 10.4). |
-| `scripts/lifecycle.test.sh` | End-to-end lifecycle test (Section 13). |
-| `scripts/trial-license.sh` | Requests a trial license from the Constellation licenser (Section 10.2). Issue T8. |
-| `scripts/unit-skeleton/` | Neutral unit template for `new-unit.sh`. |
-| `.github/workflows/deploy.yml`, `lifecycle.yml` | Manually triggered deployment; lifecycle test. |
-
-## 8. Build Tooling Layers
-
-| Layer | Location | Scope | Versioned with |
-|---|---|---|---|
-| 1. Product build | core | Builds Margince: role images (`docker buildx bake`), desktop bundle (`make desktop-dist`, `make desktop-win`), composition (`gen-composition`). | Core tag |
-| 2. Instance orchestration | template `scripts/` | Assembles and ships the instance: stages units into core, invokes layer 1 with the instance name and version, obtains licenses, pushes images, invokes deployment. | Template (via merge) |
-| 3. Deployment target | instance `deploy/<env>/` | Defines where the instance runs: configuration values and optional hooks. Contains no build logic. | Instance |
-
-Changes are placed as follows:
-
-- A change to how Margince is compiled is made in core.
-- A change to how an instance is assembled or shipped is made in the template.
-- A client repository contains neither type of change.
-
-## 9. Lifecycle Commands
-
-All instances provide the same commands. Existing target names from
-`margince-automation-world` are kept. The template CI runs these commands
-against the template itself to verify the template.
-
-Status values: **Copied** (from `margince-automation-world`, unchanged or
-generalized), **Implemented** (new in the template), **Planned** (issue named).
+## 8. Lifecycle Commands
 
 | Command | Function | Status |
 |---|---|---|
-| `make install` | Verifies required tools, checks out core, installs dependencies, git hooks, and configuration. | Copied |
-| `make dev` | Starts infrastructure services and runs `api`, `worker`, and `web` with the instance units composed. | Copied |
-| `make new-unit NAME=<n>` | Creates an extension in `extensions/<n>` from `scripts/unit-skeleton/`. | Copied, changed |
-| `make check` | Full gate: core checks, composition, unit tests, linters, secret scanning, `check-instance`, and `check-template`. | Copied, changed |
-| `make ci` | `make check` plus integration tests against a real database and submodule checks. | Copied |
-| `make package VERSION=<v>` | Builds the `api`, `web`, and `worker` images with the instance units. | Copied, changed |
-| `make desktop VERSION=<v>` | Builds the desktop bundle with the instance units. | Copied, changed |
-| `make update-core REF=<tag>` | Moves the core submodule to a release tag and records the tag in `instance.yaml`. | Copied, changed |
-| `make new-instance NAME=<n> DISPLAY_NAME=<d>` | Creates a client instance repository from the template (`VENDOR=`, `DIR=`, `PUSH=1 OWNER=`). Runs in the template only. | Implemented |
-| `make check-instance` | Validates `instance.yaml` (Section 6.2). | Implemented |
-| `make check-template` | Drift check: template-owned paths match `.template-version`, and `instance.mk` passes Section 6.3. | Implemented |
-| `make template-sync` | Merges the template's `main` into the instance and records the merged commit in `.template-version`. | Implemented |
-| `make deploy ENV=<env> VERSION=<v>` | Deploys the specified images to the environment defined in `deploy/<env>/`. | Implemented |
-| `make test-cli` | Runs the Go CLI tests. Part of `make test-scripts`. | Implemented |
-| `make test-lifecycle` | Runs the end-to-end lifecycle test (Section 13). Runs in the template only. | Implemented |
-| `make release VERSION=<v>` | Verifies the working tree and `make check`, then pushes the tag `<v>` (a Constellation version, for example `2026.3`). | Planned (T7) |
-| `make trial` | Runs `make desktop` and adds configuration, dataset, and a trial license. See Section 10.2. | Planned (T8) |
+| `make install` | Checks tools, checks out core, installs dependencies, hooks, and configuration. | Done |
+| `make dev` | Runs infrastructure and `api`, `worker`, `web` with the units composed. | Done |
+| `make new-unit NAME=<n>` | Creates a unit from `scripts/unit-skeleton/`. | Done |
+| `make check` | Full gate, including `check-instance`, `check-template`, and (template only) `check-public`. | Done; `check-public` in T13 |
+| `make ci` | `make check` plus integration tests and submodule checks. | Done |
+| `make new-instance NAME=<n> DISPLAY_NAME=<d>` | Creates an instance from the template (`DIR=`, `PUSH=1 OWNER=`). | Done; T13 removes `VENDOR=` |
+| `make template-sync` | Merges the template's `main` and records it. | Done |
+| `make update-core REF=<tag>` | Moves core to a release tag and records it. | Done |
+| `make package VERSION=<v>` | Builds the three role images. | Done; T13 renames the images |
+| `make smoke VERSION=<v>` | Runs the three images with a temporary PostgreSQL and Redis and checks them. | T7 |
+| `make release VERSION=<v>` | Checks and pushes a release tag. | T7 |
+| `make desktop VERSION=<v>` | Builds the desktop bundle. | Done |
+| `make license OUT=<file>` | Obtains a production license into a file. | T16 |
+| `make trial VERSION=<v>` | Builds a trial bundle with a trial license. | T8 |
+| `make deploy ENV=<env> VERSION=<v>` | Deploys a release to an environment. | Done; `host` adapter in T15 |
+| `make host-bootstrap ENV=<env>` | Installs Docker and Compose on a new server. | T15 |
+| `make test-scripts`, `make test-cli`, `make test-lifecycle` | Script, CLI, and end-to-end tests. | Done |
 
-## 10. Workflows
+## 9. Workflows
 
-### 10.1 Development (Goal 4)
+### 9.1 Development
 
-Run `make install`, then `make dev`. `make dev` performs the following steps:
+`make install`, then `make dev`: stages the units into `core/`, starts
+PostgreSQL, Redis, and MinIO, and runs `api`, `worker`, and `web` from source
+with `MARGINCE_ENV=dev`. No license is required.
 
-1. Stages the instance units into `core/`.
-2. Starts PostgreSQL, Redis, and MinIO.
-3. Runs `api`, `worker`, and `web` from source using `config/margince.yaml` with
-   the development overlay.
+### 9.2 Release
 
-The development environment sets `MARGINCE_ENV=dev`. No license is required.
-These targets exist in `margince-automation-world` and are copied unchanged.
+`make release VERSION=<v>` fails without creating a tag unless all of the
+following are true, in this order: `<v>` matches the release pattern
+(Section 10); the working tree is clean, untracked files included; `HEAD` is
+an ancestor of `origin/main` after a fetch; the tag exists neither locally nor
+on `origin`; `<v>` is newer than every existing release tag; `make check`
+passes. It then creates an annotated tag and pushes it. If the push fails,
+the local tag is deleted.
 
-### 10.2 Laptop Trial (Goal 3)
+`release.yml` runs on a pushed tag that matches the release pattern:
 
-`make trial` performs the following steps:
+1. **Check:** verifies the tag and that it is on `main`, then runs
+   `full-check.yml`.
+2. **Images:** `make package VERSION=<v>` for `linux/amd64`, or for the
+   platforms in the repository variable `PLATFORMS`.
+3. **Smoke test:** `make smoke VERSION=<v>` starts the three images with a
+   temporary PostgreSQL and Redis on a private Docker network, waits until
+   `api` answers `/readyz`, `web` answers `/`, and `worker` is running, and
+   removes everything it started, on success and on failure. On failure it
+   prints the last 100 log lines of each container. The environment for the
+   images is the one core's own release workflow uses for its smoke test.
+4. **Push:** only when the repository variable `REGISTRY` is set. Logs in
+   with the secrets `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` and pushes
+   the images with tag `<v>`.
+5. **Desktop bundles:** macOS and Windows, as today.
+6. **GitHub Release:** created after all jobs pass, with the bundles attached
+   and notes that list the core version, the instance commit, and the image
+   digests (or "images were not pushed: REGISTRY is not set"). A `-rc.N`
+   version is published as a pre-release.
 
-1. Runs `make desktop`, which stages the units and runs the core desktop build
-   for the host platform.
-2. Adds the production configuration overlay from `config/`.
-3. Adds the dataset referenced in `data/`, using the existing `desktop-seed`
-   mechanism.
-4. Runs `scripts/trial-license.sh` to obtain a trial license and writes it to
-   the bundle environment file.
-5. Writes the bundle to `dist/trial/<name>-<version>-<platform>/`.
+Images carry the labels `com.margince.instance.name`,
+`com.margince.instance.revision`, `com.margince.core.revision`,
+`com.margince.core.version`, and `com.margince.instance.units`.
 
-The trial license is a license JWT issued by the Constellation licenser for the
-flavor in `flavor`. It has a limited validity period and is marked as
-a trial license. The template requests it from the licenser API using an
-operator credential provided in the environment variable
-`MARGINCE_LICENSER_TOKEN`. The license is written to the bundle only. It is
-never committed to the repository.
+### 9.3 Licensing
 
-The bundle runs in production mode. The client therefore evaluates the same
-configuration that is later deployed.
+A license is a JWT that core accepts in `MARGINCE_LICENSE`. It is never
+committed and never printed. `scripts/license.sh` is the only script that
+calls the license service.
 
-Required Constellation changes: a trial license type (validity period and trial
-marker) and an issuance endpoint that accepts an operator credential. Trial
-licenses are issued per flavor, so flavors must exist first. The details are
-defined in sub-project 4.
-
-### 10.3 Build and Release (Goal 5)
-
-`VERSION` is a Constellation version (`YYYY.edition`, for example `2026.3`;
-Section 11) and is the git tag, the image tag, and the dist release version at
-once (`make release`, `make package`, `make deploy`). For example,
-`make release VERSION=2026.3` verifies that the working tree is clean and that
-`make check` passes, then creates and pushes the tag `2026.3`; the images of
-that release are tagged `2026.3`, and the release is drafted into the dist
-service as `2026.3` with Constellation's release-management CLI.
-
-The existing `release.yml` runs on release tags (currently `v*`; changed to the `YYYY.edition` shape in T7). It runs `full-check.yml` and
-builds the macOS and Windows desktop bundles. The template adds the following
-jobs:
-
-1. **Images:** runs `make package` with the flavor namespace and `VERSION=<v>`.
-   This produces `<registry>/<flavor>/api`, `/web`, and `/worker` with
-   the candidate tag `cand-<commit>`, for multiple architectures. Each image has an OCI label with the core version.
-2. **Smoke test:** starts the three images with a temporary PostgreSQL and
-   Redis instance and verifies that they start and respond.
-3. **Publish:** adds the tag `<v>` (for example `2026.3`) to the images in the Constellation registry
-   using the publisher identity, records the release for the flavor in the dist
-   service, and generates release notes with the `notes` command. The release
-   notes list the core version, the instance commit, and the image digests.
-4. **Verify:** runs the Constellation release harness against the published
-   flavor release: a license for the flavor is valid, the containers can be
-   pulled with it, and the binaries and SBOMs can be downloaded.
-
-Images are tagged with the instance version only. The core version is recorded
-as a label, because multiple instance releases can use the same core version.
-
-### 10.4 Deployment (Goal 5)
-
-`make deploy ENV=<env> VERSION=<v>` (`bash scripts/deploy.sh <env> <version>`,
-or a manual run of `deploy.yml`) runs:
+**API contract** (implemented by the Margince license service):
 
 ```
-preflight → apply → verify
+POST {MARGINCE_LICENSE_API}/v1/licenses
+Authorization: Bearer {MARGINCE_ACCOUNT_TOKEN}
+Content-Type: application/json
+
+{"kind": "trial" | "production", "instance": "<name>", "core": "<core tag>"}
+
+201 {"license": "<JWT>", "expires_at": "<RFC 3339 time>"}
+4xx {"error": "<message>"}
 ```
 
-A failed `preflight` stops the deployment immediately: nothing has changed, so
-there is no rollback. A failed `apply` or `verify` runs `rollback`, and the
-deployment still fails (non-zero exit) whether or not the rollback succeeds.
-If the environment provides no `rollback` step, `make deploy` prints
-"no rollback hook" and exits non-zero without attempting one; the environment
-may be half-deployed.
+`scripts/license.sh <trial|production> <file>` behavior:
 
-Before any step, `deploy.sh` requires `VERSION` to be a full release tag
-(Constellation's version pattern, `^\d{4}\.(0|[1-9]\d*)(\.(0|[1-9]\d*)(-p[1-9]\d*)?)?$`), validates `instance.yaml` (`cli validate`),
-and refuses a working tree with uncommitted changes or untracked files unless
-`ALLOW_DIRTY=1`. The hooks and `deploy/<env>/` always come from the checkout;
-when `HEAD` is not the commit of the tag `VERSION`, `deploy.sh` prints
-`deploy: hooks and configuration come from <short sha>, not from release
-<VERSION>` and continues. `deploy.yml` deploys from the tag itself.
-
-`deploy.sh` resolves the adapter for `<env>` from `instance.yaml`
-(`deploy.<env>.adapter`), exports the variables below, then asks the adapter
-`has <step>` before running that step — a step the adapter does not provide is
-skipped, never mistaken for a failure, because a provided step's exit code is
-never overridden. `apply` is the only required step; its absence is caught by
-the adapter's `check`, before any step runs.
-
-| Variable | Set for | Value |
-|---|---|---|
-| `DEPLOY_ENV` | every step | The environment name. |
-| `DEPLOY_VERSION` | every step | The release being deployed. |
-| `DEPLOY_STEP` | every step | The step's own name (`preflight`, `apply`, `verify`, `rollback`). |
-| `DEPLOY_DIR` | every step | Absolute path of `deploy/<env>/`. |
-| `INSTANCE_NAME` | every step | `name` from `instance.yaml`. |
-| `IMAGE_REPO` | every step | The image namespace (Section 6.2). |
-| `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER` | every step | `$IMAGE_REPO/<role>:$DEPLOY_VERSION`. |
-| `DEPLOY_FAILED_STEP` | `rollback` only | The step that failed (`apply` or `verify`). |
-
-`deploy/<env>/` contains the environment configuration: hostnames, replica
-count per component, and the names of required secrets, such as the production
-license (`MARGINCE_LICENSE`) and the database URL. It does not contain secret
-values; hooks receive secrets from the environment.
-
-`instance.yaml` specifies an **adapter** for each environment. This plan
-implements one adapter, in `scripts/deploy/`:
-
-- `hook`: runs the instance's own scripts,
-  `deploy/<env>/hooks/{preflight,apply,verify,rollback}.sh`, called with
-  `bash` so a missing executable bit does not matter. `apply.sh` is required;
-  the other three steps are optional.
-
-`d13` (deploy to District 13, Gradion's Kubernetes platform, based on
-`margince-d13-deploy`) is issue D1 and is not implemented yet;
-`instance.yaml` refuses `adapter: d13` with a message naming D1. A new
-adapter is added to the template only when at least two clients require the
-same deployment target. Until then, clients use the `hook` adapter.
-
-All adapters deploy `api`, `web`, and `worker` as separate services so that each
-can be scaled independently.
-
-`.github/workflows/deploy.yml` runs `make deploy` by hand
-(`workflow_dispatch`, with one `environment` input), in the GitHub
-Environment named by `environment`, so protection rules, secrets, and
-variables are configured per environment. The workflow is dispatched from the
-release tag: `VERSION` is `github.ref_name`, and the checkout is that tag.
-Each environment must be created ahead of time in repository settings, with
-"Deployment branches and tags" limited to the release-tag rule (for example `[0-9][0-9][0-9][0-9].*`) and, for
-production, required reviewers; the workflow does not create one.
-
-The job steps run in this order:
-
-1. Fail unless `github.ref_type` is `tag` and `github.ref_name` matches
-   Constellation's version pattern.
-2. Fail unless `environment` matches `^[a-z0-9]+(-[a-z0-9]+)*$` (bash
-   `[[ =~ ]]` on the whole value).
-3. Check out the tag; set up Go.
-4. Fail unless `environment` is under `deploy:` in `instance.yaml`.
-5. Export the variables, then the secrets, as environment variables.
-6. Run `make deploy ENV=<environment> VERSION=<tag>`.
-
-A malformed name stops the job before checkout. A well-formed name that is
-not under `deploy:` stops it before any secret or variable is exported.
-GitHub resolves the job's `environment:` — and, for a name it does not
-recognize, may auto-create one — before any step runs, so in both cases
-GitHub may still have resolved or auto-created that environment for the run.
-Every environment a deployment might target must therefore be created ahead
-of time with its own protection rules; an environment reached only through
-auto-creation has none.
-
-The `secrets` and `vars` contexts contain the environment's secrets and
-variables and also the repository's and the organization's. Deploy secrets
-are kept at environment level only. Each name is exported (one `printf`
-heredoc per value, so a multi-line value stays intact; a secret wins over a
-variable of the same name) except a name that does not match
-`^[A-Z_][A-Z0-9_]*$`, or that does match but is one of the excluded exact
-names `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`,
-`CDPATH`, `PROMPT_COMMAND`, `TMPDIR`, `MFLAGS`, `MAKE_TERMOUT`,
-`MAKE_TERMERR`, or carries one of the excluded prefixes `LD_`, `DYLD_`,
-`GITHUB_`, `RUNNER_`, `ACTIONS_`, `GIT_`, or matches `^GO[A-Z0-9]*$` or
-`^MAKE[A-Z0-9]*$` (Go's and make's own variables contain no underscore, so
-`GOOGLE_APPLICATION_CREDENTIALS` and `MAKER_TOKEN` are exported).
-`github_token` is never exported. A skipped name is printed to the log; no
-value is printed. `REGISTRY` can be an environment variable. Checkout runs
-with `persist-credentials: false`, so no push credential for the repository
-is left on disk for a hook to find.
-The checkout is shallow and detached at the tag, so a hook must not rely on
-git history or on pushing. `make deploy` removes `ENV`, `VERSION`,
-`MAKEFLAGS`, `MAKELEVEL`, and `MFLAGS` from the environment of `deploy.sh`,
-so a hook that runs `make` does not inherit them as overrides.
-
-### 10.4.1 District 13 Adapter (issue D1)
-
-**Status:** Proposed. Not yet reviewed.
-
-District 13 (D13) is the Kubernetes platform operated by NFQ DevOps. Its
-interface, as used by `margince-d13-deploy`, is the following:
-
-- NFQ DevOps registers a repository with D13. A push to a branch named after
-  an environment (`staging`, `production`) starts the NFQ Jenkins pipeline
-  defined by `Jenkinsfile` (`nfq-library`).
-- The pipeline reads `.d13.<branch>.yaml` from the repository root. For each
-  service it builds an image from the Dockerfile named in that file, writes
-  `.env` from the namespace's Vault secrets into the build context, and
-  deploys with Helm into the namespace `<project>-<branch>`.
-- Jenkins reports the result as a GitHub commit status on the pushed commit.
-- The Jenkins agent has no kubectl context. The `Verify rollout` stage
-  therefore cannot confirm that the pods serve the new build, and it does not
-  fail the build.
-
-`margince-d13-deploy` compiles Margince from source inside D13. The `d13`
-adapter does not compile anything. D13 deploys the images of an instance
-release (Section 10.3), so the deployed code is the code that the release
-smoke test and the release harness verified. Core's release images use the
-same entrypoints as the current D13 images (`scripts/deploy/*-entrypoint.sh`,
-which read `/.env`), so a thin image layer is sufficient.
-
-**Environment branch.** The branch named after the environment is generated
-by the adapter. It is never merged into `main` and never edited by hand. Each
-deployment adds one commit to it. The tree of that commit contains only:
-
-| Path | Source |
+| Condition | Result |
 |---|---|
-| `.d13.<branch>.yaml`, `config/margince.yaml`, `ingress.<branch>.yaml` (optional) | `deploy/<env>/` (instance-owned) |
-| `Jenkinsfile`, `scripts/verify-rollout.sh` | `scripts/deploy/d13/` (template-owned) |
-| `Dockerfile.api`, `Dockerfile.worker` | Generated: `FROM $IMAGE_API` (or `$IMAGE_WORKER`), then copy `.env` to `/.env` and `config/margince.yaml` to `/app/config/margince.yaml`. |
-| `Dockerfile.web` | Generated: `FROM $IMAGE_WEB`. |
-| `RELEASE` | `DEPLOY_VERSION`. |
+| `MARGINCE_TRIAL_LICENSE` (for `trial`) or `MARGINCE_LICENSE` (for `production`) is set | That value is written to `<file>`. No request is made. |
+| `MARGINCE_LICENSE_API` or `MARGINCE_ACCOUNT_TOKEN` is not set | Fails, naming the missing variables. |
+| The service answers 201 | The license is written to `<file>` with mode 600; the expiry is printed. |
+| Any other answer | Fails with the service's `error` message and the HTTP status; nothing is written. |
 
-`deploy/<env>/d13.env` sets `D13_BRANCH` (default: the environment name) and
-`D13_URL` (the public base URL, for example `https://margince.staging.gradion.com`).
-
-**Steps.**
-
-| Step | Action |
-|---|---|
-| `check` | `deploy/<env>/` contains `.d13.<branch>.yaml`, `config/margince.yaml`, and `d13.env`. `D13_BRANCH` is not the default branch. |
-| `preflight` | `D13_PUSH_TOKEN` is set. The three release images exist in the registry (`docker manifest inspect`). |
-| `apply` | Builds the tree, commits it with the current branch tip as parent (no parent for the first deployment), and pushes it to `D13_BRANCH` with `D13_PUSH_TOKEN`. |
-| `verify` | Waits for the Jenkins commit status on the pushed commit (timeout `D13_VERIFY_TIMEOUT`, default 1800 seconds). `failure` or `error` fails the step. After `success`, `D13_URL/` and `D13_URL/v1/` must answer without a 5xx status. |
-| `rollback` | Pushes a new commit whose tree is the tree of the branch tip before `apply`. Jenkins then redeploys the previous release. If there was no previous tip, the step reports that there is nothing to roll back to and fails. |
-
-`D13_PUSH_TOKEN` is a GitHub token with `contents: write` and
-`statuses: read` on the instance repository. It is an environment secret
-(Section 10.4); `deploy.yml` keeps `persist-credentials: false`.
-
-**Limits.** `verify` confirms that Jenkins finished and that the public URL
-answers. It cannot confirm that the pods run the new image, because core has
-no public endpoint that reports its version and D13 gives the pipeline no
-kubectl context. A rollback is a redeployment of an older image against a
-database whose migrations may have advanced; `rollback` does not change the
-database.
-
-**Prerequisites outside this repository.**
-
-| ID | Owner | Prerequisite |
-|---|---|---|
-| P1 | NFQ DevOps | Register the owning instance repository with D13 Jenkins, with `project: margince`, so the existing namespaces (`margince-staging`, `margince-production`) and their Vault secrets are reused. |
-| P2 | NFQ DevOps, Constellation | The D13 Jenkins Docker builder can pull the instance images from the Constellation registry. |
-| P3 | Repository administrator | Create `D13_PUSH_TOKEN` in each GitHub Environment. |
-
-**Changes from `margince-d13-deploy`.**
-
-- Staging is no longer deployed nightly from core `main`. There are no
-  scheduled builds (Section 4). Staging is deployed with `make deploy` from an
-  instance release.
-- Production is deployed with the same command. `PRODUCTION_RELEASE` is
-  replaced by `RELEASE` on each environment branch.
-- `margince-d13-deploy` keeps deploying until the new repository's staging and
-  production deployments pass `verify`. Then it is archived (R2).
-
-### 10.5 Licensing by Stage
+`make license OUT=<file>` obtains a production license into `<file>`. The
+operator stores it as the `MARGINCE_LICENSE` secret of the environment.
 
 | Stage | Runtime mode | License |
 |---|---|---|
 | Development | `MARGINCE_ENV=dev` | Not required. |
-| Trial | Production | Trial license for the flavor, issued by the Constellation licenser and included in the bundle. |
-| Staging and production | Production | Production license for the flavor, issued at sign-off. Stored in the environment secret store and provided as `MARGINCE_LICENSE`. |
+| Trial | Production | Trial license in the bundle. |
+| Staging, production | Production | Production license in the environment secret `MARGINCE_LICENSE`. |
 
-Licenses are never committed to a repository. `MARGINCE_LICENSE` overrides any
-`license.token` value in the instance configuration. The instance
-configuration therefore does not define `license.token`.
+### 9.4 Laptop Trial
 
-## 11. Versioning (Goals 1 and 2)
+`make trial VERSION=<v>`:
+
+1. Obtains a trial license (`scripts/license.sh trial`). Fails before any
+   build when none is available. There is no fallback to development mode.
+2. Runs `make desktop VERSION=<v>`.
+3. Copies the bundle to `dist/trial/<name>-<v>-<platform>/`
+   (`macos-arm64`, `macos-x64`, `windows-x64`). An existing directory is
+   replaced only with `FORCE=1`.
+4. Writes the license and production mode into the environment file that the
+   bundle's launcher reads.
+5. When `data.dataset` is set, adds the dataset in the form the existing
+   desktop seeding reads, and prints the seeding command to run after the
+   first start.
+6. Writes `TRIAL.txt`: name, version, core version, and license expiry.
+
+### 9.5 Deployment Contract
+
+`make deploy ENV=<env> VERSION=<v>` (`scripts/deploy.sh`, or a manual run of
+`deploy.yml`) runs `preflight → apply → verify`. A failed `preflight` stops the
+deployment with nothing changed. A failed `apply` or `verify` runs `rollback`,
+and the deployment fails whether or not the rollback succeeds. Without a
+`rollback` step, the deployment fails with "no rollback hook".
+
+Before any step, `deploy.sh` requires `<v>` to match the release pattern,
+validates `instance.yaml`, and refuses a working tree with uncommitted
+changes unless `ALLOW_DIRTY=1`. It prints a notice when `HEAD` is not the
+commit of the tag `<v>`.
+
+The adapter is `deploy.<env>.adapter` in `instance.yaml`. `deploy.sh` runs
+`<adapter> check`, then asks `<adapter> has <step>` (exit 0 provided, 1 not
+provided, other values are errors) before each step. Exported to every step:
+
+| Variable | Value |
+|---|---|
+| `DEPLOY_ENV`, `DEPLOY_VERSION`, `DEPLOY_STEP` | Environment, release, step name. |
+| `DEPLOY_DIR` | Absolute path of `deploy/<env>/`. |
+| `DEPLOY_STATE_DIR` | A temporary directory shared by the steps of one run, removed at the end. |
+| `INSTANCE_NAME` | `name` from `instance.yaml`. |
+| `IMAGE_REPO` | The image namespace (Section 6.2). |
+| `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER` | `$IMAGE_REPO/<role>:$DEPLOY_VERSION`. |
+| `DEPLOY_FAILED_STEP` | `rollback` only: `apply` or `verify`. |
+
+The `hook` adapter runs `deploy/<env>/hooks/<step>.sh` with `bash`.
+`apply.sh` is required; the other steps are optional.
+
+`deploy.yml` is started by hand from a release tag, with one `environment`
+input, in the GitHub Environment of that name. It checks the tag and the
+environment name, checks out the tag without persisted credentials, checks
+that the environment is under `deploy:`, exports the environment's variables
+and secrets (names that match `^[A-Z_][A-Z0-9_]*$`, except the exact names
+`PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `NODE_OPTIONS`, `CDPATH`,
+`PROMPT_COMMAND`, `TMPDIR`, `MFLAGS`, `MAKE_TERMOUT`, `MAKE_TERMERR`, the
+prefixes `LD_`, `DYLD_`, `GITHUB_`, `RUNNER_`, `ACTIONS_`, `GIT_`, and names
+that match `^GO[A-Z0-9]*$` or `^MAKE[A-Z0-9]*$`), and runs `make deploy`.
+Each environment is created in the repository settings beforehand, limited to
+release tags, with required reviewers for production.
+
+### 9.6 The `host` Adapter
+
+The `host` adapter deploys to one Linux server, for example an AWS EC2
+instance, over SSH with Docker Compose.
+
+**Instance files** in `deploy/<env>/`:
+
+| File | Content |
+|---|---|
+| `host.env` | `HOST_SSH` (`user@host`, required), `HOST_DOMAIN` (required), `HOST_DIR` (default `/opt/margince/<name>`), `API_REPLICAS` and `WORKER_REPLICAS` (default 1). Read as `KEY=VALUE` lines; not executed. |
+| `config/margince.yaml` | The instance configuration for this environment. |
+| `secrets` | Names of the environment variables written to the server's `.env`, one per line, for example `MARGINCE_LICENSE`. Values come from the environment of `make deploy`. A listed name without a value fails `preflight`. |
+
+**Credentials** from the environment: `HOST_SSH_KEY` (private key; optional
+when the SSH agent has one), `HOST_KNOWN_HOSTS` (required; host key checking
+is never disabled), `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` (when the
+registry needs a login).
+
+**Template files** in `scripts/deploy/host/`: `compose.yaml` and `Caddyfile`.
+The compose project is `margince-<name>`. Services:
+
+- `api`, `web`, `worker` from `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER`, with
+  `API_REPLICAS` and `WORKER_REPLICAS`.
+- `postgres` (pgvector, PostgreSQL 16, initialized with core's
+  `scripts/deploy/db-bootstrap.sql`) and `redis`, with named volumes, in the
+  compose profile `local-data`. The profile is not started when
+  `MARGINCE_DSN` and `MARGINCE_REDIS` are both set, for example for RDS and
+  ElastiCache. The generated database passwords are stored once in
+  `$HOST_DIR/shared/data.env` and kept across releases.
+- `caddy` on ports 80 and 443, with automatic HTTPS for `HOST_DOMAIN`. It
+  routes `/v1`, `/oauth`, `/.well-known`, and `/mcp` to `api` and every other
+  path to `web`. `/healthz`, `/readyz`, and `/metrics` are not routed.
+
+**Server layout:** `$HOST_DIR/releases/<v>/` holds `compose.yaml`,
+`Caddyfile`, `config/margince.yaml`, and `.env` (mode 600).
+`$HOST_DIR/current` is a symbolic link to the running release. The last five
+releases are kept.
+
+| Step | Action |
+|---|---|
+| `check` | `host.env` has `HOST_SSH` and `HOST_DOMAIN`; `config/margince.yaml` and `secrets` exist. |
+| `preflight` | Every name in `secrets` has a value; `HOST_KNOWN_HOSTS` is set; SSH connects; the server has Docker and the Compose plugin; the server can log in to the registry and read the three image manifests. |
+| `apply` | Records the release that `current` points to in `$DEPLOY_STATE_DIR`; uploads the release directory; runs `docker compose pull` and `docker compose up -d --remove-orphans` for it; points `current` at it. |
+| `verify` | Within `HOST_VERIFY_TIMEOUT` (default 300 seconds): `api` answers `/readyz` inside the server, `worker` is running, and `https://$HOST_DOMAIN/` answers with a status below 500. `HOST_VERIFY_PUBLIC=0` skips the public check. |
+| `rollback` | Starts the recorded previous release directory and points `current` back at it. Without a previous release, it stops the new release and fails. The database is not rolled back: `api` applies migrations when it starts. |
+
+`make host-bootstrap ENV=<env>` installs Docker Engine and the Compose plugin
+on Ubuntu 22.04 or 24.04 or Amazon Linux 2023 over SSH and adds the SSH user
+to the `docker` group. It can run again without changing a prepared server.
+The server's security group opens ports 22, 80, and 443; the guide says so.
+
+## 10. Versioning
 
 | Version | Format | Used for |
 |---|---|---|
-| Core release | git tag `v0.0.x` (for example `v0.0.2`) | What instances pin. `make update-core` accepts release tags only. Core's own images are not consumed by instances; each instance builds its images from core's bake file at the pinned tag. |
-| Template or instance release | Constellation version `YYYY.edition`, optionally `.bugfix` and `-pN` for LTS (`^\d{4}\.(0|[1-9]\d*)(\.(0|[1-9]\d*)(-p[1-9]\d*)?)?$`, from `margince-constellation/pkg/version`), for example `2026.3` | The git tag, the image tag, the `VERSION=` value, and the dist release version are the same string. The core release it is built on is recorded as an OCI label and in the dist service. |
-| Template | template commit in `.template-version`; template release tags | The template version an instance last merged. |
+| Core release | git tag `v0.0.x` | What instances pin. |
+| Template or instance release | `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$`, for example `v1.2.0` or `v1.3.0-rc.1` | Git tag, image tag, `VERSION=`, desktop bundle name, GitHub Release. |
+| Template commit | `.template-version` | The template version an instance last merged. |
 
-There are no scheduled, hourly, or mainline builds in any repository.
+Ordering for "newer than every existing release" follows semantic
+versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`.
 
-Current state: `make deploy` and `deploy.yml` still require `vX.Y.Z`
-(`^v[0-9]+\.[0-9]+\.[0-9]+$`); T7 changes them to the Constellation pattern
-together with the release lane.
+## 11. Error Handling
 
-## 12. Error Handling
-
-| Command | Failure condition | Behavior |
+| Command | Failure | Behavior |
 |---|---|---|
-| `make check` | `core/` is not at the tag in `instance.yaml`, or has uncommitted changes. | Fails. |
-| `make check` | A template-owned path differs from `.template-version`, or `instance.mk` redefines a template target. | Fails. |
-| `make release` | Working tree is not clean, the tag already exists, or `make check` fails. | Fails without creating a tag. |
-| `release.yml` | Smoke test fails. | The version tag is not added. Images keep the candidate tag. The `cleanup` command removes old candidate images. |
-| `make deploy` | `verify` fails. | Runs `rollback` and exits with a non-zero status. |
-| `make trial` | No license is available. | Fails. Does not fall back to development mode. |
+| `make check` | `core/` is not at the tag in `instance.yaml`, a template-owned path drifted, `instance.mk` breaks a rule, or a private reference is found. | Fails, naming each problem. |
+| `make release` | Any precondition in Section 9.2. | Fails; no tag exists afterwards. |
+| `release.yml` | The smoke test fails. | Nothing is pushed and no GitHub Release is created. |
+| `make trial` | No trial license. | Fails before the build. |
+| `make deploy` | `apply` or `verify` fails. | Runs `rollback`, then fails. |
+| `scripts/license.sh` | The service refuses. | Fails with the service's message; nothing is written. |
 
-## 13. Testing
+## 12. Testing
 
-- Existing script tests (`*.test.sh`) are copied with their scripts and run by
-  `make test-scripts`. Generalized scripts get updated tests.
-- `make test-lifecycle` (`scripts/lifecycle.test.sh`) creates an instance from
-  the template in a scratch directory and runs it through the lifecycle a
-  client developer uses: `new-instance`, `check-instance` and `check-template`,
-  adding and testing a unit (`new-unit`, `compose`, `u`), `deploy` through the
-  hook adapter (a success and a verify failure that rolls back), and
-  `template-sync` from a scratch template clone. Every step asserts its
-  outcome. It is slow, so it is not part of `make test-scripts` and runs in
-  its own CI workflow, `lifecycle.yml`, on every pull request, on push to
-  `main`, and on demand. Template changes that break the lifecycle fail there
-  before any instance merges them. It needs a clean template working tree
-  (`make new-instance` refuses otherwise).
-- `.github/workflows/` is template-owned (Section 6), so every instance
-  inherits `lifecycle.yml` unchanged. Its job guards on
-  `github.repository == 'gradionhq/margince-template'` so it never runs
-  there, and `scripts/lifecycle.test.sh` itself skips (exit 0) when
-  `.template-version` exists, since an instance has no `make new-instance` to
-  drive the lifecycle it tests.
-- Trial (T8) and release (T7) steps join `scripts/lifecycle.test.sh` when
-  those lanes exist; `lifecycle.yml` needs no change when they do.
-- The Go CLI has unit tests.
+- Each script has a `*.test.sh` run by `make test-scripts`. External commands
+  (`ssh`, `scp`, `docker`, `curl`) are replaced by stubs; no test needs a
+  network, a server, a registry, or the license service.
+- The Go CLI has unit tests (`make test-cli`).
+- `make test-lifecycle` creates an instance from the template in a scratch
+  directory and runs: `new-instance`, `check-instance`, `check-template`, a
+  unit (`new-unit`, `compose`, `u`), `release` against a local bare `origin`,
+  `deploy` with the `hook` adapter (success, and a failed verify that rolls
+  back) and with the `host` adapter through the stubs, and `template-sync`
+  from a scratch template clone. It runs in `lifecycle.yml` on pull requests,
+  on pushes to `main`, and on demand, in the template only.
+- `make trial` builds a desktop bundle and is too slow for the lifecycle test;
+  `trial.test.sh` uses a stub desktop build.
 
-## 14. Scope of Adoption
+## 13. Implementation Status
 
-The template applies to **new instances only**.
+| Issue | Scope | Status |
+|---|---|---|
+| T1–T6, T9, T11 | Tooling import, `instance.yaml` and CLI, generalized scripts, `instance.mk`, core pin by tag, drift check, deployment contract and `hook` adapter, instance creation. | Done |
+| T10 part 1 | Lifecycle test and `lifecycle.yml`. | Done |
+| T13 | Remove `flavor` and private references; `make check-public`; optional dataset source; `-rc.N` accepted by `make deploy`. | Open |
+| T7 | `make release`, `make smoke`, `release.yml` images, smoke test, push, GitHub Release. | Open; needs T13 |
+| T15 | `host` adapter, `DEPLOY_STATE_DIR`, `make host-bootstrap`. | Open; needs T13 |
+| T16 | `scripts/license.sh`, `make license`. | Open |
+| T8 | `make trial` and `data.dataset`. | Open; needs T16 |
+| T10 part 2 | Lifecycle test: release and `host` deployment. | Open; needs T7, T15 |
+| T12 | Guides: release, deploy (hook and host), license, trial. | Open; last |
 
-- `incap` and `afs` are not migrated. They keep their current structure.
-- `margince-automation-world` is the source of the template tooling. It adopts
-  the template after M1 (Section 4, issue I1).
-- A new instance is created from the template with `scripts/new-instance.sh`
-  (issue T11). The instance is a new repository with a `template` remote.
-  Template changes are applied with `git merge template/main`.
+Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12.
 
-The `margince-d13-deploy` deployment moves to the `d13` adapter and the
-`deploy/` directory of a new instance repository created from the template
-(Section 4, issue D1).
-
-## 15. Sub-Projects
-
-The work is delivered as separate implementation plans in the following order.
-
-| # | Sub-project | Scope | Repository | Status |
-|---|---|---|---|---|
-| 1 | Core versioning | No work. Core release tags stay `v0.0.x`. Instances build their own images, so core's release images need no change (C1 closed). | core | Closed |
-| 2 | Template foundation | Copy the tooling from `margince-automation-world`; generalize the scripts in Section 7; add `instance.yaml`, `instance.mk`, the unit skeleton, the drift check, instance creation and synchronization, and the template CI. | template | Complete (T1–T6, T11, T10 part 1) |
-| 3 | Flavors, build, and release | Constellation flavors (management API, vendor namespace, dynamic catalog through the event outbox, licenses per flavor) and the release harness; the image, smoke test, publish, and verify jobs in `release.yml`; `make release`. | Constellation (K2, K4), template (T7) | Waiting for K2 and K4 |
-| 4 | Trial and licensing | Constellation trial license type and issuance endpoint per flavor; `make trial`. Starts after flavors exist. | Constellation (K1), template (T8) | Waiting for K1 |
-| 5 | Deployment | The four-step deployment interface and the `hook` adapter (T9); the `d13` adapter (D1). | template | T9 complete; D1 open |
-| 6 | Retirement | Archive `margince-release` (R1) and `margince-d13-deploy` (R2); close PR #421; update references (R3). | several | Waiting for T7 and D1 |
-
-## 16. Rejected Alternatives
+## 14. Rejected Alternatives
 
 | Alternative | Reason for rejection |
 |---|---|
-| One-time copy (GitHub template repository without synchronization) | Instances diverge over time. This caused the current inconsistency. |
-| Separately versioned tooling repository or CLI | Adds a third version to align with core and the template. Duplicates the function of fork-and-merge. |
-| Central build workflow in Constellation (PR #421) | Instance developers cannot build and deploy their own repository, which Goal 5 requires. |
-| Configuration-only deployment (no hooks) | Each client-specific requirement would require a template change. |
-| Import the `margince-automation-world` git history into the template | The history contains the code of five client extensions. Every client fork would inherit it. |
-| Scheduled or hourly mainline builds (in Constellation or elsewhere) | Not needed: releases are a deliberate step in each instance, and core already reduced its own release builds to on demand to protect the shared runner pool. |
-| `vX.Y.Z` tags for template and instance releases | The Constellation dist service accepts only `YYYY.edition` versions, so `v` versions could not be recorded as releases, licensed, or upgraded. |
-| New tooling written from scratch | The existing scripts are in active use and have tests. Rewriting them adds work and risk without benefit. |
-
-## 17. Open Decisions
-
-| ID | Decision | Options | Recommendation | Blocks |
-|---|---|---|---|---|
-| OD3 | Which instance owns `margince.gradion.com` (the D13 deployment, Section 10.4.1). | (a) A new instance repository with no extensions: instance `gradion`, flavor `gradion/margince`, repository `gradionhq/margince-instance-gradion`. It releases and deploys like any client instance. (b) `margince-automation-world` after I1; `margince.gradion.com` would then run its five extensions. | (a). It keeps the current behavior (core without extensions) and does not make D1 wait for M1 and I1. | D1 |
-
-A new decision is added here with its options and the issues it blocks, and
-is moved to Section 4 when it is made.
-
-## 18. Implementation Status
-
-The GitHub issues and their dependencies are listed in
-`docs/superpowers/plans/2026-09-24-issue-breakdown.md`.
-
-| Area | Status |
-|---|---|
-| Template foundation, `instance.yaml` and CLI, `instance.mk`, core pin by tag, drift check (T1–T6) | Complete |
-| Instance creation and synchronization (T11) | Complete |
-| Deployment contract and `hook` adapter (T9) | Complete |
-| Template CI and lifecycle test (T10 part 1) | Complete. Part 2 adds the trial and release steps after T7 and T8. |
-| Release (T7) | Waiting for Constellation K2 (flavors, image namespace, push identity) and K4 (release harness). T7 also changes `make deploy`, `deploy.yml`, and the lifecycle test from `vX.Y.Z` to the Constellation version pattern. |
-| Trial (T8) | Waiting for Constellation K1 (trial license per flavor). |
-| Guides (T12) | After T7 and T8. |
-| `d13` adapter and its instance repository (D1) | Design proposed (Section 10.4.1); waits for review and OD3. The first real deployment also needs T7 and P1–P3. |
-| Retirement (R1–R3) | After T7 and D1. |
-| `margince-automation-world` migration (I1) | After M1. |
+| One-time copy without synchronization | Instances diverge over time. |
+| Separately versioned tooling repository or CLI | Adds a third version to align. It can be split out later if needed. |
+| Builds or deployments run by a central Margince service | Instance developers must build and deploy their own repository, and the service would be private. |
+| Per-instance license products ("flavors") | A license authorizes core; per-instance registration adds a service dependency without benefit. |
+| Calendar versions (`YYYY.edition`) | They served a private distribution service that the public template does not use. |
+| A default public registry | Clients own their images and registry. |
+| Built-in Kubernetes or other adapters now | Only the single-server case is needed now; hooks cover other targets. |
+| Configuration-only deployment (no hooks) | Each client-specific requirement would need a template change. |
+| Importing the source instance's git history | It contains client extension code that every instance would inherit. |
