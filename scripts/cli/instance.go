@@ -18,7 +18,14 @@ type Instance struct {
 	Name        string                  `yaml:"name"`
 	DisplayName string                  `yaml:"display_name"`
 	Core        string                  `yaml:"core"`
+	Data        Data                    `yaml:"data"`
 	Deploy      map[string]DeployTarget `yaml:"deploy"`
+}
+
+// Data is the data: section of instance.yaml.
+type Data struct {
+	// Dataset is the demo dataset, <git-url>@<ref>. Optional.
+	Dataset string `yaml:"dataset"`
 }
 
 // DeployTarget is one environment under deploy: in instance.yaml.
@@ -29,6 +36,9 @@ type DeployTarget struct {
 var (
 	namePattern    = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	coreTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	// datasetPattern is <git-url>@<ref>, split at the LAST @: an scp-style
+	// git URL (git@host:org/repo) contains one itself, a ref cannot.
+	datasetPattern = regexp.MustCompile(`^\S+@[^@\s]+$`)
 )
 
 // Parse decodes instance.yaml and refuses unknown keys.
@@ -54,6 +64,8 @@ func (in Instance) Value(key string) (string, bool) {
 		return in.DisplayName, true
 	case "core":
 		return in.Core, true
+	case "data.dataset":
+		return in.Data.Dataset, in.Data.Dataset != ""
 	}
 	if env, ok := strings.CutPrefix(key, "deploy."); ok {
 		if env, ok = strings.CutSuffix(env, ".adapter"); ok {
@@ -85,6 +97,9 @@ func (in Instance) Validate() []string {
 		problems = append(problems, "core: required")
 	case !coreTagPattern.MatchString(in.Core):
 		problems = append(problems, fmt.Sprintf("core: %q must be a release tag like v0.0.2", in.Core))
+	}
+	if ds := in.Data.Dataset; ds != "" && !datasetPattern.MatchString(ds) {
+		problems = append(problems, fmt.Sprintf("data.dataset: %q must have the form <git-url>@<ref>", ds))
 	}
 	envs := make([]string, 0, len(in.Deploy))
 	for env := range in.Deploy {

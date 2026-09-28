@@ -45,3 +45,7 @@
 # so an unrelated future /build asset should have to be ignored deliberately
 # rather than inherit a blanket rule. Same reasoning core's own file gives.
 /build/desktop/
+
+# Trial bundles written by `make trial` (scripts/trial.sh). Each one holds a
+# license in its margince.env, so none is ever tracked.
+dist/

@@ -33,7 +33,7 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 	desktop desktop-mirror desktop-kit desktop-win-kit \
 	desktop-install desktop-run desktop-connect desktop-seed \
 	desktop-verify desktop-status desktop-logins desktop-psql desktop-dsn \
-	desktop-clean \
+	desktop-clean trial \
 	update-core clean
 
 help: ## Show the lanes
@@ -423,6 +423,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/release.test.sh
 	@bash scripts/package.test.sh
 	@bash scripts/smoke.test.sh
+	@bash scripts/trial.test.sh
 	@bash scripts/deploy/host/render.test.sh
 	@bash scripts/deploy/host.test.sh
 	@bash scripts/deploy/host/bootstrap.test.sh
@@ -702,6 +703,14 @@ desktop-win-kit: compose ## Stamp the loader into a Windows desktop folder (DIR=
 	@test -n "$(DIR)" || { \
 		echo "desktop-win-kit: DIR= is required — the path to a built margince-windows folder" >&2; exit 1; }
 	@DATASET="$(DATASET)" bash scripts/desktop.sh kit --dir "$(DIR)" --os windows $(VERSION_FLAG) $(SEEDED_FLAG)
+
+## trial — a production-mode desktop bundle with a trial license, for a client
+## to evaluate on a laptop (design Section 9.4). It obtains the license first
+## (scripts/license.sh trial; MARGINCE_TRIAL_LICENSE, or the license API), runs
+## `make desktop`, and writes dist/trial/<name>-<v>-<platform>/. FORCE=1
+## replaces an existing one.
+trial: ## Build a trial desktop bundle with a trial license (VERSION=, FORCE=1)
+	@bash scripts/trial.sh "$(VERSION)"
 
 # ──────────────────────── using the desktop folder ────────────────────
 #

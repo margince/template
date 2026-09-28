@@ -139,3 +139,55 @@ func TestCheckCore(t *testing.T) {
 		t.Fatalf("other tag: %q, want it to name v0.0.1", p)
 	}
 }
+
+func TestParseDataDataset(t *testing.T) {
+	for _, ds := range []string{
+		"https://example.test/org/demo.git@v1.2.0",
+		"git@example.test:org/demo.git@main",
+	} {
+		in, err := Parse([]byte(valid + "data:\n  dataset: " + ds + "\n"))
+		if err != nil {
+			t.Fatalf("Parse(%s): %v", ds, err)
+		}
+		if got, ok := in.Value("data.dataset"); !ok || got != ds {
+			t.Fatalf("Value(data.dataset) = %q, %v, want %q", got, ok, ds)
+		}
+		if p := in.Validate(); len(p) != 0 {
+			t.Fatalf("Validate(%s) = %v, want no problems", ds, p)
+		}
+	}
+}
+
+func TestDataDatasetAbsent(t *testing.T) {
+	in, err := Parse([]byte(valid))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, ok := in.Value("data.dataset"); ok {
+		t.Fatal("Value(data.dataset) reported ok for an instance without one")
+	}
+}
+
+func TestValidateDataDataset(t *testing.T) {
+	base := Instance{Name: "a", DisplayName: "A", Core: "v0.0.2"}
+	for _, ds := range []string{
+		"https://example.test/org/demo.git",    // no ref
+		"https://example.test/org/demo.git@",   // empty ref
+		"@main",                                // empty url
+		"https://example.test/org/demo.git@a@", // ref ends in @
+		"https://example.test/my org.git@main", // whitespace in url
+		"https://example.test/org.git@ma in",   // whitespace in ref
+	} {
+		in := base
+		in.Data = Data{Dataset: ds}
+		if got := strings.Join(in.Validate(), "\n"); !strings.Contains(got, "data.dataset:") {
+			t.Errorf("Validate(%q) = %q, want a data.dataset problem", ds, got)
+		}
+	}
+}
+
+func TestParseRefusesUnknownDataKey(t *testing.T) {
+	if _, err := Parse([]byte(valid + "data:\n  datasets: x@y\n")); err == nil {
+		t.Fatal("Parse accepted data.datasets")
+	}
+}

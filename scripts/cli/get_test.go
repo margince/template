@@ -54,3 +54,21 @@ func TestRunGetUsage(t *testing.T) {
 		t.Fatalf("no key: exit %d, want 2", code)
 	}
 }
+
+func TestRunGetDataDataset(t *testing.T) {
+	var out, errOut bytes.Buffer
+	file := writeFile(t, valid+"data:\n  dataset: git@example.test:org/demo.git@v1.0.0\n")
+	if code := run([]string{"get", "-file", file, "data.dataset"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "git@example.test:org/demo.git@v1.0.0" {
+		t.Fatalf("get data.dataset = %q", got)
+	}
+}
+
+func TestRunGetDataDatasetAbsent(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"get", "-file", writeFile(t, valid), "data.dataset"}, &out, &errOut); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+}
