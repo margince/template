@@ -64,8 +64,9 @@
 # `blobs`, kept across releases, is mounted there. The image runs as the
 # user app (uid 10001, core's Dockerfile) and has no /app/data, so Docker
 # creates the mount point and a new volume owned by root; the one-shot
-# service blobs-init gives the volume to uid 10001 before the api and worker
-# start. The blocks between the "default file store" markers are removed by
+# service blobs-init chowns it to the image's app user (uid 10001, core's
+# Dockerfile) before the api and worker start. The blocks between the
+# "default file store" markers are removed by
 # render.sh when secrets lists MARGINCE_BLOBSTORE_ENDPOINT (S3 or
 # compatible); the volume itself is not deleted.
 #

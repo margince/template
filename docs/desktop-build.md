@@ -114,6 +114,7 @@ it at boot, so anything left to the first run cannot be changed without a reset.
 | `bootstrap_admin.email: admin@demo.test` | the dataset names that admin, and the seeder replaces a password but never renames an account |
 | `MARGINCE_KEYVAULT_ROOT_KEY` (`openssl rand -base64 32`) | without it every extension that stores a credential answers 500 — `extsecrets: no keyvault is configured` |
 | `MARGINCE_CONNECTOR_STATE_KEY` (`openssl rand -hex 32`) | the Gmail and Calendar consent flows sign their state with it; below 32 characters the api refuses to mount them |
+| `MARGINCE_WEBHOOK_KEY` (`openssl rand -base64 32`) | seals outbound webhook signing secrets at rest; without it the mutating `/webhook-subscriptions` paths (create/rotate, replay) answer 503 and the delivery worker's webhook consumer stays off |
 | `MARGINCE_PUBLIC_BASE_URL` | the origin Google redirects back to |
 | `seeds.ai_routing` | the tier→model binding, when a provider was chosen — see below |
 
