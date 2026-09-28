@@ -24,6 +24,7 @@
 | [Deploy (T9)](superpowers/plans/2026-09-25-deploy.md) | The four-step deployment contract and the `hook` adapter. |
 | [Lifecycle CI (T10 part 1)](superpowers/plans/2026-09-25-lifecycle-ci.md) | `make test-lifecycle` and `lifecycle.yml`. |
 | [Public template (T13, T16, T7, T15, T8, T10 part 2, T12)](superpowers/plans/2026-09-28-public-template.md) | Making the template public-ready and completing release, licensing, trial, the `host` adapter, the lifecycle test, and these guides. |
+| [Default setup (T17)](superpowers/plans/2026-09-29-default-setup.md) | Generated instance keys and admin password, persistent file storage, the license check, `make deploy-init`, `make local-up`/`local-down`/`local-admin-password`, and the webhook key in the desktop kit and `make smoke`. |
 
 ## Guides
 
@@ -34,7 +35,7 @@
 | [Contributing to core](contributing-to-core.md) | Send a change to `margince/margince`. |
 | [Desktop build](desktop-build.md) | Build and run the desktop bundle. |
 | [Release](release.md) | Cutting a release: `make release`, `release.yml`, `make smoke`. |
-| [Deploy](deploy.md) | The deployment contract, the `hook` adapter, and the `host` adapter end to end on a Linux server. |
+| [Deploy](deploy.md) | The deployment contract, `make deploy-init`, the `hook` adapter, and the `host` adapter end to end on a Linux server: generated instance keys, file storage, the license check, `make host-admin-password`. |
 | [License](license.md) | Obtaining a license: `make license`, the license service API contract. |
 | [Trial](trial.md) | Building a laptop trial bundle: `make trial`. |
 | [Troubleshooting](troubleshooting.md) | Known problems and fixes. |

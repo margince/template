@@ -133,18 +133,7 @@ if make -s deploy ENV=staging VERSION=v0.1.1; then fail "a failed verify was rep
 grep -qx 'rollback v0.1.1 verify' deploy/deploy.log || fail "rollback did not run: $(cat deploy/deploy.log)"
 
 step "deploy through the host adapter"
-mkdir -p deploy/prod/config
-cat > deploy/prod/host.env <<'EOF'
-HOST_SSH=test@server
-HOST_DOMAIN=demo.example.test
-EOF
-cat > deploy/prod/config/margince.yaml <<'EOF'
-version: 1
-workspace:
-  name: Lifecycle Demo
-EOF
-printf 'MARGINCE_LICENSE\n' > deploy/prod/secrets
-printf '  prod: { adapter: host }\n' >> instance.yaml
+make -s deploy-init ENV=prod ADAPTER=host DOMAIN=demo.example.test SSH=test@server
 git add instance.yaml deploy/prod
 git commit -q -m "feat: host deployment"
 make -s check-instance
@@ -162,6 +151,7 @@ MARGINCE_LICENSE=test HOST_KNOWN_HOSTS='server ssh-ed25519 AAAA' make -s deploy 
 SRV_HD="$STUB_SERVER_ROOT/opt/margince/lifecycle-demo"
 [ -d "$SRV_HD/releases/v0.1.0" ] || fail "the scratch server does not have releases/v0.1.0"
 [ "$(readlink "$SRV_HD/current")" = "releases/v0.1.0" ] || fail "current does not point to releases/v0.1.0: '$(readlink "$SRV_HD/current" 2>/dev/null)'"
+[ -f "$SRV_HD/shared/instance.env" ] || fail "the scratch server does not have shared/instance.env (the generated vault, connector-state and webhook keys, and the first admin password)"
 
 step "merge a template change"
 TPL="$WORK/template"

@@ -178,7 +178,17 @@ revision and release tag (`com.margince.core.version`, from `core:` in
 
 ## 9. Deploy
 
-Add an environment under `deploy:` in `instance.yaml`:
+Start your first deployment with `make deploy-init ENV=<env> [ADAPTER=host|hook]
+[DOMAIN=<host>] [SSH=user@host]`: it scaffolds `deploy/<env>/` (for the `host`
+adapter: `host.env`, `secrets`, `config/margince.yaml`) and adds the
+environment under `deploy:` in `instance.yaml` in one step, printing the next
+commands (setting `MARGINCE_LICENSE`, bootstrapping or wiring the target, then
+`make deploy`). It refuses to run over an existing `deploy/<env>/` directory
+or an existing `deploy.<env>` entry, so it is safe to run once per
+environment.
+
+To add an environment by hand instead, add it under `deploy:` in
+`instance.yaml`:
 
 ```yaml
 deploy:

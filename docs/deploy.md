@@ -111,7 +111,11 @@ Compose — for example an AWS EC2 instance.
    public address. Caddy requests a certificate for it automatically on
    first start, which needs port 80 reachable from the internet.
 
-3. **Instance files**, committed in `deploy/<env>/`:
+3. **Instance files**, committed in `deploy/<env>/`. `make deploy-init
+   ENV=<env> ADAPTER=host DOMAIN=<domain> SSH=user@host` scaffolds all three
+   below and registers `<env>` under `deploy:` in `instance.yaml` in one step
+   (`ADMIN_EMAIL=` overrides the default `admin@<domain>`); write them by hand
+   only if you need something `deploy-init` does not produce:
 
    | File | Content |
    |---|---|
@@ -122,6 +126,10 @@ Compose — for example an AWS EC2 instance.
    `HOST_SSH` must be exactly `user@host` — letters, digits, `.`, `_`, `-`
    only. No IPv6 literal and no port; use a hostname or an A/AAAA-resolvable
    name if you need one.
+
+   `deploy-init` refuses to run over an existing `deploy/<env>/` directory or
+   an existing `deploy.<env>` entry in `instance.yaml`, so it is safe to run
+   once per new environment and never overwrites one that already exists.
 
 4. **Credentials**, from the environment only (never committed):
 
@@ -161,6 +169,78 @@ Compose — for example an AWS EC2 instance.
    MARGINCE_LICENSE="$(cat production.license)" \
      make deploy ENV=production VERSION=v1.2.3
    ```
+
+### Generated instance keys and the first admin password
+
+The first `apply` of an environment generates `$HOST_DIR/shared/instance.env`
+(mode 600), once, and never replaces it on a later deploy:
+
+| Variable | Format |
+|---|---|
+| `MARGINCE_KEYVAULT_ROOT_KEY` | base64 (standard) of 32 random bytes |
+| `MARGINCE_CONNECTOR_STATE_KEY` | hex of 32 random bytes (64 hex characters) |
+| `MARGINCE_WEBHOOK_KEY` | base64 (standard) of 32 random bytes |
+| `MARGINCE_ADMIN_PASSWORD` | 24 random characters from `[A-Za-z0-9]` |
+
+**Precedence.** The `api` and `worker` containers read, in order,
+`shared/data.env`, then `shared/instance.env`, then the release `.env` — a
+value the client lists in `secrets` wins over the generated one. Listing one
+of the four names above in `secrets` (with a value of your own from the
+environment of `make deploy`) brings your own value for that one variable;
+`apply` still generates the other names normally, and, for
+`MARGINCE_ADMIN_PASSWORD` specifically, generates none at all when `secrets`
+lists it. For the three keys, `apply` warns (without failing) whenever
+`secrets` lists one of them: the generated value still lands in
+`instance.env`, unused while your value overrides it. **If you later remove
+the name from `secrets`, the environment switches back to that generated
+value** — a different key from the one you just removed — and any data
+sealed under the value you removed will not open with it. Plan a key
+rotation deliberately (reseal the data under the new key) rather than by
+simply dropping the name from `secrets`.
+
+`make host-admin-password ENV=<env>` prints the admin password: the
+generated one from `instance.env`, or a note that it comes from `secrets`
+when `MARGINCE_ADMIN_PASSWORD` is listed there. It never prints a value that
+is not the one actually in effect, and it fails, naming the file, before the
+environment's first deployment (`instance.env` does not exist yet).
+
+### File storage
+
+By default, the `api` and `worker` containers store uploaded files on the
+local filesystem: `MARGINCE_BLOBSTORE_PATH=/app/data/blobs` on the named
+volume `blobs`, kept across releases like the database volumes. A one-shot
+`blobs-init` service gives the volume to the image's `app` user before `api`
+and `worker` start.
+
+To use S3 or a compatible object store instead, list
+`MARGINCE_BLOBSTORE_ENDPOINT` (and the other object-storage variables
+`core/docs/reference/configuration.md` documents) in `secrets`: `apply`
+leaves out the `blobs` volume, its mounts, and `blobs-init` entirely. The
+volume itself, if one already exists from an earlier deploy, is not deleted.
+
+A custom `MARGINCE_BLOBSTORE_PATH` (listed in `secrets`) replaces the default
+path used inside the containers, but it must stay under `/app/data/blobs`:
+that is the mount point the `blobs` volume is attached to (or, without the
+default file store, simply a path inside the container's own filesystem),
+and a path outside it is not backed by the persistent volume at all — it
+would be lost on the next `apply` that recreates the container.
+
+### The license check
+
+In production mode (`MARGINCE_ENV` unset, or listed in `secrets` with a
+value other than `dev` or `test`), `preflight` fails unless `secrets` lists
+`MARGINCE_LICENSE` with a value — before any connection is made or anything
+is uploaded. For a non-production environment, list `MARGINCE_ENV` in
+`secrets` and set it to `test` (or `dev`) in the environment of `make
+deploy`.
+
+This check looks only at `secrets` and the environment of `make deploy`; it
+does not read a `license:` block in `deploy/<env>/config/margince.yaml`
+(core's own `token_file` or `${file:…}` license configuration). An
+environment that configures its license that way still needs `MARGINCE_ENV`
+listed in `secrets` and set to `test`/`dev` to pass `preflight`, or
+`MARGINCE_LICENSE` listed and set, even though the license itself is not read
+from that variable at runtime.
 
 ### What each step does
 
@@ -242,6 +322,21 @@ nothing to restore:
   environment): `rollback` stops the release `apply` had uploaded, clears
   `current` if it points there, and exits 1 — there is nothing to fall back
   to, and the environment is left with nothing running rather than a guess.
+
+**Upgrading an environment that predates the generated instance keys.** A
+release built before this template gained `shared/instance.env` has no
+`env_file` entry for it and does not read `MARGINCE_KEYVAULT_ROOT_KEY` at
+all. The environment's very first `apply` after the upgrade is what creates
+`instance.env`, and it is created once, permanently — no later `apply` ever
+regenerates it, including a retried one. If you already manage your own
+vault key outside this template and want to keep using it, list
+`MARGINCE_KEYVAULT_ROOT_KEY` (and the other names you manage) in `secrets`
+**before** that first upgrade `apply`, not after. If that first apply's
+`verify` fails and `rollback` restores the pre-upgrade release, the restored
+release keeps running exactly as it did before the upgrade (it ignores the
+now-existing `instance.env`); the generated `instance.env` itself is not
+rolled back and is still what the next `apply` — of the same or a later
+version — uses, unedited.
 
 ### Backups
 

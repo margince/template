@@ -267,6 +267,40 @@ The pinned scanner binary did not match its digest
 (`scripts/gitleaks-pin.sh:93-95`). Do not bypass it: it means the downloaded
 artifact changed, not that the pin is stale.
 
+## Deploying
+
+### `keyvault: this installation holds sealed secrets but MARGINCE_KEYVAULT_ROOT_KEY is not set` / `no keyvault is configured for this installation`
+
+The api refuses to boot with the first message when its database already
+holds sealed secrets — connector credentials, provider keys, the license
+token — but no `MARGINCE_KEYVAULT_ROOT_KEY` reaches it
+(`core/backend/internal/platform/keyvault/local.go:298`). It instead answers
+500 with the second message, `extsecrets: no keyvault is configured for this
+installation, so no extension secret can be stored or read`, when nothing was
+ever sealed and no vault is configured at all (`core/backend/internal/platform/extsecrets/store.go`,
+`ErrNoCustodian`; `capture` and `ai` refuse the same way for a connector or
+provider-key operation).
+
+The `host` adapter and `make local-up` now generate
+`MARGINCE_KEYVAULT_ROOT_KEY` (with `MARGINCE_CONNECTOR_STATE_KEY` and
+`MARGINCE_WEBHOOK_KEY`) into `shared/instance.env` on an environment's first
+`apply`, so a newly deployed environment never hits either message
+(docs/deploy.md, "Generated instance keys and the first admin password"). You
+can still see one of these on an environment that was deployed by an older
+version of this template, before `instance.env` existed:
+
+- **Nothing is sealed yet:** deploy again with the current template. The next
+  `apply` generates `instance.env`, and the vault becomes configured from
+  then on.
+- **Something is already sealed under a key you supplied yourself** (an
+  older `secrets` listed `MARGINCE_KEYVAULT_ROOT_KEY` before this template
+  generated one, or you rotated it by hand): deploying again does **not**
+  recover it — list that exact value in `secrets` again first. The root key
+  is not recoverable from anywhere else the installation holds. See
+  [deploy.md](deploy.md) ("Generated instance keys" and "Rollback limits")
+  for what removing a name like this from `secrets` does on an environment
+  that already has a generated `instance.env`.
+
 ## The core submodule
 
 ### `git status` shows `core` as modified

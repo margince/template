@@ -531,8 +531,9 @@ versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`.
 | T8 | `make trial` and `data.dataset`. | Done |
 | T10 part 2 | Lifecycle test: release and `host` deployment. | Done |
 | T12 | Guides: release, deploy (hook and host), license, trial. | Done |
+| T17 | Default setup (Section 9.7): generated instance keys and admin password, persistent file storage, the license check, `make deploy-init`, `make local-up`/`local-down`/`local-admin-password`, the desktop kit's and `make smoke`'s webhook key. | Done |
 
-Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12. All complete.
+Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12 → T17. All complete.
 
 ## 14. Rejected Alternatives
 

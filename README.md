@@ -19,6 +19,23 @@ public template. See the [design specification](docs/superpowers/specs/2026-09-2
 (Section 13) and the [issue breakdown](docs/superpowers/plans/2026-09-24-issue-breakdown.md)
 for implementation status.
 
+## Quick start
+
+Try Margince Default on this machine, with generated instance keys and a
+generated admin password, no deployment target needed:
+
+```sh
+make install
+make package VERSION=v0.1.0-rc.1
+make local-up VERSION=v0.1.0-rc.1
+# open https://localhost (your browser warns about the local certificate)
+make local-admin-password
+```
+
+`make local-down` stops it; `make local-down WIPE=1` also removes its data.
+See [docs/deploy.md](docs/deploy.md) for a real deployment with `make
+deploy-init` and the `host` adapter.
+
 ## How instances use this template
 
 - Each client instance is a **fork** of this repository.
@@ -67,8 +84,13 @@ Run `make help` for the full list.
 | `make release VERSION=<v>` | Tag and push a release; `release.yml` builds and publishes it. |
 | `make license OUT=<file>` | Obtain a production license into a file. |
 | `make trial VERSION=<v>` | Build a trial desktop bundle with a trial license. |
+| `make deploy-init ENV=<env> [ADAPTER=host\|hook] [DOMAIN=<host>] [SSH=<user@host>]` | Scaffold `deploy/<env>/` and register it under `deploy:` in `instance.yaml`. |
 | `make deploy ENV=<env> VERSION=<v>` | Deploy the instance's images to an environment defined in `instance.yaml` (`deploy:`), with the `hook` or built-in `host` adapter. |
 | `make host-bootstrap ENV=<env>` | Install Docker and Compose on a new server for a `host` environment. |
+| `make host-admin-password ENV=<env>` | Print a `host` environment's generated first admin password. |
+| `make local-up VERSION=<v>` | Run a built release on `https://localhost` (Caddy, PostgreSQL, Redis, the generated keys and admin password); state is kept in `.local/`. |
+| `make local-down [WIPE=1]` | Stop the local stack; `WIPE=1` also removes its data and `.local/`. |
+| `make local-admin-password` | Print the local stack's generated first admin password. |
 | `make test-lifecycle` | Run the whole instance lifecycle end to end in a scratch instance (slow; installs into the Go module cache, pnpm store, and `$(go env GOPATH)/bin`). |
 
 See [docs/release.md](docs/release.md), [docs/deploy.md](docs/deploy.md),
