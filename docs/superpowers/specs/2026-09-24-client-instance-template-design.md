@@ -431,6 +431,55 @@ run, naming the packages and the command to remove them; `host-bootstrap`
 never removes software itself. The server's security group opens ports 22,
 80, and 443; the guide says so.
 
+### 9.7 Default Setup
+
+A new instance works with every default feature on its first deployment,
+without hand-written secrets. The template generates what can be generated,
+scaffolds what the client must choose, and refuses early what cannot work.
+
+**Generated once per environment, never replaced.** The `host` adapter
+creates `$HOST_DIR/shared/instance.env` (mode 600) on the first `apply`, next
+to `data.env`, and never overwrites it. The `api` and `worker` services read
+it before the release `.env`, so a value the client lists in `secrets`
+overrides it.
+
+| Variable | Format | Used for |
+|---|---|---|
+| `MARGINCE_KEYVAULT_ROOT_KEY` | base64 of 32 random bytes | The secret vault: provider keys, connector credentials. It must stay the same: sealed data cannot be opened with another key. |
+| `MARGINCE_CONNECTOR_STATE_KEY` | hex of 32 random bytes | Signing the OAuth `state` of the Gmail and Microsoft connect flows. |
+| `MARGINCE_WEBHOOK_KEY` | base64 of 32 random bytes | Sealing outbound webhook signing secrets. |
+| `MARGINCE_ADMIN_PASSWORD` | 24 random characters | The first admin account. Generated only when `secrets` does not list it. `make host-admin-password ENV=<env>` prints it. |
+
+**File storage.** Unless the client sets `MARGINCE_BLOBSTORE_ENDPOINT` (S3 or
+compatible), `api` and `worker` use the filesystem store
+`MARGINCE_BLOBSTORE_PATH=/app/data/blobs` on the named volume `blobs`, which is
+kept across releases.
+
+**License check.** `preflight` fails when the environment runs in production
+mode (`MARGINCE_ENV` is not `dev` or `test`) and `MARGINCE_LICENSE` is neither
+listed in `secrets` with a value nor set; core refuses to boot without it.
+
+**`make deploy-init ENV=<env> [ADAPTER=host] [DOMAIN=<host>] [SSH=<user@host>]`**
+creates `deploy/<env>/` and adds `<env>` to `deploy:` in `instance.yaml`. For
+`host` it writes `host.env`, `secrets` (with `MARGINCE_LICENSE`), and
+`config/margince.yaml` with the workspace, the first admin (email from
+`ADMIN_EMAIL`, default `admin@<DOMAIN>`), an `email:` block that is disabled
+with comments that explain how to enable it, and `mcp.connector_enabled:
+false`. For `hook` it writes `hooks/apply.sh` with a comment. It refuses an
+existing `deploy/<env>/`.
+
+**`make local-up VERSION=<v>` and `make local-down`** run the images of
+`<v>` on the developer's machine with the `host` files: Caddy on
+`https://localhost` with its local certificate, PostgreSQL, Redis, the
+generated keys and admin password, and `MARGINCE_ENV=test` unless
+`MARGINCE_LICENSE` is set. State is kept in `.local/` (ignored by git);
+`make local-down WIPE=1` also removes the data. `make local-up` prints the
+URL, the admin email, and how to read the admin password.
+
+**Desktop and trial bundles** generate `MARGINCE_WEBHOOK_KEY` as they already
+generate the vault and connector keys. `make smoke` sets the three keys, so
+the smoke test also covers the vault.
+
 ## 10. Versioning
 
 | Version | Format | Used for |
