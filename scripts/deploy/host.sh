@@ -15,7 +15,11 @@
 #              Docker, `timeout`, and Docker Compose 2.30.0 or later; the
 #              server can log in to the registry and read the three image
 #              manifests. Nothing is uploaded.
-#   apply      Records the release `current` points to in
+#   apply      Warns, without failing, when secrets lists
+#              MARGINCE_KEYVAULT_ROOT_KEY, MARGINCE_CONNECTOR_STATE_KEY or
+#              MARGINCE_WEBHOOK_KEY (it overrides the generated value kept in
+#              instance.env; removing it later switches back to that
+#              generated value). Records the release `current` points to in
 #              $DEPLOY_STATE_DIR/previous (empty when there is none); builds
 #              the files with host/render.sh; uploads release/ to
 #              $HOST_DIR/releases/<v>/ and shared/ into $HOST_DIR/shared/;
@@ -106,7 +110,27 @@ license_check() {
   fi
   [ "$mode" = production ] || return 0
   if host_secrets_lists MARGINCE_LICENSE && [ -n "${MARGINCE_LICENSE:-}" ]; then return 0; fi
-  fail "$DEPLOY_ENV runs in production mode and needs MARGINCE_LICENSE: list it in deploy/$DEPLOY_ENV/secrets and set it (or set MARGINCE_ENV=test for a test environment)"
+  fail "$DEPLOY_ENV runs in production mode and needs MARGINCE_LICENSE: list it in deploy/$DEPLOY_ENV/secrets and set it (or list MARGINCE_ENV in deploy/$DEPLOY_ENV/secrets and set it to test for a test environment)"
+}
+
+# warn_shadowed_keys — secrets can list MARGINCE_KEYVAULT_ROOT_KEY,
+# MARGINCE_CONNECTOR_STATE_KEY or MARGINCE_WEBHOOK_KEY to bring the client's
+# own value: the containers get only what secrets lists, and .env (from
+# secrets) is read after instance.env, so the listed value wins. gen-env.sh
+# still generates all three into instance.env regardless (only the admin
+# password has a --no-admin-password opt-out), so the generated value for a
+# shadowed name sits in $HD/shared/instance.env, unused but not removed. If
+# the name is later dropped from secrets, the next deploy has nothing left to
+# override it with, and the generated value in instance.env takes effect
+# again — a different key from the one just removed, so anything sealed
+# under that removed value will not open. A warning, not a failure: bringing
+# your own key is supported.
+warn_shadowed_keys() {
+  local name
+  for name in MARGINCE_KEYVAULT_ROOT_KEY MARGINCE_CONNECTOR_STATE_KEY MARGINCE_WEBHOOK_KEY; do
+    host_secrets_lists "$name" || continue
+    say "deploy/$DEPLOY_ENV/secrets lists $name: it overrides the value generated into $HD/shared/instance.env. If $name is later removed from secrets, $DEPLOY_ENV switches back to that generated value; anything sealed under the value you remove will not open with it."
+  done
 }
 
 need_state() {
@@ -255,6 +279,7 @@ EOF_NAMES
 
 apply() {
   load
+  warn_shadowed_keys
   connect
   local v="$DEPLOY_VERSION" prev out up script res timeout_s gen_opt=""
   timeout_s="$(number HOST_APPLY_TIMEOUT 600)"

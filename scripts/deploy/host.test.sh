@@ -342,7 +342,7 @@ else
 fi
 
 # ---------------------------------------------------------------- license
-LICENSE_MSG='deploy: prod runs in production mode and needs MARGINCE_LICENSE: list it in deploy/prod/secrets and set it (or set MARGINCE_ENV=test for a test environment)'
+LICENSE_MSG='deploy: prod runs in production mode and needs MARGINCE_LICENSE: list it in deploy/prod/secrets and set it (or list MARGINCE_ENV in deploy/prod/secrets and set it to test for a test environment)'
 # with_secrets <content> — write deploy/prod/secrets and commit.
 with_secrets() { printf '%b' "$1" > "$INST/deploy/prod/secrets"; commit_all "$INST"; }
 with_secrets 'MARGINCE_ADMIN_PASSWORD\n'
@@ -369,6 +369,58 @@ for e in test dev; do
     fail "MARGINCE_ENV=$e in secrets without a license passes: $(out)"
   fi
 done
+with_secrets 'MARGINCE_LICENSE\nMARGINCE_ADMIN_PASSWORD\n'
+
+# ---------------------------------------------------------------- shadowed generated keys
+CLIENT_VAULT='Y2xpZW50LXZhdWx0LWtleS12YWx1ZS0zMmJ5dGVzeHg='
+with_secrets 'MARGINCE_LICENSE\nMARGINCE_ADMIN_PASSWORD\nMARGINCE_KEYVAULT_ROOT_KEY\n'
+fresh_server
+if deploy v1.0.0 MARGINCE_KEYVAULT_ROOT_KEY="$CLIENT_VAULT"; then
+  ok "apply still succeeds when secrets shadows a generated key"
+else
+  fail "apply still succeeds when secrets shadows a generated key: $(out)"
+fi
+if out | grep -qF 'MARGINCE_KEYVAULT_ROOT_KEY' && out | grep -qi 'instance.env' && ! out | grep -qF "$CLIENT_VAULT"; then
+  ok "apply warns that secrets shadows MARGINCE_KEYVAULT_ROOT_KEY, naming instance.env, without the value"
+else
+  fail "apply warns that secrets shadows MARGINCE_KEYVAULT_ROOT_KEY: $(out)"
+fi
+if out | grep -qi 'MARGINCE_CONNECTOR_STATE_KEY' || out | grep -qi 'MARGINCE_WEBHOOK_KEY'; then
+  fail "apply warns only about the names secrets actually lists"
+else
+  ok "apply warns only about the names secrets actually lists"
+fi
+generated_vault="$(sed -n 's/^MARGINCE_KEYVAULT_ROOT_KEY=//p' "$HD/shared/instance.env" 2>/dev/null || true)"
+if [ -n "$generated_vault" ] && [ "$generated_vault" != "$CLIENT_VAULT" ] && ! out | grep -qF "$generated_vault"; then
+  ok "instance.env still holds its own generated vault key, unrelated to and never printed with the one in secrets"
+else
+  fail "instance.env still holds its own generated vault key: '$generated_vault'"
+fi
+if grep -qxF "MARGINCE_KEYVAULT_ROOT_KEY=$CLIENT_VAULT" "$HD/releases/v1.0.0/.env"; then
+  ok "the client's MARGINCE_KEYVAULT_ROOT_KEY reaches the release .env, winning over instance.env"
+else
+  fail "the client's MARGINCE_KEYVAULT_ROOT_KEY reaches the release .env"
+fi
+# The client removes the override: the next release's .env has nothing left
+# to win with, so the generated key already sitting in instance.env is what
+# takes effect again — the "switch" the warning describes.
+with_secrets 'MARGINCE_LICENSE\nMARGINCE_ADMIN_PASSWORD\n'
+if deploy v1.1.0; then ok "removing the override from secrets still deploys"; else fail "removing the override from secrets still deploys: $(out)"; fi
+if ! grep -q '^MARGINCE_KEYVAULT_ROOT_KEY=' "$HD/releases/v1.1.0/.env" 2>/dev/null; then
+  ok "once secrets no longer lists it, the release .env has no override: the generated key in instance.env takes effect"
+else
+  fail "once secrets no longer lists it, the release .env has no override"
+fi
+if [ "$(sed -n 's/^MARGINCE_KEYVAULT_ROOT_KEY=//p' "$HD/shared/instance.env" 2>/dev/null || true)" = "$generated_vault" ]; then
+  ok "instance.env's generated vault key is unchanged by the override coming and going"
+else
+  fail "instance.env's generated vault key changed unexpectedly"
+fi
+if out | grep -qi 'MARGINCE_KEYVAULT_ROOT_KEY'; then
+  fail "no warning is printed once secrets no longer lists the name"
+else
+  ok "no warning is printed once secrets no longer lists the name"
+fi
 with_secrets 'MARGINCE_LICENSE\nMARGINCE_ADMIN_PASSWORD\n'
 
 # ---------------------------------------------------------------- rollback

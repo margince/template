@@ -348,7 +348,7 @@ else
 fi
 # Without openssl: dd and base64.
 mkdir -p "$TMP/noossl"
-for t in od tr head dd base64 chmod; do ln -s "$(command -v "$t")" "$TMP/noossl/$t"; done
+for t in od tr head dd base64 chmod rm ln wc; do ln -s "$(command -v "$t")" "$TMP/noossl/$t"; done
 rc=0; PATH="$TMP/noossl" "$(command -v sh)" "$GEN" instance "$G/noossl.env" > "$TMP/out" 2>&1 || rc=$?
 if [ "$rc" = 0 ] && grep -Eq '^MARGINCE_KEYVAULT_ROOT_KEY=[A-Za-z0-9+/]{43}=$' "$G/noossl.env" && grep -Eq '^MARGINCE_WEBHOOK_KEY=[A-Za-z0-9+/]{43}=$' "$G/noossl.env"; then
   ok "gen-env.sh writes the base64 keys without openssl"
@@ -359,6 +359,26 @@ rc="$(gen bogus "$G/x.env")"
 if [ "$rc" = 2 ] && [ ! -e "$G/x.env" ]; then ok "gen-env.sh refuses an unknown kind"; else fail "gen-env.sh refuses an unknown kind (rc=$rc)"; fi
 rc="$(gen instance "$G/missing-dir/instance.env")"
 if [ "$rc" != 0 ] && [ ! -e "$G/missing-dir" ]; then ok "gen-env.sh fails when the directory is missing"; else fail "gen-env.sh fails when the directory is missing (rc=$rc)"; fi
+# A write that fails partway (disk full: `ulimit -f 0` makes any write of more
+# than zero bytes to a regular file fail with SIGXFSZ) must not leave a file
+# at <file> that a later check would treat as already generated. Output goes
+# through a command-substitution pipe, not a plain file, so the shell's own
+# "Filesize limit exceeded" notice (which the child's 2>/dev/null redirect
+# does not catch, since bash prints it from the parent) does not itself trip
+# the same limit.
+mkdir -p "$G/short"
+rc=0; out="$( (ulimit -f 0; sh "$GEN" instance "$G/short/instance.env") 2>&1 )" || rc=$?
+if [ "$rc" != 0 ] && [ -z "$(find "$G/short" -mindepth 1 2>/dev/null)" ]; then
+  ok "a write that fails partway leaves nothing at all behind (no file, no temp file)"
+else
+  fail "a write that fails partway leaves nothing behind (rc=$rc): $(ls -la "$G/short" 2>&1)"
+fi
+rc="$(gen instance "$G/short/instance.env")"
+if [ "$rc" = 0 ] && [ "$(grep -c . "$G/short/instance.env" 2>/dev/null || true)" = 4 ]; then
+  ok "a later run creates a complete instance.env after a failed write"
+else
+  fail "a later run creates a complete instance.env after a failed write (rc=$rc)"
+fi
 
 # --- host_env_get ---
 cat > "$TMP/host.env" <<EOF
@@ -540,8 +560,9 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   if printf '%s' "$web_json" | grep -qE 'KEYVAULT|WEBHOOK|blobs'; then fail "web gets no generated key and no blobs volume"; else ok "web gets no generated key and no blobs volume"; fi
   init_json="$(sed -n '/^    "blobs-init": {/,/^    }/p' "$TMP/config.json")"
   if printf '%s' "$init_json" | grep -qF '"source": "blobs"' && printf '%s' "$init_json" | grep -qF '"user": "0:0"' \
-     && printf '%s' "$init_json" | grep -qF '10001:10001' && ! printf '%s' "$init_json" | grep -qE 'MARGINCE_|env_file'; then
-    ok "blobs-init gives the blobs volume to the image's app user (10001) and holds no variable"
+     && printf '%s' "$init_json" | grep -qF 'app:app' && ! printf '%s' "$init_json" | grep -qF '10001:10001' \
+     && ! printf '%s' "$init_json" | grep -qE 'MARGINCE_|env_file'; then
+    ok "blobs-init gives the blobs volume to the image's app user (by name, app:app) and holds no variable"
   else
     fail "blobs-init gives the blobs volume to the image's app user: $init_json"
   fi

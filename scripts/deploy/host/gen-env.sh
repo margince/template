@@ -21,10 +21,16 @@
 #             --no-admin-password leaves out the last line (secrets lists
 #             MARGINCE_ADMIN_PASSWORD).
 #
-# The file is written only when it does not exist: umask 077 and noclobber
-# (set -C), so it has mode 600 and an existing file is never replaced, not
-# even by a concurrent run. An existing file is left as it is and the exit
-# status is 0. No value is printed or passed to another program's arguments.
+# The file is written only when it does not exist. The content is written to
+# a temp file in the same directory first (umask 077, so mode 600), its line
+# count is checked against what this kind must have, and only then is it
+# published at <file> with `ln` (never `mv`): `ln` fails, without touching
+# <file>, when a concurrent run has just created it. This keeps a partial
+# write (for example the disk fills up mid-write) from ever reaching <file>:
+# a short or failed write is discarded, so a later run still finds no file
+# and creates one properly, instead of finding a corrupt file that looks
+# already created. An existing file is left as it is and the exit status is
+# 0. No value is printed or passed to another program's arguments.
 #
 # Exit status: 0 created or already present; 1 a value could not be
 # generated (nothing is written) or the file could not be created; 2 usage.
@@ -92,26 +98,49 @@ check() {
 }
 
 if [ "$kind" = data ]; then
+  want_lines=4
   pg="$(hex 24)"; check "$pg" 48 hex
   owner="$(hex 24)"; check "$owner" 48 hex
   app="$(hex 24)"; check "$app" 48 hex
   content="$(printf 'POSTGRES_PASSWORD=%s\nMARGINCE_OWNER_DSN=postgres://margince_owner:%s@postgres:5432/margince\nMARGINCE_DSN=postgres://margince_app:%s@postgres:5432/margince\nMARGINCE_REDIS=redis:6379' "$pg" "$owner" "$app")"
 else
+  want_lines=3
   vault="$(b64_32)"; check "$vault" 44 b64
   state="$(hex 32)"; check "$state" 64 hex
   webhook="$(b64_32)"; check "$webhook" 44 b64
   content="$(printf 'MARGINCE_KEYVAULT_ROOT_KEY=%s\nMARGINCE_CONNECTOR_STATE_KEY=%s\nMARGINCE_WEBHOOK_KEY=%s' "$vault" "$state" "$webhook")"
   if [ "$admin" = 1 ]; then
+    want_lines=4
     pw="$(alnum 24)"; check "$pw" 24 alnum
     content="$(printf '%s\nMARGINCE_ADMIN_PASSWORD=%s' "$content" "$pw")"
   fi
 fi
 
-# Written in one step. When noclobber refuses because a concurrent run has
-# just created the file, that file is kept.
-if ! ( umask 077; set -C; printf '%s\n' "$content" > "$file" ) 2>/dev/null; then
-  [ ! -s "$file" ] || exit 0
+# Write to a temp file in the same directory first, and only publish it at
+# <file> once it is confirmed complete (right line count) and the publish
+# step (`ln`, not `mv`) itself succeeds. A concurrent run's file, or one this
+# run's own failed write leaves behind, is never overwritten and never left
+# half-written at <file>.
+tmp="$file.$$.tmp"
+rm -f "$tmp" 2>/dev/null || true
+wrote=1
+( umask 077; printf '%s\n' "$content" > "$tmp" ) 2>/dev/null || wrote=0
+if [ "$wrote" = 1 ]; then
+  lines="$(wc -l < "$tmp" 2>/dev/null | tr -d '[:space:]')" || lines=""
+  [ "$lines" = "$want_lines" ] || wrote=0
+fi
+if [ "$wrote" != 1 ]; then
+  rm -f "$tmp"
+  [ ! -e "$file" ] || exit 0
   echo "gen-env.sh: cannot create $file" >&2
   exit 1
 fi
-chmod 600 "$file"
+if ln "$tmp" "$file" 2>/dev/null; then
+  rm -f "$tmp"
+  chmod 600 "$file"
+  exit 0
+fi
+rm -f "$tmp"
+[ ! -e "$file" ] || exit 0
+echo "gen-env.sh: cannot create $file" >&2
+exit 1

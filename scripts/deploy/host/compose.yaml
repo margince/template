@@ -159,14 +159,17 @@ services:
   # >>> default file store
   # One-shot: the blobs volume's root belongs to the app user (uid and gid
   # 10001 in core's api and worker images) with mode 700. No variable, no
-  # network.
+  # network. `chown app:app`, not a hard-coded 10001:10001, so this tracks
+  # whatever uid core's Dockerfile gives the app user (the name is resolved
+  # inside the api image's own /etc/passwd, which core's Dockerfile creates
+  # with `adduser -D -u 10001 app`).
   blobs-init:
     image: ${IMAGE_API:?IMAGE_API is not set}
     restart: "no"
     logging: *logging
     user: "0:0"
     network_mode: none
-    entrypoint: ["sh", "-c", "chown 10001:10001 /app/data/blobs && chmod 700 /app/data/blobs"]
+    entrypoint: ["sh", "-c", "chown app:app /app/data/blobs && chmod 700 /app/data/blobs"]
     volumes:
       - blobs:/app/data/blobs
   # <<< default file store
