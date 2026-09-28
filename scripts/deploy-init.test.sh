@@ -189,7 +189,15 @@ if [ "$top_keys" = "bootstrap_admin email mcp version workspace " ]; then
 else
   fail "margince.yaml's top-level keys are exactly the schema's: $top_keys"
 fi
-if python3 -c "
+# The grep-based checks above are the real assertions. This is an extra,
+# best-effort structural check on top of them: pyyaml is not provided by
+# `make install` or CI (only the Go toolchain and the stdlib tools this
+# repository's own scripts need are), so its absence is a skip, not a
+# failure — same pattern as scripts/desktop-kit.test.sh's python3 guard.
+yaml_err="$TMP/deploy-init-yaml-err"
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  ok "margince.yaml YAML-structure check: skipped (no pyyaml)"
+elif python3 -c "
 import sys, yaml
 with open('$dir/config/margince.yaml') as f:
     doc = yaml.safe_load(f)
@@ -203,12 +211,12 @@ assert doc['bootstrap_admin']['password_file'] == 'secrets/admin-password'
 assert doc['mcp']['connector_enabled'] is False
 assert doc['email']['enabled'] is False
 assert set(doc.keys()) <= {'version', 'workspace', 'bootstrap_admin', 'mcp', 'email'}
-" 2>/tmp/deploy-init-yaml-err; then
+" 2>"$yaml_err"; then
   ok "margince.yaml parses as YAML with the exact expected structure"
 else
-  fail "margince.yaml parses as YAML with the exact expected structure: $(cat /tmp/deploy-init-yaml-err)"
+  fail "margince.yaml parses as YAML with the exact expected structure: $(cat "$yaml_err")"
 fi
-rm -f /tmp/deploy-init-yaml-err
+rm -f "$yaml_err"
 
 # --- ADMIN_EMAIL overrides the default ---
 inst2="$(fresh_instance)"
@@ -241,6 +249,22 @@ else
   fail "a second deploy-init adds under the same deploy: block, once: $(cat "$inst/instance.yaml")"
 fi
 if cli_check "$inst"; then ok "instance.yaml still passes cli check with two environments"; else fail "instance.yaml still passes cli check with two environments"; fi
+
+# --- a `deploy:` line with a trailing comment is still recognized as the key ---
+inst_comment="$(fresh_instance)"
+printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.2\ndeploy: # environments\n  existing: { adapter: hook }\n' > "$inst_comment/instance.yaml"
+mkdir -p "$inst_comment/deploy/existing/hooks"
+: > "$inst_comment/deploy/existing/hooks/apply.sh"
+deploy_init "$inst_comment" ENV=production DOMAIN=crm.example.test SSH=deploy@203.0.113.10 >/dev/null
+if [ "$(grep -cE '^deploy:' "$inst_comment/instance.yaml")" = 1 ] \
+  && grep -qxF 'deploy: # environments' "$inst_comment/instance.yaml" \
+  && grep -qxF '  existing: { adapter: hook }' "$inst_comment/instance.yaml" \
+  && grep -qxF '  production: { adapter: host }' "$inst_comment/instance.yaml"; then
+  ok "a deploy: line with a trailing comment is recognized, not duplicated"
+else
+  fail "a deploy: line with a trailing comment is recognized, not duplicated: $(cat "$inst_comment/instance.yaml")"
+fi
+if cli_check "$inst_comment"; then ok "instance.yaml with a commented deploy: line still passes cli check"; else fail "instance.yaml with a commented deploy: line still passes cli check"; fi
 
 # --- default ADAPTER is host ---
 inst3="$(fresh_instance)"

@@ -192,13 +192,19 @@ EOF
 # `  <env>: { adapter: <adapter> }` is added as one of its lines. Every other
 # line is left exactly as it was: no other line is read, reordered or
 # rewritten.
+#
+# The `deploy:` line is matched with a pattern, not string equality, so a
+# trailing comment (`deploy: # environments`) is still recognized as the key
+# rather than read as absent — which would otherwise plant a second,
+# shadowing top-level `deploy:` block.
+DEPLOY_KEY_RE='^deploy:[[:space:]]*(#.*)?$'
 add_deploy_env() {
   local file="$1" tmp
   tmp="$(mktemp)"
-  if grep -qx 'deploy:' "$file"; then
-    awk -v line="  $env: { adapter: $adapter }" '
+  if grep -qE "$DEPLOY_KEY_RE" "$file"; then
+    awk -v line="  $env: { adapter: $adapter }" -v re="$DEPLOY_KEY_RE" '
       { print }
-      $0 == "deploy:" && !done { print line; done = 1 }
+      $0 ~ re && !done { print line; done = 1 }
     ' "$file" > "$tmp"
   else
     cp "$file" "$tmp"
