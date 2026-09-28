@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Test shim for mv on the stub server: GNU mv is used as is; elsewhere (macOS
+# mv has no -T) `mv -T <src> <dst>` replaces <dst> itself, even when <dst> is
+# a symbolic link to a directory. Not atomic; tests only. See ../README.txt.
+set -euo pipefail
+if /bin/mv --version >/dev/null 2>&1 || [ "${1:-}" != -T ]; then exec /bin/mv "$@"; fi
+shift
+[ "$#" -eq 2 ] || { echo "stub mv -T: pass <src> <dst>" >&2; exit 1; }
+if [ -d "$2" ] && [ ! -L "$2" ]; then echo "stub mv -T: $2 is a directory" >&2; exit 1; fi
+/bin/rm -f "$2"
+exec /bin/mv "$1" "$2"

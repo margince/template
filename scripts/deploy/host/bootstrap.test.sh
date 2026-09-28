@@ -100,6 +100,17 @@ else
 fi
 if bootstrap && out | grep -q 'is ready (nothing to change)'; then ok "a second run changes nothing"; else fail "a second run changes nothing: $(out)"; fi
 
+# --- Ubuntu with the distribution's conflicting packages ---
+server "$UBUNTU_2404" "" "ubuntu adm sudo"
+printf 'ii  docker.io\nun  docker-doc\nii  podman-docker\n' > "$STUB_STATE/dpkg"
+if ! bootstrap && out | grep -qF 'docker.io podman-docker' && out | grep -qF 'sudo apt-get remove docker.io podman-docker' \
+   && ! out | grep -q docker-doc && [ -z "$(scripts)" ]; then
+  ok "Ubuntu with docker.io and podman-docker installed stops, naming them and the removal command, and installs nothing"
+else
+  fail "Ubuntu with conflicting packages stops, naming them: $(out) $(scripts)"
+fi
+if grep -q 'dpkg-query -W' "$STUB_STATE/ssh.log"; then ok "the conflict check asks dpkg-query"; else fail "the conflict check asks dpkg-query"; fi
+
 # --- Ubuntu 22.04: Docker present, user not in the group ---
 server "$UBUNTU_2204" 2.39.4 "ubuntu adm"
 if bootstrap && ! scripts | grep -q 'apt-get' && scripts | grep -qF 'usermod -aG docker'; then

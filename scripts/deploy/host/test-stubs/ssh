@@ -11,4 +11,6 @@ cmd="$(stub_rewrite "$cmd")"
 root="${STUB_SERVER_ROOT:-$STUB_STATE}"
 mkdir -p "$root"
 cd "$root"
+PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/server:$PATH"
+export PATH
 exec sh -c "$cmd"

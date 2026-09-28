@@ -19,16 +19,20 @@
 #              $HOST_DIR/releases/<v>/ and shared/ into $HOST_DIR/shared/
 #              (data.env is never replaced; it is created once, mode 600,
 #              when absent); logs in to the registry; runs compose pull and
-#              `up -d --remove-orphans`; reloads caddy when the Caddyfile
-#              changed; points `current` at the release; keeps the five
-#              newest release directories (and always current and previous).
+#              `up -d --remove-orphans`; installs a changed Caddyfile (staged
+#              as caddy/Caddyfile.new until `up` succeeds) and reloads caddy;
+#              points `current` at the release (new link renamed over it);
+#              keeps the five newest release directories (and always current
+#              and previous). Redeploying the running version moves its
+#              directory to releases/.replaced-<v>, removed by the next apply.
 #   verify     Every HOST_VERIFY_INTERVAL seconds (default 5) within
 #              HOST_VERIFY_TIMEOUT (default 300): the api answers /readyz
 #              inside the server and the worker is running; then, unless
 #              HOST_VERIFY_PUBLIC=0, https://<HOST_DOMAIN>/ answers 100-499.
-#   rollback   Starts the previous release directory and points `current`
-#              at it. Without a previous release: stops the new release and
-#              exits 1.
+#   rollback   Removes a staged Caddyfile.new; restores releases/.replaced-<v>
+#              when the previous release is the redeployed one; starts the
+#              previous release directory and points `current` at it. Without
+#              a previous release: stops the new release and exits 1.
 #
 # `up -d` is bounded by HOST_APPLY_TIMEOUT (default 600 seconds) with the
 # server's `timeout`: compose waits for the api health check (start period
@@ -42,7 +46,8 @@
 # only: HOST_KNOWN_HOSTS, HOST_SSH_KEY, REGISTRY_USERNAME, REGISTRY_PASSWORD.
 # No secret is printed or passed on a command line: the registry password
 # goes to `docker login --password-stdin`, and secret values travel inside
-# the uploaded .env (mode 600).
+# the uploaded .env (mode 600). The registry login is kept in a DOCKER_CONFIG
+# directory of the step on the server, removed when the step ends.
 #
 # Every compose call is
 #   docker compose -p margince-<name> -f <release>/compose.yaml --env-file <release>/compose.env
@@ -120,17 +125,41 @@ registry_host() {
   case "$first" in *.*|*:*|localhost) printf '%s' "$first" ;; esac
 }
 
-# registry_login — docker login on the server when REGISTRY_USERNAME is set.
-# The password goes to standard input, never to a command line.
+# registry_login — when REGISTRY_USERNAME is set: docker login on the server
+# into a DOCKER_CONFIG directory of this step ($HOST_DIR/.docker-<step>-<pid>,
+# mode 700), removed again when the step ends (EXIT trap), so no registry
+# credential stays on the server. Sets REG, the prefix for the remote docker
+# commands that need the login (manifest inspect, pull); empty without a
+# login. The password goes to standard input, never to a command line.
+REG=""
+REG_DIR=""
+registry_end() {
+  [ -n "$REG_DIR" ] || return 0
+  host_ssh "rm -rf $(host_q "$REG_DIR")" || echo "deploy: could not remove $REG_DIR on $TARGET; remove it by hand (it holds a registry login)" >&2
+  REG_DIR=""
+}
 registry_login() {
   [ -n "${REGISTRY_USERNAME:-}" ] || return 0
   [ -n "${REGISTRY_PASSWORD:-}" ] || fail "REGISTRY_USERNAME is set, so REGISTRY_PASSWORD must be set too"
-  local cmd reg
+  local cmd reg dir="$HD/.docker-$step-$$"
   reg="$(registry_host)"
-  cmd="docker login --username $(host_q "$REGISTRY_USERNAME") --password-stdin"
+  host_ssh "mkdir -p $(host_q "$HD") && rm -rf $(host_q "$dir") && mkdir -m 700 $(host_q "$dir")" ||
+    fail "cannot create $dir on $TARGET"
+  REG_DIR="$dir"
+  trap registry_end EXIT
+  REG="DOCKER_CONFIG=$(host_q "$dir") "
+  cmd="${REG}docker login --username $(host_q "$REGISTRY_USERNAME") --password-stdin"
   [ -z "$reg" ] || cmd="$cmd $(host_q "$reg")"
   printf '%s' "$REGISTRY_PASSWORD" | host_ssh "$cmd" >/dev/null ||
     fail "docker login to ${reg:-Docker Hub} as $REGISTRY_USERNAME failed on $TARGET"
+}
+
+# switch_current <version> — point $HOST_DIR/current at releases/<version>
+# atomically: a new link, renamed over the old one (GNU mv -T).
+switch_current() {
+  host_ssh "ln -sfn $(host_q "releases/$1") $(host_q "$HD/current.tmp") && mv -T $(host_q "$HD/current.tmp") $(host_q "$HD/current")" ||
+    fail "cannot point $HD/current at releases/$1"
+  say "current -> releases/$1"
 }
 
 # render_into <dir> — host/render.sh into <dir>; its stdout is dropped, its
@@ -166,7 +195,7 @@ preflight() {
     fail "Docker Compose on $TARGET is $v; the host adapter needs $HOST_MIN_COMPOSE or later (compose.yaml uses env_file format: raw)"
   registry_login
   for img in "$IMAGE_API" "$IMAGE_WEB" "$IMAGE_WORKER"; do
-    host_ssh "docker manifest inspect $(host_q "$img")" >/dev/null ||
+    host_ssh "${REG}docker manifest inspect $(host_q "$img")" >/dev/null ||
       fail "$TARGET cannot read the manifest of $img (is the release pushed, and the registry login right?)"
   done
   say "$TARGET is ready for $DEPLOY_VERSION (Docker Compose $v)"
@@ -226,6 +255,11 @@ apply() {
     say "no running release on $TARGET"
   fi
 
+  # A .replaced-<v> directory is the older copy of a redeployed release, kept
+  # for that deployment's rollback. The deployment has ended, so it goes.
+  host_ssh "if [ -d $(host_q "$HD/releases") ]; then cd $(host_q "$HD/releases") && rm -rf .replaced-*; fi" ||
+    fail "cannot clean $HD/releases on $TARGET"
+
   out="$(mktemp -d "$DEPLOY_STATE_DIR/release.XXXXXX")"
   render_into "$out" || { rm -rf "$out"; fail "the release files for $v cannot be built"; }
 
@@ -238,21 +272,33 @@ apply() {
   fi
   rm -rf "$out"
 
-  # Install the upload. data.env: created once (noclobber), never replaced.
-  # The Caddyfile is replaced inside the mounted caddy/ directory, and only
-  # when its content changed.
+  # Install the upload. The running release directory, when it is the one
+  # being redeployed, is moved to .replaced-<v> for the rollback. data.env:
+  # created once (noclobber), never replaced. A changed Caddyfile is staged as
+  # caddy/Caddyfile.new and renamed over Caddyfile after `up` succeeds; on a
+  # first deployment (no Caddyfile) it is installed at once.
   script="set -e
-hd=$(host_q "$HD"); v=$(host_q "$v"); up=$(host_q "$up")
+hd=$(host_q "$HD"); v=$(host_q "$v"); up=$(host_q "$up"); prev=$(host_q "$prev")
 chmod 600 \"\$up/release/.env\"
-rm -rf \"\$hd/releases/\$v\"
+if [ \"\$v\" = \"\$prev\" ] && [ -d \"\$hd/releases/\$v\" ]; then
+  rm -rf \"\$hd/releases/.replaced-\$v\"
+  mv \"\$hd/releases/\$v\" \"\$hd/releases/.replaced-\$v\"
+  echo replaced=yes
+else
+  rm -rf \"\$hd/releases/\$v\"
+fi
 mv \"\$up/release\" \"\$hd/releases/\$v\"
 mv -f \"\$up/shared/db-init.sh\" \"\$hd/shared/db-init.sh\"
 mv -f \"\$up/shared/db-bootstrap.sql\" \"\$hd/shared/db-bootstrap.sql\"
-if cmp -s \"\$up/shared/caddy/Caddyfile\" \"\$hd/shared/caddy/Caddyfile\"; then
+rm -f \"\$hd/shared/caddy/Caddyfile.new\"
+if [ ! -e \"\$hd/shared/caddy/Caddyfile\" ]; then
+  mv -f \"\$up/shared/caddy/Caddyfile\" \"\$hd/shared/caddy/Caddyfile\"
+  echo caddy=new
+elif cmp -s \"\$up/shared/caddy/Caddyfile\" \"\$hd/shared/caddy/Caddyfile\"; then
   echo caddy=same
 else
-  mv -f \"\$up/shared/caddy/Caddyfile\" \"\$hd/shared/caddy/Caddyfile\"
-  echo caddy=changed
+  mv -f \"\$up/shared/caddy/Caddyfile\" \"\$hd/shared/caddy/Caddyfile.new\"
+  echo caddy=staged
 fi
 if [ ! -e \"\$hd/shared/data.env\" ]; then
   (
@@ -272,18 +318,21 @@ rm -rf \"\$up\""
   case "$res" in *data=created*) say "created $HD/shared/data.env (database passwords, mode 600)" ;; esac
   say "uploaded $HD/releases/$v"
 
+  case "$res" in *replaced=yes*) say "kept the running copy of $v as releases/.replaced-$v until the next deployment" ;; esac
+
   registry_login
-  host_ssh "$(dc "$v") pull --quiet" || fail "docker compose pull failed for $v"
+  host_ssh "${REG}$(dc "$v") pull --quiet" || fail "docker compose pull failed for $v"
+  registry_end
   host_ssh "timeout $timeout_s $(dc "$v") up -d --remove-orphans" ||
     fail "docker compose up failed for $v (or did not finish within HOST_APPLY_TIMEOUT=${timeout_s}s)"
   case "$res" in
-    *caddy=changed*)
-      host_ssh "if $(dc "$v") ps --status running --services | grep -qx caddy; then $(dc "$v") exec -T caddy caddy reload --config /etc/caddy/Caddyfile; fi" ||
-        fail "caddy reload failed; the running proxy keeps its previous configuration"
+    *caddy=staged*)
+      host_ssh "mv -f $(host_q "$HD/shared/caddy/Caddyfile.new") $(host_q "$HD/shared/caddy/Caddyfile") && if $(dc "$v") ps --status running --services | grep -qx caddy; then $(dc "$v") exec -T caddy caddy reload --config /etc/caddy/Caddyfile; fi" ||
+        fail "installing the new Caddyfile or caddy reload failed; the running proxy keeps its previous configuration"
+      say "installed the changed Caddyfile"
       ;;
   esac
-  host_ssh "ln -sfn $(host_q "releases/$v") $(host_q "$HD/current")" || fail "cannot point $HD/current at releases/$v"
-  say "current -> releases/$v"
+  switch_current "$v"
   prune "$v $prev"
 }
 
@@ -330,12 +379,19 @@ rollback() {
   [ -f "$DEPLOY_STATE_DIR/previous" ] ||
     fail "apply stopped before it read the running release; the server's current release was not changed"
   prev="$(cat "$DEPLOY_STATE_DIR/previous")"
+  # A Caddyfile staged by the failed apply is never installed.
+  host_ssh "rm -f $(host_q "$HD/shared/caddy/Caddyfile.new")" || echo "deploy: could not remove $HD/shared/caddy/Caddyfile.new" >&2
   if [ -n "$prev" ]; then
     is_release_version "$prev" || fail "the recorded previous release '$prev' is not a release version"
+    if [ "$prev" = "$v" ]; then
+      # A redeployment of the running release: restore its older copy.
+      host_ssh "cd $(host_q "$HD/releases") && if [ -d $(host_q ".replaced-$v") ]; then rm -rf $(host_q "$v") && mv $(host_q ".replaced-$v") $(host_q "$v") && echo restored; fi" |
+        grep -q restored && say "restored the previous copy of releases/$v" ||
+        echo "deploy: no older copy of releases/$v to restore; restarting the uploaded one" >&2
+    fi
     host_ssh "test -f $(host_q "$HD/releases/$prev/compose.yaml")" || fail "$HD/releases/$prev is missing on $TARGET"
     host_ssh "timeout $timeout_s $(dc "$prev") up -d --remove-orphans" || fail "docker compose up failed for the previous release $prev"
-    host_ssh "ln -sfn $(host_q "releases/$prev") $(host_q "$HD/current")" || fail "cannot point $HD/current at releases/$prev"
-    say "current -> releases/$prev"
+    switch_current "$prev"
     return 0
   fi
   # No previous release: stop the new one and drop a current link to it.

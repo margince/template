@@ -387,6 +387,88 @@ else
   fail "REGISTRY_USERNAME without REGISTRY_PASSWORD fails preflight: $(out)"
 fi
 
+# ---------------------------------------------------------------- fix round 1
+# I1: redeploying the running release keeps its older copy for the rollback.
+fresh_server
+deploy v1.0.0 || fail "setup: deploy v1.0.0: $(out)"
+fail_op compose-exec-api
+if deploy v1.0.0 MARGINCE_ADMIN_PASSWORD=changed-admin-pw HOST_VERIFY_TIMEOUT=1; then fail "a redeployment with a failing verify fails"; else ok "a redeployment with a failing verify fails"; fi
+if grep -qxF "MARGINCE_ADMIN_PASSWORD=$ADMIN_VALUE" "$HD/releases/v1.0.0/.env" 2>/dev/null && [ "$(current)" = releases/v1.0.0 ]; then
+  ok "a failed redeployment of the running release restores its original files, and current points at them"
+else
+  fail "a failed redeployment of the running release restores its original files: $(grep ADMIN "$HD/releases/v1.0.0/.env" 2>/dev/null | cut -c1-40) current $(current)"
+fi
+if [ ! -e "$HD/releases/.replaced-v1.0.0" ] && out | grep -q 'restored the previous copy of releases/v1.0.0'; then
+  ok "the rollback moves .replaced-v1.0.0 back"
+else
+  fail "the rollback moves .replaced-v1.0.0 back: $(ls -A "$HD/releases") $(out)"
+fi
+clear_fail compose-exec-api
+if deploy v1.0.0 MARGINCE_ADMIN_PASSWORD=changed-admin-pw && grep -qx 'MARGINCE_ADMIN_PASSWORD=changed-admin-pw' "$HD/releases/v1.0.0/.env" && [ -d "$HD/releases/.replaced-v1.0.0" ]; then
+  ok "a successful redeployment installs the new files and keeps .replaced-v1.0.0 until the next deployment"
+else
+  fail "a successful redeployment installs the new files and keeps .replaced-v1.0.0: $(out)"
+fi
+if deploy v1.1.0 && [ -z "$(find "$HD/releases" -maxdepth 1 -name '.replaced-*')" ] && [ "$(releases)" = "v1.0.0 v1.1.0" ]; then
+  ok "the next deployment removes .replaced-v1.0.0"
+else
+  fail "the next deployment removes .replaced-v1.0.0: $(ls -A "$HD/releases")"
+fi
+
+# M1: a changed Caddyfile is installed only after up succeeds.
+fresh_server
+deploy v1.0.0 || fail "setup: deploy v1.0.0: $(out)"
+printf '\n# staged\n' >> "$INST/scripts/deploy/host/Caddyfile"
+commit_all "$INST"
+fail_op compose-up "releases/v1.1.0/"
+: > "$STUB_STATE/docker.log"
+if ! deploy v1.1.0 && ! grep -q '# staged' "$HD/shared/caddy/Caddyfile" && [ ! -e "$HD/shared/caddy/Caddyfile.new" ] && [ -z "$(docker_calls 'caddy reload')" ]; then
+  ok "a failed up leaves the running Caddyfile unchanged, and the rollback removes Caddyfile.new"
+else
+  fail "a failed up leaves the running Caddyfile unchanged: $(ls "$HD/shared/caddy") $(out)"
+fi
+clear_fail compose-up
+if deploy v1.1.0 && grep -q '# staged' "$HD/shared/caddy/Caddyfile" && [ ! -e "$HD/shared/caddy/Caddyfile.new" ]; then
+  ok "after a successful up the staged Caddyfile replaces the old one"
+else
+  fail "after a successful up the staged Caddyfile replaces the old one: $(out)"
+fi
+git -C "$INST" checkout -q HEAD~1 -- scripts/deploy/host/Caddyfile
+commit_all "$INST"
+
+# M2: current is switched by renaming a new link over it.
+if grep -q 'current.tmp' "$STUB_STATE/ssh.log" && grep -q 'mv -T' "$STUB_STATE/ssh.log" && [ ! -e "$HD/current.tmp" ] && [ ! -L "$HD/current.tmp" ] && [ -L "$HD/current" ]; then
+  ok "current is switched with ln -sfn current.tmp and mv -T, leaving no current.tmp"
+else
+  fail "current is switched with ln -sfn current.tmp and mv -T"
+fi
+
+# M3: the registry login lives in a per-step DOCKER_CONFIG that is removed.
+fresh_server
+if deploy v1.0.0 REGISTRY=registry.example.test REGISTRY_USERNAME=robot REGISTRY_PASSWORD="$REG_PASSWORD"; then ok "setup: a deployment with a registry login"; else fail "setup: a deployment with a registry login: $(out)"; fi
+if grep -Eq "^login DOCKER_CONFIG=$HD/\.docker-preflight-" "$STUB_STATE/docker-env.log" \
+   && grep -Eq "^manifest DOCKER_CONFIG=$HD/\.docker-preflight-" "$STUB_STATE/docker-env.log" \
+   && grep -Eq "^login DOCKER_CONFIG=$HD/\.docker-apply-" "$STUB_STATE/docker-env.log" \
+   && grep -Eq "^compose-pull DOCKER_CONFIG=$HD/\.docker-apply-" "$STUB_STATE/docker-env.log"; then
+  ok "login, manifest inspect and pull use a DOCKER_CONFIG directory of the step"
+else
+  fail "login, manifest inspect and pull use a DOCKER_CONFIG directory of the step: $(cat "$STUB_STATE/docker-env.log")"
+fi
+if [ -z "$(find "$SRV" -name config.json)" ] && [ ! -e "$STUB_STATE/home-docker" ] && [ -z "$(find "$HD" -maxdepth 1 -name '.docker-*')" ]; then
+  ok "no registry credentials file remains on the server after the steps"
+else
+  fail "no registry credentials file remains on the server: $(find "$SRV" -name config.json) $(ls -A "$HD")"
+fi
+fresh_server
+fail_op manifest "acme/web:v1.0.0"
+if ! deploy v1.0.0 REGISTRY=registry.example.test REGISTRY_USERNAME=robot REGISTRY_PASSWORD="$REG_PASSWORD" \
+   && [ -n "$(docker_calls '^login ')" ] && [ -z "$(find "$SRV" -name config.json)" ] && [ ! -e "$STUB_STATE/home-docker" ]; then
+  ok "a preflight that fails after the login still removes the credentials"
+else
+  fail "a preflight that fails after the login still removes the credentials: $(find "$SRV" -name config.json) $(out)"
+fi
+clear_fail manifest
+
 # ---------------------------------------------------------------- keep five
 fresh_server
 for v in v1.0.0 v1.1.0 v1.2.0 v1.3.0 v1.4.0 v1.5.0 v1.6.0; do

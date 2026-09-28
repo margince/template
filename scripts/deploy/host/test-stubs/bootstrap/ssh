@@ -14,6 +14,7 @@ case "$cmd" in
     if [ -f "$S/compose-version" ]; then cat "$S/compose-version"
     else echo "docker: 'compose' is not a docker command." >&2; exit 1; fi ;;
   "id -nG") cat "$S/groups" ;;
+  "dpkg-query -W "*) cat "$S/dpkg" 2>/dev/null || true ;;
   "sh -s")
     cat >> "$S/scripts.log"
     printf '\n' >> "$S/scripts.log"

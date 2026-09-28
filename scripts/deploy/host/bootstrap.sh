@@ -14,6 +14,9 @@
 #                           binary from Docker's GitHub release (pinned
 #                           version and SHA-256) in /usr/local/lib/docker/cli-plugins
 #      An existing Compose older than 2.30.0 is reported and not replaced.
+#      On Ubuntu, installed distribution packages that conflict with Docker's
+#      (docker.io, docker-compose-v2, podman-docker, ...) stop the run with
+#      their names and the removal command; nothing is removed.
 #   3. Adds the SSH user to the `docker` group when it is not a member.
 #
 # Prints each change, or "host-bootstrap: <host> is ready (nothing to change)".
@@ -100,15 +103,30 @@ sudo -n docker compose version
 EOF
 }
 
+# The distribution's own container packages conflict with Docker's packages
+# (docs.docker.com/engine/install/ubuntu, "Uninstall old versions").
+# host-bootstrap does not remove software; it names them and stops.
+UBUNTU_CONFLICTS="docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc"
+ubuntu_conflicts() {
+  local listed
+  listed="$(host_ssh "dpkg-query -W -f='\${db:Status-Abbrev} \${Package}\n' $UBUNTU_CONFLICTS 2>/dev/null || true")" ||
+    die "host-bootstrap: cannot list the installed packages on $target"
+  printf '%s\n' "$listed" | awk '$1 == "ii" { printf "%s ", $2 }' | sed 's/ $//'
+}
+
 changed=0
 if v="$(host_ssh "docker compose version --short" 2>/dev/null)"; then
   host_version_at_least "$v" "$HOST_MIN_COMPOSE" ||
     die "host-bootstrap: $target has Docker Compose $v; the host adapter needs $HOST_MIN_COMPOSE or later. Upgrade it with the method it was installed with; host-bootstrap does not replace an existing installation"
 else
-  say "$target ($os_id $os_ver): installing Docker Engine and the Compose plugin"
   if [ "$os_id" = ubuntu ]; then
+    conflicts="$(ubuntu_conflicts)"
+    [ -z "$conflicts" ] ||
+      die "host-bootstrap: $target has the distribution's packages $conflicts installed; they conflict with Docker's packages. Remove them first (sudo apt-get remove $conflicts), then run make host-bootstrap again"
+    say "$target ($os_id $os_ver): installing Docker Engine and the Compose plugin"
     ubuntu_install | host_ssh "sh -s" || die "host-bootstrap: the Docker install on $target failed (see above)"
   else
+    say "$target ($os_id $os_ver): installing Docker Engine and the Compose plugin"
     amzn_install | host_ssh "sh -s" || die "host-bootstrap: the Docker install on $target failed (see above)"
   fi
   v="$(host_ssh "docker compose version --short" 2>/dev/null)" ||
