@@ -22,7 +22,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit new-instance deploy u u-fe u-check \
+	stage unstage compose watch new-unit new-instance deploy license u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template check-public template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
@@ -270,6 +270,10 @@ deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSIO
 	@env -u ENV -u VERSION -u MAKEFLAGS -u MAKELEVEL -u MFLAGS \
 		ALLOW_DIRTY='$(subst ','\'',$(value ALLOW_DIRTY))' bash scripts/deploy.sh '$(subst ','\'',$(value ENV))' '$(subst ','\'',$(value VERSION))'
 
+license: ## Obtain a production license into a file (OUT=<file>); see docs/license.md
+	@test -n "$(OUT)" || { echo "license: pass OUT=<file>" >&2; exit 2; }
+	@bash scripts/license.sh production "$(OUT)"
+
 check-instance: ## instance.yaml is valid and names the tag core/ is at
 	@cd scripts/cli && GOWORK=off go run . check -file $(CURDIR)/instance.yaml -core $(CURDIR)/$(CORE)
 
@@ -408,6 +412,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/template-sync.test.sh
 	@bash scripts/new-instance.test.sh
 	@bash scripts/deploy.test.sh
+	@bash scripts/license.test.sh
 	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores
