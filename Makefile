@@ -22,7 +22,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit new-instance deploy host-bootstrap host-admin-password release license u u-fe u-check \
+	stage unstage compose watch new-unit new-instance deploy-init deploy host-bootstrap host-admin-password release license u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template check-public template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
@@ -277,6 +277,14 @@ release: ## Tag and push a release (VERSION=vX.Y.Z or vX.Y.Z-rc.N); release.yml 
 		RELEASE_CHECK_TARGET='$(subst ','\'',$(value RELEASE_CHECK_TARGET))' \
 		bash scripts/release.sh '$(subst ','\'',$(value VERSION))'
 
+deploy-init: ## Scaffold a deploy environment and register it in instance.yaml (ENV=, ADAPTER=host|hook, DOMAIN=, SSH=, ADMIN_EMAIL=)
+	@ENV='$(subst ','\'',$(value ENV))' \
+		ADAPTER='$(subst ','\'',$(value ADAPTER))' \
+		DOMAIN='$(subst ','\'',$(value DOMAIN))' \
+		SSH='$(subst ','\'',$(value SSH))' \
+		ADMIN_EMAIL='$(subst ','\'',$(value ADMIN_EMAIL))' \
+		bash scripts/deploy-init.sh
+
 deploy: ## Deploy this instance to an environment in instance.yaml (ENV=, VERSION=, ALLOW_DIRTY=1)
 	@# env -u: make exports its command-line variables (ENV, VERSION) and its
 	@# own MAKEFLAGS to the recipe, and a hook that runs make would inherit
@@ -432,6 +440,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/check-template.test.sh
 	@bash scripts/template-sync.test.sh
 	@bash scripts/new-instance.test.sh
+	@bash scripts/deploy-init.test.sh
 	@bash scripts/deploy.test.sh
 	@bash scripts/license.test.sh
 	@bash scripts/release.test.sh
