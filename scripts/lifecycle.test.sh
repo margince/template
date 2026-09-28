@@ -72,6 +72,15 @@ make -s check-template
 
 step "add a unit, compose it, and test it"
 make -s install
+[ "$(git config core.hooksPath)" = .githooks ] || fail "make install did not install the pre-push hook (core.hooksPath)"
+# Disable it again for the rest of this test: every git push below (the
+# release and rollback steps push twice each) would otherwise rerun the
+# whole `make test-scripts` suite through the pre-push hook, adding roughly
+# 15 minutes with no new assertion — ci.yml and full-check.yml already run
+# test-scripts on every change, and git-env.test.sh covers the hook itself.
+# /dev/null as core.hooksPath (scripts/core-contrib.test.sh's own precedent)
+# leaves every hook a no-op without removing the .githooks directory.
+git config core.hooksPath /dev/null
 make -s new-unit NAME=acme-sync
 make -s compose
 git add extensions/acme-sync
