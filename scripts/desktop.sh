@@ -344,8 +344,8 @@ cmd_connect() {
 # ships. It also retires the `make -C core/backend` call this file used to have
 # to justify in a comment — the gesture CLAUDE.md forbids is simply gone.
 #
-# DATASET= still overrides the location, because a developer's checkout lives
-# beside this repo rather than inside the installation.
+# DATASET= still overrides the location, because a developer's checkout does
+# not live inside the installation.
 run_loader() {
   require_install
   local loader="$DEST/Load Demo Data.command"
@@ -353,15 +353,14 @@ run_loader() {
 
   # Which dataset, in the order that surprises nobody: an explicit DATASET wins;
   # otherwise a dataset the user copied into the installation is what the loader
-  # would find on its own; otherwise the developer checkout beside this repo,
-  # which is where `make desktop-seed` has always looked.
+  # would find on its own. There is no third default any more — it used to be a
+  # developer checkout beside this repo, named after the dataset's own private
+  # repository, and that name cannot appear here.
   local args=()
   if [ -n "${DATASET:-}" ]; then
     args+=(--dataset "$(dataset_path "$DATASET")")
   elif [ ! -d "$DEST/data/demo" ] || [ -z "$(find -L "$DEST/data/demo" -name demo.json -print -quit 2>/dev/null)" ]; then
-    local fallback; fallback="$(dataset_path "")"
-    [ -f "$fallback/datasets/v1/demo.json" ] || die "$(printf 'no demo dataset.\n\nEither copy one into the installation:\n    %s/data/demo\n\nor clone the developer checkout beside this repo:\n  git clone https://github.com/gradionhq/margince-demo-database \\\n      %s\n\nor point the lane at one you already have:\n  make desktop-seed DATASET=/path/to/margince-demo-database' "$DEST" "$fallback")"
-    args+=(--dataset "$fallback")
+    die "$(printf 'no demo dataset.\n\nEither copy one into the installation:\n    %s/data/demo\n\nor point the lane at one you already have:\n  make desktop-seed DATASET=/path/to/it' "$DEST")"
   fi
 
   assert_dest_sane
@@ -572,12 +571,11 @@ composition_workspace() {
 # rather than beside the product". It is a self-contained module there, with
 # its own go.mod, so it needs no composed workspace and no core checkout.
 #
-# DATASET wins, then a checkout beside this repository — the same order the
-# shipped loader already resolves the DATA in, so an operator who has one has
-# both.
+# DATASET required: no default sibling checkout. The only default worth
+# computing would be named after the dataset's own private repository.
 dataset_seeder_src() {
   local d="${DATASET:-}"
-  [ -n "$d" ] || d="$(cd "$ROOT/.." 2>/dev/null && pwd)/margince-demo-database"
+  [ -n "$d" ] || return 1
   [ -d "$d/tools/seed-demo" ] || return 1
   printf '%s\n' "$d/tools/seed-demo"
 }
@@ -595,7 +593,7 @@ build_seeder() {
   local goos="$1" out="$2" src
   if ! src="$(dataset_seeder_src)"; then
     say "kit: no demo dataset reachable, so this folder ships no loader."
-    say "     DATASET=/path/to/margince-demo-database to include one."
+    say "     DATASET=/path/to/it to include one."
     return 1
   fi
   printf 'kit: building the seeder for %s from %s\n' "$goos" "$src"

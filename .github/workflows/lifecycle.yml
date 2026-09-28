@@ -15,8 +15,16 @@
 # `.github/workflows/` is template-owned (.template-owned), so every instance
 # inherits this file unchanged and check-template rejects removing it. In an
 # instance, `make new-instance` always errors ("this is an instance"), so the
-# job must not run there. The job-level `if:` below skips it outright in that
-# case — a skipped job reports neutral, not failed.
+# job must not run there.
+#
+# That used to be a job-level `if:`, but a job-level `if:` runs before any
+# checkout and cannot call `hashFiles()` — there is nothing on the runner yet
+# to hash. So the guard is a per-step output instead: the first step checks
+# out WITHOUT submodules (cheap enough for an instance to pay for too), the
+# second reads whether `.template-version` exists into a step output, and
+# every step after that — including the submodule init — repeats
+# `if: steps.template.outputs.template == 'true'`. A skipped step reports
+# neutral, not failed, the same as the job-level guard did.
 name: lifecycle
 
 on:
@@ -34,18 +42,34 @@ concurrency:
 
 jobs:
   lifecycle:
-    if: github.repository == 'gradionhq/margince-template'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       # fetch-depth: 0, unlike ci.yml's checkout: full history avoids
       # shallow-repository edge cases when the test clones this checkout.
+      # NO submodules here: this step alone must run in every instance too,
+      # only to learn that the rest of the job does not apply to it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: recursive
+
+      - name: Is this the template
+        id: template
+        shell: bash
+        run: |
+          if [ -f .template-version ]; then
+            echo "template=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "template=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out submodules
+        if: steps.template.outputs.template == 'true'
+        shell: bash
+        run: git submodule update --init --recursive
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.template.outputs.template == 'true'
         with:
           go-version-file: core/backend/go.mod
           cache-dependency-path: core/backend/go.sum
@@ -53,14 +77,17 @@ jobs:
       # Node and pnpm: `make install` runs core's own install, and the
       # composed unit the test adds is built and tested through `make u`.
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        if: steps.template.outputs.template == 'true'
         with:
           version: 11
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.template.outputs.template == 'true'
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: core/pnpm-lock.yaml
 
       - name: The instance lifecycle
+        if: steps.template.outputs.template == 'true'
         shell: bash
         run: make test-lifecycle

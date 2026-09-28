@@ -86,11 +86,12 @@ on:
         default: apple-silicon
         type: string
     secrets:
-      DEMO_DATASET_DEPLOY_KEY:
+      DATASET_DEPLOY_KEY:
         description: >-
-          Read access to the private demo dataset. A reusable workflow inherits
-          NOTHING from its caller, so a release lane that does not pass this
-          builds an EMPTY folder and stays green -- the dataset check reads an
+          Read access to the demo dataset repository (named by
+          vars.DATASET_REPOSITORY). A reusable workflow inherits NOTHING from
+          its caller, so a release lane that does not pass this builds an
+          EMPTY folder and stays green -- the dataset check reads an
           empty key, reports unavailable, and every seeding step skips. That is
           the correct behaviour for a fork with no key and was the wrong one for
           every release cut before this. Optional so the fork case still works.
@@ -184,21 +185,22 @@ jobs:
         id: dataset
         shell: bash
         env:
-          KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+          KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
+          REPO: ${{ vars.DATASET_REPOSITORY }}
         run: |
-          if [ -n "$KEY" ]; then
+          if [ -n "$KEY" ] && [ -n "$REPO" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no DEMO_DATASET_DEPLOY_KEY — the folder ships empty and keeps its demo loader"
+            echo "::notice::no DATASET_REPOSITORY/DATASET_DEPLOY_KEY — the folder ships empty and keeps its demo loader"
           fi
 
       - name: Check out the demo dataset
         if: steps.dataset.outputs.available == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: gradionhq/margince-demo-database
-          ssh-key: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+          repository: ${{ vars.DATASET_REPOSITORY }}
+          ssh-key: ${{ secrets.DATASET_DEPLOY_KEY }}
           path: .dataset
           persist-credentials: false
 
@@ -262,7 +264,7 @@ jobs:
 
       # ─────────────────────── the folder arrives with data ───────────────────
       #
-      # Everything below is SKIPPED without DEMO_DATASET_DEPLOY_KEY, and the
+      # Everything below is SKIPPED without DATASET_REPOSITORY/DATASET_DEPLOY_KEY, and the
       # folder then ships empty exactly as it did before, with its demo loader
       # still in it. The secret is what turns this on; nothing else changes.
       #

@@ -33,7 +33,7 @@ func TestRunValidateIgnoresCore(t *testing.T) {
 
 func TestRunValidateReportsEachProblemOnItsOwnLine(t *testing.T) {
 	body := "name: Bad\ndisplay_name: X\ncore: v0.0.2\n" +
-		"deploy:\n  staging: { adapter: d13 }\n  Prod: { adapter: hook }\n  qa: { adapter: hook }\n"
+		"deploy:\n  staging: { adapter: ftp }\n  Prod: { adapter: hook }\n  qa: { adapter: hook }\n"
 	var out, errOut bytes.Buffer
 	if code := run([]string{"validate", "-file", writeFile(t, body)}, &out, &errOut); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
@@ -42,7 +42,7 @@ func TestRunValidateReportsEachProblemOnItsOwnLine(t *testing.T) {
 	for _, want := range []string{
 		`instance.yaml: name: "Bad"`,
 		`instance.yaml: deploy: environment "Prod" must match`,
-		`instance.yaml: deploy.staging.adapter: "d13" is not an adapter (want hook or host)`,
+		`instance.yaml: deploy.staging.adapter: "ftp" is not an adapter (want hook or host)`,
 		"instance.yaml: deploy.qa: missing directory deploy/qa/",
 		"instance.yaml: deploy.staging: missing directory deploy/staging/",
 	} {

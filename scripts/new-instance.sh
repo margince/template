@@ -11,7 +11,7 @@
 #
 # Usage:
 #   NAME=acme DISPLAY_NAME="Acme" [DIR=../margince-acme] \
-#     [PUSH=1 OWNER=gradionhq] bash scripts/new-instance.sh
+#     [PUSH=1 OWNER=<github owner>] bash scripts/new-instance.sh
 #   (or: make new-instance NAME=… DISPLAY_NAME=… …)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -20,11 +20,17 @@ cd "$ROOT"
 name="${NAME:-}"
 display="${DISPLAY_NAME:-}"
 dir="${DIR:-$(dirname "$ROOT")/margince-$name}"
-owner="${OWNER:-gradionhq}"
+owner="${OWNER:-}"
 
 [ ! -f .template-version ] || die "new-instance: this is an instance; run make new-instance in margince-template"
 [ -n "$name" ] || die "new-instance: pass NAME=<name>, e.g. make new-instance NAME=acme DISPLAY_NAME=Acme"
 [ -n "$display" ] || die "new-instance: pass DISPLAY_NAME=<text>, e.g. DISPLAY_NAME=\"Acme\""
+# Checked before anything is created: everything here is validated up front,
+# and PUSH=1 with no OWNER would otherwise fail only after the instance,
+# commit and all, already exists on disk.
+if [ "${PUSH:-}" = "1" ]; then
+  [ -n "$owner" ] || die "new-instance: PUSH=1 needs OWNER=<github owner>"
+fi
 # Checked here, before quoting: inside a double-quoted YAML scalar a raw
 # newline is folded to a space by the parser, so cli check's single-line rule
 # never sees it back out. Refuse it here instead of writing "Acme Client" from
@@ -105,5 +111,5 @@ else
   echo
   echo "next:"
   echo "  cd $dir && make install && make dev"
-  echo "  create the GitHub repository with PUSH=1 OWNER=$owner, or push it yourself"
+  echo "  create the GitHub repository with PUSH=1 OWNER=<github owner>, or push it yourself"
 fi

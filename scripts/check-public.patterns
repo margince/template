@@ -1,0 +1,27 @@
+# check-public.patterns — extended regular expressions, one per line,
+# case-insensitive. A line starting with # is a comment. Read by
+# scripts/check-public.sh through `git grep -E -f`.
+#
+# No `\b`: git grep on macOS uses a regex engine that does not support it.
+# A boundary is spelled out instead: (^|[^a-z0-9])PATTERN([^a-z0-9]|$).
+#
+# This file, and docs/superpowers/, are the only places allowed to name any
+# of these (spec Section 7).
+
+# Private organization and host
+gradionhq
+gradion\.com
+nfq
+
+# Private repositories
+margince-constellation
+margince-automation-world
+margince-gradion
+margince-d13-deploy
+margince-release
+margince-demo-database
+
+# Private service / codename
+constellation
+district[- ]?13
+(^|[^a-z0-9])d13([^a-z0-9]|$)

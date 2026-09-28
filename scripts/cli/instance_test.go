@@ -98,7 +98,7 @@ func TestValidateDeploy(t *testing.T) {
 	}{
 		{"bad environment name", map[string]DeployTarget{"Prod": {Adapter: "hook"}}, `deploy: environment "Prod"`},
 		{"missing adapter", map[string]DeployTarget{"prod": {}}, "deploy.prod.adapter: required"},
-		{"d13 refused by the generic adapter message", map[string]DeployTarget{"prod": {Adapter: "d13"}}, `deploy.prod.adapter: "d13" is not an adapter (want hook or host)`},
+		{"ftp refused by the generic adapter message", map[string]DeployTarget{"prod": {Adapter: "ftp"}}, `deploy.prod.adapter: "ftp" is not an adapter (want hook or host)`},
 		{"unknown adapter", map[string]DeployTarget{"prod": {Adapter: "ssh"}}, `deploy.prod.adapter: "ssh" is not an adapter (want hook or host)`},
 	}
 	for _, c := range cases {

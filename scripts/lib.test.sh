@@ -279,10 +279,11 @@ fi
 
 # --- dataset_path ---
 #
-# core derives this from ITS OWN git-common-dir, which under a submodule is
-# <instance>/.git/modules/core — so core's default resolves to
-# <instance>/.git/modules/margince-demo-database, inside a git directory, and
-# the demo seed has never been reachable downstream.
+# core derives ITS OWN default from its own git-common-dir, which under a
+# submodule is <instance>/.git/modules/core — a path inside a git directory
+# that can never hold a dataset checkout. There is no default here either: the
+# only one worth computing would name the dataset's own private repository, so
+# DATASET is required instead.
 
 expect_eq_str() {
   local label="$1" got="$2" want="$3"
@@ -291,13 +292,16 @@ expect_eq_str() {
   fi
 }
 
-expect_eq_str "defaults beside this repository, not inside a git dir" \
-  "$(dataset_path)" "$(cd "$ROOT/.." && pwd)/margince-demo-database"
-
-case "$(dataset_path)" in
-  *.git*) fail "the default never points inside a git directory" ;;
-  *)      ok   "the default never points inside a git directory" ;;
-esac
+if out="$(dataset_path 2>&1)"; then
+  fail "requires DATASET, no default sibling directory: $out"
+else
+  ok "requires DATASET, no default sibling directory"
+fi
+if printf '%s\n' "$out" | grep -qF 'DATASET=<path> required'; then
+  ok "the required-DATASET message names the flag"
+else
+  fail "the required-DATASET message names the flag: $out"
+fi
 
 d="$TMP/given-dataset"; mkdir -p "$d"
 expect_eq_str "an existing given path is passed through absolute" "$(dataset_path "$d")" "$d"

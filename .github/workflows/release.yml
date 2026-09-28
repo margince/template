@@ -123,7 +123,7 @@ jobs:
       version: ${{ needs.version.outputs.version }}
       arch: apple-silicon
     secrets:
-      DEMO_DATASET_DEPLOY_KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+      DATASET_DEPLOY_KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
 
   ## The SAME lane, on an Intel runner. A macOS bundle is whatever machine built
   ## it, so this is the only way an Intel Mac gets a folder that starts at all.
@@ -142,7 +142,7 @@ jobs:
       version: ${{ needs.version.outputs.version }}
       arch: intel
     secrets:
-      DEMO_DATASET_DEPLOY_KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+      DATASET_DEPLOY_KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
 
   desktop-windows:
     needs: [version, full-check]
@@ -151,7 +151,7 @@ jobs:
       ref: ${{ needs.version.outputs.ref }}
       version: ${{ needs.version.outputs.version }}
     secrets:
-      DEMO_DATASET_DEPLOY_KEY: ${{ secrets.DEMO_DATASET_DEPLOY_KEY }}
+      DATASET_DEPLOY_KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
 
   ## The release is created HERE, in one call, with all three bundles already in
   ## hand. There is no window in which the tag has a release that carries no

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # new-instance.test.sh — create instances from a throwaway template.
 #
-# Never pushes: PUSH is unset in every case.
+# PUSH is unset for most cases; the two that DO set it (OWNER required, OWNER
+# given) run against a stub `gh` on PATH, never the real one, so no case here
+# ever reaches the network.
 #
 # Usage: bash scripts/new-instance.test.sh
 set -euo pipefail
@@ -21,6 +23,20 @@ trap 'rm -rf "$TMP"' EXIT
 FAILURES=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; FAILURES=$((FAILURES + 1)); }
 ok()   { printf 'ok: %s\n' "$*"; }
+
+# A stub gh, first on PATH. PUSH=1 needs OWNER to even reach the point of
+# calling gh (die fires first without it) — this stub exists so a regression
+# that lets that check through still cannot create a real repository or
+# reach the network.
+STUB_BIN="$TMP/stub-bin"
+mkdir -p "$STUB_BIN"
+cat > "$STUB_BIN/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'stub gh: %s\n' "$*" >&2
+exit 0
+EOF
+chmod +x "$STUB_BIN/gh"
+export PATH="$STUB_BIN:$PATH"
 
 # A core with one release tag.
 CORE_UP="$TMP/core-upstream"
@@ -155,6 +171,24 @@ expect_refused "refuses an invalid name" "$TMP/x2" NAME=Acme DISPLAY_NAME=X
 expect_refused "refuses a missing display name" "$TMP/x3" NAME=acme2
 expect_refused "refuses an existing directory" "$DIR" NAME=acme DISPLAY_NAME=Acme
 expect_refused "refuses a multi-line display name" "$TMP/x5" NAME=multiline DISPLAY_NAME=$'Acme\nClient'
+expect_refused "refuses PUSH=1 without OWNER" "$TMP/x6" NAME=needsowner DISPLAY_NAME=X PUSH=1
+out="$(create NAME=needsowner DISPLAY_NAME=X DIR="$TMP/x6b" PUSH=1 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qxF "error: new-instance: PUSH=1 needs OWNER=<github owner>"; then
+  ok "PUSH=1 without OWNER fails with the exact message"
+else
+  fail "PUSH=1 without OWNER fails with the exact message: rc=$rc out=$out"
+fi
+
+# --- PUSH=1 with OWNER reaches the stub gh, not the real one ---
+DIR8="$TMP/margince-pushed"
+out="$(create NAME=pushed DISPLAY_NAME=Pushed DIR="$DIR8" PUSH=1 OWNER=acme-org 2>&1)"
+if printf '%s\n' "$out" | grep -qF "stub gh: repo create acme-org/margince-pushed"; then
+  ok "PUSH=1 with OWNER invokes gh repo create <OWNER>/margince-<NAME>"
+else
+  fail "PUSH=1 with OWNER invokes gh repo create <OWNER>/margince-<NAME>: $out"
+fi
+unset OWNER
+
 if (cd "$DIR" && NAME=other DISPLAY_NAME=O DIR="$TMP/x4" bash scripts/new-instance.sh >/dev/null 2>&1); then
   fail "refuses to run inside an instance"
 elif [ -e "$TMP/x4" ]; then fail "refuses to run inside an instance — it created a directory"

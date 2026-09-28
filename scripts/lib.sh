@@ -277,14 +277,16 @@ rewrite_file_in_place() {
   rm -f "$tmp"
 }
 
-# dataset_path [given] — the demo dataset checkout.
+# dataset_path <given> — the demo dataset checkout, resolved to an absolute path.
 #
 # core computes its own default from `git rev-parse --git-common-dir`, which
 # for a submodule is <instance>/.git/modules/core. Its default therefore
-# resolves to <instance>/.git/modules/margince-demo-database: a path inside a
-# git directory that can never exist, behind an error message telling you to
-# clone "beside this repo". Computing it from the INSTANCE root instead is what
-# core means, spelled where the submodule cannot distort it.
+# resolves to a path inside a git directory that can never exist. Computing it
+# from the INSTANCE root instead is what core means, spelled where the
+# submodule cannot distort it — but there IS no default here, deliberately:
+# the only default worth computing would be a sibling directory named after
+# the dataset's own (private) repository, baked into every message this
+# function's callers build from it. DATASET is required instead.
 #
 # The variable stays DATASET, exactly as core spells it. A richer contract (a
 # URL, a clone-on-demand) belongs in core first and is inherited here.
@@ -296,10 +298,7 @@ rewrite_file_in_place() {
 # "absolute only if it exists" is absolute precisely when it is not needed.
 dataset_path() {
   local given="${1:-}"
-  if [ -z "$given" ]; then
-    printf '%s/margince-demo-database\n' "$(cd "$ROOT/.." && pwd)"
-    return 0
-  fi
+  [ -n "$given" ] || die "dataset_path: DATASET=<path> required"
   case "$given" in
     # POSIX absolute, and the Windows spelling of one. MSYS2 bash accepts
     # `D:/a/...` and does not start it with a slash, so the relative arm below

@@ -23,8 +23,8 @@ repository.
   values.
 - **Core.** `core/` is a submodule pinned to a core tag. Never edit files in
   `core/`. Changes to how Margince is compiled belong in `margince/margince`.
-- **Reuse.** Tooling is copied from `margince-automation-world` (design
-  Section 7). Reuse an existing script before writing a new one.
+- **Reuse.** Tooling is copied from the template's tooling source repository
+  (design Section 7). Reuse an existing script before writing a new one.
 - **Secrets.** Never commit licenses, tokens, or credentials. Licenses are
   provided through `MARGINCE_LICENSE` or the environment secret store.
 

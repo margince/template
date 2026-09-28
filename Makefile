@@ -24,7 +24,7 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 .PHONY: help init config config-check config-sync hooks \
 	stage unstage compose watch new-unit new-instance deploy u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
-	check check-instance check-template template-sync check-composition build test test-extensions arch ext-imports \
+	check check-instance check-template check-public template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
 	fe-install fe-test fe-test-ext fe-typecheck-composed fe-ds-gates fe-lint \
 	dev dev-fresh dev-stop dev-logs seed-dev seed-demo verify-demo run \
@@ -205,7 +205,12 @@ u-check: u ## One unit, plus the screen suites and the composed typecheck (NAME=
 ## that lane can never pass with ours present. Pass 1 therefore runs upstream's
 ## gate on a PRISTINE checkout (delegated wholesale, so no copy of its gate list
 ## lives here to go stale); pass 2 runs the gates that can see our units.
-check: toolcheck check-instance check-template test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
+## check-public runs here only when .template-version is ABSENT — i.e. only in
+## the template itself, never in an instance. An instance inherits
+## scripts/check-public.sh unchanged (it is template-owned) but has no reason
+## to run it: it is not the thing that gets published, and it may legitimately
+## carry the client's own private values.
+check: toolcheck check-instance check-template $(if $(wildcard .template-version),,check-public) test-scripts test-secret-scan secret-scan ## The full gate: upstream's own, then the composed set
 	@echo "== pass 1: upstream's own gate, units unstaged"
 	@$(MAKE) unstage
 	@$(MAKE) -C $(CORE) check
@@ -362,6 +367,13 @@ check-manifests: ## Unit manifests are committed and current
 check-docs: ## Every `make <target>` the docs name exists
 	@bash scripts/check-docs.sh
 
+## Public-template gate (spec Section 7): no tracked or staged file names a
+## private repository, host, organization or service. Only docs/superpowers/
+## and scripts/check-public.patterns itself may. `check` above adds this only
+## when .template-version is absent — see the comment there.
+check-public: ## No private repository/host/organization/service is named (template only)
+	@bash scripts/check-public.sh
+
 drift: compose ## Generated artifacts match their sources
 	@$(MAKE_CORE) drift
 
@@ -386,6 +398,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/core-contrib.test.sh
 	@bash scripts/preflight.test.sh
 	@bash scripts/check-manifests.test.sh
+	@bash scripts/check-public.test.sh
 	@bash scripts/build-info.test.sh
 	@bash scripts/desktop-kit.test.sh
 	@bash scripts/workflow-wiring.test.sh
@@ -474,35 +487,37 @@ seed-dev: ## Demo workspace + records on the running stack (needs make dev)
 
 ## seed-demo — the commercial demo dataset, on a running stack.
 ##
-## DATASET is core's own variable and keeps its meaning; only the DEFAULT is
-## computed here. core derives its default from its own git-common-dir, which
+## DATASET is core's own variable and keeps its meaning; only the RESOLUTION is
+## done here. core derives its own default from its own git-common-dir, which
 ## under a submodule is <instance>/.git/modules/core — so core's default lands
-## inside a git directory and the lane has never been reachable downstream.
-## Beside THIS repository is what "beside this repo" was meant to say.
-## Routed through dataset_path whether it was defaulted or PASSED IN. A bare
-## `?=` took a command-line value verbatim, so `DATASET=../margince-demo-database`
-## passed the test -f below (resolved from the instance root) and then reached
+## inside a git directory that can never hold a dataset checkout. There is no
+## default here either, and deliberately: the only sensible default would name
+## the dataset's own (private) repository, in every message this builds from
+## it. DATASET is required instead, with a message.
+##
+## Routed through dataset_path whenever it IS given. A bare `?=` took a
+## command-line value verbatim, so a relative `DATASET=../some-dir` passed the
+## test -f below (resolved from the instance root) and then reached
 ## `$(MAKE) -C core`, which resolves it from core/ — a different directory. An
 ## absolute path is the only spelling both sides agree on.
 ##
 ## DATASET_GIVEN is what the CALLER typed, captured BEFORE the override below
-## defaults it. The desktop lanes need that distinction and this is the only
-## place it survives: after the override, DATASET is always non-empty and
-## `$(origin DATASET)` reads "override" whether or not anyone passed one. A
-## desktop installation carries its own data/demo, and preferring it over a
-## developer checkout is only possible while "nobody said" is still visible.
+## resolves it. The desktop lanes need that distinction and this is the only
+## place it survives: after the override, DATASET is either resolved to an
+## absolute path or still empty, and `$(origin DATASET)` reads "override"
+## whether or not anyone passed one. A desktop installation carries its own
+## data/demo, and preferring it over an explicit DATASET is only possible
+## while "nobody said" is still visible.
 DATASET_GIVEN := $(DATASET)
-override DATASET := $(shell . $(CURDIR)/scripts/lib.sh; dataset_path "$(DATASET)")
+override DATASET := $(if $(DATASET),$(shell . $(CURDIR)/scripts/lib.sh; dataset_path "$(DATASET)"))
 
-seed-demo: ## Fill the running stack from the demo dataset (needs make dev)
+seed-demo: ## Fill the running stack from the demo dataset (DATASET=<path> required)
+	@[ -n "$(DATASET)" ] || { \
+	  echo "seed-demo: DATASET=<path> required — clone the demo dataset repository, then:" >&2; \
+	  echo "  make seed-demo DATASET=/path/to/it" >&2; \
+	  exit 1; }
 	@test -f "$(DATASET)/datasets/v1/demo.json" || { \
 	  echo "seed-demo: no dataset at $(DATASET)" >&2; \
-	  echo "" >&2; \
-	  echo "  git clone https://github.com/gradionhq/margince-demo-database \\" >&2; \
-	  echo "      $(DATASET)" >&2; \
-	  echo "" >&2; \
-	  echo "or point the lane at a checkout you already have:" >&2; \
-	  echo "  make seed-demo DATASET=/path/to/margince-demo-database" >&2; \
 	  exit 1; }
 	@$(MAKE) -C $(CORE) seed-demo DATASET="$(DATASET)" SEED_ARGS="$(SEED_ARGS)"
 
@@ -705,8 +720,10 @@ desktop-connect: ## Start it behind a public address, with MCP on (DEST=)
 ##
 ## `compose` first, for the same reason core/backend's own seed-demo depends on
 ## composition: the seeder resolves the composed workspace, and an unstaged one
-## has none of our units in it. DATASET= points at the dataset checkout (default:
-## beside this repo), LIMIT= seeds fewer companies — but barely, and a small
+## has none of our units in it. DATASET= points at the dataset checkout; without
+## it, a dataset already copied into the installation (data/demo) is used, and
+## otherwise the lane refuses with a message. LIMIT= seeds fewer companies — but
+## barely, and a small
 ## value FAILS: -limit truncates the company list alone while deals and contracts
 ## are seeded whole and resolve their company by domain, so the floor is the
 ## deepest company any of them names (193 of 198 today). docs/desktop-build.md

@@ -57,6 +57,7 @@ Run `make help` for the full list.
 | `make new-instance NAME=<n> DISPLAY_NAME=<d>` | Create a client instance repository from this template. |
 | `make template-sync` | Merge this template's changes into an instance and record them. |
 | `make check-template` | Verify an instance has not drifted from the template. |
+| `make check-public` | Confirm no tracked or staged file names a private repository, host, organization, or service (template only; `make check` runs it there). |
 | `make update-core REF=<tag>` | Move the core pin to a core release tag. |
 | `make deploy ENV=<env> VERSION=<v>` | Deploy the instance's images to an environment defined in `instance.yaml` (`deploy:`). |
 | `make test-lifecycle` | Run the whole instance lifecycle end to end in a scratch instance (slow; installs into the Go module cache, pnpm store, and `$(go env GOPATH)/bin`). |
@@ -69,10 +70,10 @@ Planned, not implemented yet: the trial bundle (issue T8) and release
 | Repository | Role |
 |---|---|
 | `margince/margince` | Core product, release tags, image and desktop build definitions. |
-| `gradionhq/margince-constellation` | Licensing, license-gated registry and downloads, upgrades. |
-| `gradionhq/margince-demo-database` | Demo datasets. |
-| `gradionhq/margince-qc` | Acceptance tests. |
-| `gradionhq/margince-automation-world` | Source of the template tooling. |
+| The licensing service | License-gated registry and downloads, upgrades. |
+| The demo dataset repository | Demo datasets, referenced by `vars.DATASET_REPOSITORY` in the desktop build workflows. |
+| The acceptance test suite | Acceptance tests. |
+| The template tooling source | Source of the template tooling. |
 
 ## Documentation
 

@@ -24,7 +24,7 @@ branch="${TEMPLATE_BRANCH:-main}"
 
 [ -f .template-version ] || die "template-sync: no .template-version — run this in an instance, not in the template"
 git remote get-url "$remote" >/dev/null 2>&1 \
-  || die "template-sync: no git remote '$remote'. Add it: git remote add $remote git@github.com:gradionhq/margince-template.git"
+  || die "template-sync: no git remote '$remote'. Add it: git remote add $remote <template-url>"
 [ -z "$(git status --porcelain)" ] || die "template-sync: commit or discard local changes first"
 
 git fetch --quiet "$remote" "$branch"

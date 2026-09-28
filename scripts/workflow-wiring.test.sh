@@ -2,7 +2,7 @@
 # A reusable workflow gets the secrets it is PASSED, and never the caller's.
 #
 # The defect this exists for shipped four releases. desktop-windows.yml and
-# desktop-macos.yml read DEMO_DATASET_DEPLOY_KEY to decide whether to seed the
+# desktop-macos.yml read DATASET_DEPLOY_KEY to decide whether to seed the
 # folder they build. Both are called by release.yml through
 # `uses:`, neither declared the secret under `workflow_call:`, and no call site
 # passed it — so in every release the key read empty, the dataset check reported
@@ -240,13 +240,42 @@ if [ -e "$LIFECYCLE_WF" ]; then
   # .github/workflows/ is template-owned, so every instance inherits this
   # file unchanged and cannot remove it (check-template rejects that). An
   # instance has no `make new-instance` to drive, so the job must not run
-  # there: it needs this guard, or every instance's CI would fail on every
-  # push and pull request.
+  # there. A job-level `if:` cannot call hashFiles() (it runs before any
+  # checkout), so the guard cannot be a job-level `if: github.repository ==
+  # ...` either — that would also name this repository. Instead: checkout
+  # WITHOUT submodules, a step reads whether .template-version exists into a
+  # step output, and every later step (submodule init and the lifecycle run
+  # alike) repeats `if: steps.template.outputs.template == 'true'`, since
+  # nothing job-level protects them anymore.
   job_block="$(block_of lifecycle "$LIFECYCLE_WF")"
-  if printf '%s\n' "$job_block" | grep -qE "^[[:space:]]*if:[[:space:]]*github\.repository == 'gradionhq/margince-template'[[:space:]]*\$"; then
-    ok "lifecycle.yml's job guards on github.repository == 'gradionhq/margince-template'"
+  if printf '%s\n' "$job_block" | grep -qE "github\.repository[[:space:]]*=="; then
+    fail "lifecycle.yml's job still guards on github.repository == ... — that names this repository, and a job-level if: cannot call hashFiles() anyway; guard each step on a step output instead"
   else
-    fail "lifecycle.yml's job does not guard on github.repository == 'gradionhq/margince-template' — every instance inherits this template-owned file and would run the job too"
+    ok "lifecycle.yml's job has no github.repository == guard"
+  fi
+
+  if printf '%s\n' "$job_block" | grep -qE "^[[:space:]]*id:[[:space:]]*template[[:space:]]*\$"; then
+    ok "lifecycle.yml has a step id: template"
+  else
+    fail "lifecycle.yml has no step id: template to hold the .template-version check"
+  fi
+
+  if printf '%s\n' "$job_block" | grep -qF '.template-version' \
+     && printf '%s\n' "$job_block" | grep -qF 'GITHUB_OUTPUT'; then
+    ok "lifecycle.yml's template step reads .template-version and writes to GITHUB_OUTPUT"
+  else
+    fail "lifecycle.yml's template step does not read .template-version into GITHUB_OUTPUT"
+  fi
+
+  guard="if: steps.template.outputs.template == 'true'"
+  guard_count="$(printf '%s\n' "$job_block" | grep -cF "$guard" || true)"
+  step_count="$(printf '%s\n' "$job_block" | grep -cE '^[[:space:]]*- (uses:|name:)' || true)"
+  # Every step except the checkout and the template check itself must carry
+  # the guard: nothing job-level does, any more.
+  if [ "$guard_count" -gt 0 ] && [ "$guard_count" -eq "$((step_count - 2))" ]; then
+    ok "every step after checkout and the template check guards on \`$guard\` ($guard_count of $step_count steps)"
+  else
+    fail "not every later step guards on \`$guard\` ($guard_count guarded of $step_count steps; want $((step_count - 2)))"
   fi
 
   if grep -qE '^[[:space:]]*run:[[:space:]]*make test-lifecycle[[:space:]]*$' "$LIFECYCLE_WF"; then
@@ -282,6 +311,15 @@ if [ -e "$LIFECYCLE_WF" ]; then
     ok "lifecycle.yml's checkout sets fetch-depth: 0"
   else
     fail "lifecycle.yml's checkout does not set fetch-depth: 0"
+  fi
+
+  # The first checkout must NOT fetch submodules: it runs before the template
+  # guard, so it has to be cheap enough for an instance to pay for it too.
+  # Submodule init happens later, behind the guard.
+  if printf '%s\n' "$checkout_block" | grep -qE 'submodules:'; then
+    fail "lifecycle.yml's first checkout still fetches submodules unconditionally — it runs before the template guard and must not"
+  else
+    ok "lifecycle.yml's first checkout does not fetch submodules"
   fi
 else
   fail "lifecycle.yml is missing"

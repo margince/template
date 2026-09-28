@@ -106,8 +106,8 @@ the demo database it was seeded from, and the unit list is read from each
 upstream, which units, which demo data" without a rebuild.
 
 `dataset` earns its place for a reason the other two do not need: **the demo
-database is deliberately not pinned.** Both desktop lanes check out
-`gradionhq/margince-demo-database` with no `ref`, so every build takes whatever
+database is deliberately not pinned.** Both desktop lanes check out the demo
+dataset repository (`vars.DATASET_REPOSITORY`) with no `ref`, so every build takes whatever
 its default branch was at that moment — a bundle ships the freshest demo rather
 than a historical one. That is the intended behaviour, and it is also why
 recording the commit is the only thing that can ever say which data a given

@@ -146,8 +146,8 @@ expect_invalid() {
 base='name: acme\ndisplay_name: Acme\ncore: v0.0.2\n'
 expect_invalid "a broken instance.yaml names the problem and runs no hook" staging \
   'name: acme\n  bad: [unterminated\n' 'instance.yaml is not valid'
-expect_invalid "adapter d13 is refused by the generic adapter message, and runs no hook" staging \
-  "${base}deploy:\n  staging: { adapter: d13 }\n" 'is not an adapter (want hook or host)'
+expect_invalid "adapter ftp is refused by the generic adapter message, and runs no hook" staging \
+  "${base}deploy:\n  staging: { adapter: ftp }\n" 'is not an adapter (want hook or host)'
 expect_invalid "an environment named Prod is refused and runs no hook" Prod \
   "${base}deploy:\n  Prod: { adapter: hook }\n" 'environment "Prod" must match'
 expect_invalid "an environment without its deploy/<env>/ directory elsewhere in instance.yaml is refused" staging \

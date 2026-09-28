@@ -30,7 +30,7 @@ make new-instance NAME=acme DISPLAY_NAME="Acme"
 | `DISPLAY_NAME` | yes | The instance's user-facing name. One line: a value containing a newline is refused, not silently folded. |
 | `DIR` | no, defaults to `../margince-<NAME>` | Where the new instance is created. Fails if the path already exists. |
 | `PUSH` | no | `PUSH=1` creates a private GitHub repository and pushes the instance to it (`gh repo create <OWNER>/margince-<NAME> --private --source <DIR> --remote origin --push`). Without it, nothing is pushed anywhere; the instance exists locally only. |
-| `OWNER` | no, defaults to `gradionhq` | The GitHub organization `PUSH=1` creates the repository in. |
+| `OWNER` | yes, with `PUSH=1` | The GitHub organization `PUSH=1` creates the repository in. |
 
 Everything is validated before anything is created: `new-instance.sh` builds
 the candidate `instance.yaml` and runs it through `cli check` first. If that
@@ -91,7 +91,7 @@ A fresh clone of an instance (for example from GitHub) has no `template`
 remote, because `git clone` creates `origin` only. Add it once per clone:
 
 ```sh
-git remote add template git@github.com:gradionhq/margince-template.git
+git remote add template <template-url>
 ```
 
 Then run:
