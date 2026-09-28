@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Test stub for scp: copies locally with scp -r's directory semantics. See README.txt.
+set -euo pipefail
+: "${STUB_STATE:?STUB_STATE is not set}"
+source "$(dirname "${BASH_SOURCE[0]}")/ssh_opts.sh"
+{ printf '%s ' "$@"; printf '\n'; } >> "$STUB_STATE/scp.log"
+stub_parse_opts "$@"
+n="${#STUB_REST[@]}"
+[ "$n" -ge 2 ] || { echo "stub scp: pass a source and a target" >&2; exit 1; }
+target="${STUB_REST[$((n - 1))]}"
+case "$target" in *:*) target="${target#*:}" ;; *) echo "stub scp: the target is not host:path" >&2; exit 1 ;; esac
+target="$(stub_rewrite "$target")"
+i=0
+while [ "$i" -lt $((n - 1)) ]; do
+  cp -Rp "${STUB_REST[$i]}" "$target"
+  i=$((i + 1))
+done

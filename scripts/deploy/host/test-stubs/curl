@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Test stub for curl: prints the HTTP status in $STUB_STATE/curl-code. See README.txt.
+set -euo pipefail
+: "${STUB_STATE:?STUB_STATE is not set}"
+printf '%s\n' "$*" >> "$STUB_STATE/curl.log"
+if [ -e "$STUB_STATE/fail.curl" ]; then
+  printf '000'
+  echo "curl: (7) Failed to connect" >&2
+  exit 7
+fi
+printf '%s' "$(cat "$STUB_STATE/curl-code" 2>/dev/null || echo 200)"

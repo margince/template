@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Test stub for docker, driven by files in $STUB_STATE. See README.txt.
+set -euo pipefail
+: "${STUB_STATE:?STUB_STATE is not set}"
+S="$STUB_STATE"
+printf '%s\n' "$*" >> "$S/docker.log"
+all="$*"
+
+op="${1:-}"
+service=""
+if [ "$op" = compose ]; then
+  shift
+  sub=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -p|-f|--env-file|--project-directory|--profile|--project-name|--file) shift 2 ;;
+      -*) shift ;;
+      *) sub="$1"; shift; break ;;
+    esac
+  done
+  op="compose-$sub"
+  if [ "$sub" = exec ]; then
+    while [ $# -gt 0 ]; do
+      case "$1" in -e|-w|-u|--index) shift 2 ;; -*) shift ;; *) service="$1"; break ;; esac
+    done
+    op="compose-exec-$service"
+  fi
+fi
+
+# should_fail <op> — see README.txt.
+should_fail() {
+  local f="$S/fail.$1" t="$S/fail-times.$1" n line
+  if [ -f "$t" ]; then
+    n="$(cat "$t")"
+    if [ "$n" -gt 0 ]; then printf '%s\n' "$((n - 1))" > "$t"; return 0; fi
+  fi
+  [ -f "$f" ] || return 1
+  [ -s "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    case "$all" in *"$line"*) return 0 ;; esac
+  done < "$f"
+  return 1
+}
+
+if should_fail "$op"; then
+  echo "stub docker: $op failed" >&2
+  exit 1
+fi
+
+case "$op" in
+  version) echo "27.3.1" ;;
+  login) cat > "$S/login.stdin"; echo "Login Succeeded" ;;
+  manifest) echo '{"schemaVersion": 2}' ;;
+  compose-version)
+    v="$(cat "$S/compose-version" 2>/dev/null || echo 2.30.0)"
+    case "$all" in *--short*) echo "$v" ;; *) echo "Docker Compose version v$v" ;; esac ;;
+  compose-ps)
+    if [ -f "$S/ps-services" ]; then cat "$S/ps-services"; else printf 'api\nweb\nworker\ncaddy\n'; fi ;;
+  *) ;;
+esac

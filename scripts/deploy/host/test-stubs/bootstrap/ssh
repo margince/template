@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Test stub for ssh used by bootstrap.test.sh: answers from files. See ../README.txt.
+set -euo pipefail
+: "${STUB_STATE:?STUB_STATE is not set}"
+S="$STUB_STATE"
+source "$(dirname "${BASH_SOURCE[0]}")/../ssh_opts.sh"
+{ printf '%s ' "$@"; printf '\n'; } >> "$S/ssh.log"
+STUB_STOP_AT_HOST=1 stub_parse_opts "$@"
+[ "${#STUB_REST[@]}" -ge 2 ] || { echo "stub ssh: no remote command" >&2; exit 255; }
+cmd="${STUB_REST[*]:1}"
+case "$cmd" in
+  "cat /etc/os-release") cat "$S/os-release" ;;
+  "docker compose version --short")
+    if [ -f "$S/compose-version" ]; then cat "$S/compose-version"
+    else echo "docker: 'compose' is not a docker command." >&2; exit 1; fi ;;
+  "id -nG") cat "$S/groups" ;;
+  "sh -s")
+    cat >> "$S/scripts.log"
+    printf '\n' >> "$S/scripts.log"
+    if [ -e "$S/fail.install" ]; then echo "E: install failed" >&2; exit 100; fi
+    echo 2.39.4 > "$S/compose-version" ;;
+  *"usermod -aG docker"*)
+    printf '%s\n' "$cmd" >> "$S/scripts.log"
+    printf '%s docker\n' "$(cat "$S/groups")" > "$S/groups.new"
+    mv "$S/groups.new" "$S/groups" ;;
+  *) printf '%s\n' "$cmd" >> "$S/other.log" ;;
+esac

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Test stub for ssh: runs the remote command locally. See README.txt.
+set -euo pipefail
+: "${STUB_STATE:?STUB_STATE is not set}"
+source "$(dirname "${BASH_SOURCE[0]}")/ssh_opts.sh"
+{ printf '%s ' "$@"; printf '\n'; } >> "$STUB_STATE/ssh.log"
+STUB_STOP_AT_HOST=1 stub_parse_opts "$@"
+[ "${#STUB_REST[@]}" -ge 2 ] || { echo "stub ssh: no remote command" >&2; exit 255; }
+cmd="${STUB_REST[*]:1}"
+cmd="$(stub_rewrite "$cmd")"
+root="${STUB_SERVER_ROOT:-$STUB_STATE}"
+mkdir -p "$root"
+cd "$root"
+exec sh -c "$cmd"

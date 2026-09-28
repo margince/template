@@ -62,6 +62,34 @@ if deploy "$inst" staging v1.0.0; then ok "a full deployment succeeds"; else fai
 if [ "$(steps "$inst")" = "preflight apply verify" ]; then ok "runs preflight, apply, verify in order"; else fail "runs preflight, apply, verify in order: $(steps "$inst")"; fi
 if grep -qx 'apply staging v1.0.0 acme/api:v1.0.0 ' "$inst/log"; then ok "hooks receive the environment, version and image names"; else fail "hooks receive the environment, version and image names: $(cat "$inst/log")"; fi
 
+# --- DEPLOY_STATE_DIR: one directory for all steps of a run, removed afterwards ---
+inst="$(fresh_instance)"
+for s in preflight apply verify rollback; do
+  cat > "$inst/deploy/staging/hooks/$s.sh" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${DEPLOY_STATE_DIR:-}" ] && [ -d "\$DEPLOY_STATE_DIR" ]; then d=dir; else d=none; fi
+printf '%s %s %s\n' "\$DEPLOY_STEP" "\${DEPLOY_STATE_DIR:-}" "\$d" >> "$inst/log"
+touch "\${DEPLOY_STATE_DIR:-/nonexistent}/\$DEPLOY_STEP" 2>/dev/null || true
+[ "\$DEPLOY_STEP" != verify ] || exit 1
+EOF
+done
+commit_all "$inst"
+deploy "$inst" staging v1.0.0 || true
+state_dirs="$(awk '{print $2}' "$inst/log" 2>/dev/null | sort -u)"
+if [ "$(awk '{print $3}' "$inst/log" 2>/dev/null | sort -u)" = dir ] && [ "$(printf '%s\n' "$state_dirs" | wc -l | tr -d ' ')" = 1 ] && [ "$(steps "$inst")" = "preflight apply verify rollback" ]; then
+  ok "DEPLOY_STATE_DIR is one existing directory for every step, rollback included"
+else
+  fail "DEPLOY_STATE_DIR is one existing directory for every step: $(cat "$inst/log" 2>/dev/null)"
+fi
+if [ "${state_dirs#/}" != "$state_dirs" ] && [ ! -e "$state_dirs" ]; then ok "DEPLOY_STATE_DIR is removed after the run"; else fail "DEPLOY_STATE_DIR is removed after the run: $state_dirs"; fi
+inst="$(fresh_instance preflight:1 apply)"
+sed -i.bak 's|^printf|printf "%s\\n" "$DEPLOY_STATE_DIR" > "'"$inst"'/state"; printf|' "$inst/deploy/staging/hooks/preflight.sh" && rm -f "$inst/deploy/staging/hooks/preflight.sh.bak"
+printf '/state\n' >> "$inst/.gitignore"
+commit_all "$inst"
+deploy "$inst" staging v1.0.0 || true
+sd="$(cat "$inst/state" 2>/dev/null || true)"
+if [ "${sd#/}" != "$sd" ] && [ ! -e "$sd" ]; then ok "DEPLOY_STATE_DIR is removed after a failed preflight"; else fail "DEPLOY_STATE_DIR is removed after a failed preflight: $(cat "$inst/state" 2>/dev/null)"; fi
+
 # --- verify fails ---
 inst="$(fresh_instance preflight apply verify:1 rollback)"
 if deploy "$inst" staging v1.0.0; then fail "a failed verify fails the deployment"; else ok "a failed verify fails the deployment"; fi

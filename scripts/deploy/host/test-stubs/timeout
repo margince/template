@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Test stub for timeout: drops the duration and runs the command.
+set -euo pipefail
+shift
+exec "$@"

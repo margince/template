@@ -73,6 +73,12 @@ name="$(instance_get name)"
 export INSTANCE_NAME="$name" IMAGE_REPO="$repo"
 export IMAGE_API="$repo/api:$version" IMAGE_WEB="$repo/web:$version" IMAGE_WORKER="$repo/worker:$version"
 
+# One directory the steps of this run share (the host adapter keeps the
+# previous release and its SSH files there), removed when the run ends.
+state_dir="$(mktemp -d)"
+trap 'rm -rf "$state_dir"' EXIT
+export DEPLOY_STATE_DIR="$state_dir"
+
 bash "$ROOT/scripts/deploy/$adapter.sh" check
 
 # has <step> — 0 when the adapter provides the step, 1 when it does not.

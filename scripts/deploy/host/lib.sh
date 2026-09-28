@@ -48,3 +48,80 @@ host_env_get() {
     return 1
   fi
 }
+
+# The oldest Docker Compose the rendered compose.yaml works with. compose.yaml
+# uses `env_file` entries with `path` and `format: raw` and `depends_on` with
+# `required: false`. `required` (env_file) arrived in Compose 2.24.0 and
+# `depends_on.required` in 2.20.0; `format` arrived in 2.30.0 (compose-go
+# 2.3.0; Compose 2.29.x uses compose-go 2.2.0, which has no such field).
+# shellcheck disable=SC2034 # used by host.sh and bootstrap.sh
+HOST_MIN_COMPOSE=2.30.0
+
+# host_q <value> — <value> as one single-quoted POSIX shell word, for a
+# command that a remote shell reads.
+host_q() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# host_version_at_least <version> <minimum> — 0 when X.Y.Z <version> (a
+# leading v and a -suffix or +suffix are ignored) is <minimum> or later.
+host_version_at_least() {
+  local v="${1#v}" m="${2#v}" i a b
+  v="${v%%[-+]*}"
+  [[ "$v" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || return 1
+  local IFS=.
+  # shellcheck disable=SC2086
+  set -- $v 0 0 0
+  a=("$1" "$2" "$3")
+  # shellcheck disable=SC2086
+  set -- $m 0 0 0
+  b=("$1" "$2" "$3")
+  for i in 0 1 2; do
+    [ "$((10#${a[$i]}))" -gt "$((10#${b[$i]}))" ] && return 0
+    [ "$((10#${a[$i]}))" -lt "$((10#${b[$i]}))" ] && return 1
+  done
+  return 0
+}
+
+# host_ssh_target — HOST_SSH from host.env, checked: user@host, where both
+# parts are letters, digits, `.`, `_` and `-` and neither starts with `-`.
+# Prints it; exit 1 with a message otherwise.
+host_ssh_target() {
+  local t
+  t="$(host_env_get HOST_SSH)" || { echo "HOST_SSH is not set in $DEPLOY_DIR/host.env (user@host)" >&2; return 1; }
+  [[ "$t" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
+    { echo "HOST_SSH in $DEPLOY_DIR/host.env must be user@host (letters, digits, '.', '_', '-'): '$t'" >&2; return 1; }
+  printf '%s\n' "$t"
+}
+
+# host_ssh_setup <dir> <target> — write the SSH files into <dir> (mode 600)
+# and set HOST_SSH_OPTS and HOST_SSH_TARGET for host_ssh and host_scp.
+#
+#   <dir>/known_hosts  from HOST_KNOWN_HOSTS (required: host key checking is
+#                      never disabled)
+#   <dir>/ssh_key      from HOST_SSH_KEY, when it is set (otherwise the SSH
+#                      agent's keys are used)
+host_ssh_setup() {
+  local dir="$1"
+  case "$dir" in *[[:space:]]*) echo "the SSH state directory '$dir' contains a blank; ssh -o cannot take it" >&2; return 1 ;; esac
+  [ -n "${HOST_KNOWN_HOSTS:-}" ] || {
+    echo "HOST_KNOWN_HOSTS is not set: pass the server's known_hosts line(s) (for example from ssh-keyscan, checked against the server's fingerprint); host key checking is never disabled" >&2
+    return 1
+  }
+  ( umask 077; printf '%s\n' "$HOST_KNOWN_HOSTS" > "$dir/known_hosts" )
+  chmod 600 "$dir/known_hosts"
+  HOST_SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$dir/known_hosts")
+  if [ -n "${HOST_SSH_KEY:-}" ]; then
+    ( umask 077; printf '%s\n' "$HOST_SSH_KEY" > "$dir/ssh_key" )
+    chmod 600 "$dir/ssh_key"
+    HOST_SSH_OPTS+=(-i "$dir/ssh_key")
+  fi
+  HOST_SSH_TARGET="$2"
+}
+
+# host_ssh <command> — run <command> (one string, read by the remote shell)
+# on the server. Standard input is passed on.
+host_ssh() { ssh "${HOST_SSH_OPTS[@]}" "$HOST_SSH_TARGET" "$@"; }
+
+# host_scp <args...> — scp with the same options.
+host_scp() { scp "${HOST_SSH_OPTS[@]}" "$@"; }
