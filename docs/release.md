@@ -5,7 +5,7 @@ Two lanes, and which one runs is decided by what you did, not by a flag.
 | You did | What runs | How long |
 |---|---|---|
 | Opened a pull request, or merged to `main` | `ci.yml` — the light gate, and only that | minutes |
-| Pushed a **`v*` tag** | `release.yml` — the full gate, both bundles, then it publishes the release | ~20 minutes |
+| Pushed a **`v*` tag** | `release.yml` — the full gate, the images and their smoke test, both bundles, then it publishes the release | ~20 minutes |
 
 One gesture cuts a downloadable build, and the tag says which shelf it lands on.
 A plain `v0.3.0` ships. A suffixed `v0.3.0-rc.1` publishes as a pre-release, so a
@@ -44,14 +44,35 @@ git push origin v0.3.0
 
 That is the whole gesture. `release.yml` then:
 
-1. **checks the tag** — `vMAJOR.MINOR.PATCH`, optionally `-rc.1`, and refuses
+1. **checks the tag** — `vMAJOR.MINOR.PATCH`, optionally `-rc.N`, and refuses
    anything else in seconds rather than after twenty minutes of runner time;
 2. **checks the commit is on `main`** — a release built from an unmerged commit
    is a release nobody reviewed;
 3. runs the full gate;
-4. builds the macOS bundle on `macos-latest` and the Windows bundle on
+4. **builds the role images** (`make package`, `linux/amd64`, loaded locally)
+   and **smoke-tests them** (`make smoke`);
+5. **pushes the images** when the repository variable `REGISTRY` is set, for
+   every platform in `PLATFORMS`;
+6. builds the macOS bundle on `macos-latest` and the Windows bundle on
    `windows-latest`, both stamped with the tag;
-5. **creates the release**, with both zips already attached.
+7. **creates the release**, with both zips already attached. The notes list
+   the core version, the instance commit, and the image digests, or
+   `images were not pushed: REGISTRY is not set`.
+
+The image steps read these repository settings:
+
+| Setting | Kind | Default | Effect |
+|---|---|---|---|
+| `REGISTRY` | variable | unset | Registry prefix of the image names. Unset: the images are built and smoke-tested, not pushed. |
+| `PLATFORMS` | variable | `linux/amd64` | Comma-separated platforms of the pushed images, for example `linux/amd64,linux/arm64`. |
+| `REGISTRY_USERNAME` | secret | — | User name for `docker login` to the `REGISTRY` host. |
+| `REGISTRY_PASSWORD` | secret | — | Password or token for `docker login`, passed on standard input. |
+
+`make smoke VERSION=<v>` runs the same smoke test locally, against images
+built by `make package VERSION=<v>`. It starts PostgreSQL, Redis, `api`,
+`worker`, and `web` on a private Docker network, waits until `api` answers
+`/readyz` and `web` answers `/`, checks that `worker` is running, and removes
+everything it started. `SMOKE_TIMEOUT` (seconds, default 180) bounds each wait.
 
 **An unverified release cannot exist on this lane**, because CI is the only
 thing that creates one and it creates it after the gate. Nothing to promote and

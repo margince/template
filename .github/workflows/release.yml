@@ -58,13 +58,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          ## This tag IS the version. It names the build, the two zips and the
-          ## release, and it is what a user quotes in a bug report — nothing
-          ## derives it, so nothing catches a malformed one later. It is checked
-          ## here, and a v0.3 or a v0.3.0.1 is refused rather than shipped.
-          if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+          ## This tag IS the version. It names the build, the images, the zips
+          ## and the release, and it is what a user quotes in a bug report —
+          ## nothing derives it, so nothing catches a malformed one later. It is
+          ## checked here with the release pattern (design Section 10, the same
+          ## RELEASE_VERSION_RE scripts/lib.sh holds), and a v0.3, a v0.3.0.1 or
+          ## a v0.3.0-beta.1 is refused rather than shipped.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]; then
             echo "release: $TAG is not a release version." >&2
-            echo "  Expected vMAJOR.MINOR.PATCH, optionally -rc.1 / -beta.2." >&2
+            echo "  Expected vMAJOR.MINOR.PATCH, optionally -rc.N (N >= 1)." >&2
             echo "  Delete the tag, and push one that names a version." >&2
             exit 1
           fi
@@ -91,11 +93,11 @@ jobs:
             exit 1
           fi
 
-          ## A tag with a pre-release suffix publishes as a pre-release, so
-          ## v0.3.0-rc.1 does not become the download the release page offers by
-          ## default. One tag grammar, two shelves.
+          ## A -rc.N tag publishes as a pre-release, so v0.3.0-rc.1 does not
+          ## become the download the release page offers by default. One tag
+          ## grammar, two shelves.
           prerelease=false
-          case "$TAG" in *-*) prerelease=true ;; esac
+          case "$TAG" in *-rc.*) prerelease=true ;; esac
 
           {
             echo "version=${TAG}"
@@ -109,6 +111,106 @@ jobs:
     uses: ./.github/workflows/full-check.yml
     with:
       ref: ${{ needs.version.outputs.ref }}
+
+  ## The three role images (api, web, worker): built, smoke-tested, and pushed
+  ## to the client's registry when the repository variable REGISTRY is set
+  ## (design Section 9.2). Nothing is pushed unless the smoke test passed, and
+  ## publish needs this job, so a failed smoke test also means no release.
+  ##
+  ## The smoke test needs the images in the local image store, which holds one
+  ## platform, so the first build is linux/amd64 (the runner's own platform)
+  ## with --load. The push is a second bake with --push for every platform in
+  ## vars.PLATFORMS (default linux/amd64). It runs on the same builder, so the
+  ## linux/amd64 layers come from the first build's cache rather than being
+  ## built again. The docker-container builder is what makes bake's metadata
+  ## file record the pushed digests, and QEMU runs the runtime stages of a
+  ## foreign platform (core's Dockerfile cross-compiles its builder stages).
+  images:
+    needs: [version, full-check]
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.core.outputs.core }}
+      images: ${{ steps.push.outputs.images || steps.nopush.outputs.images }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      REGISTRY: ${{ vars.REGISTRY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+          submodules: recursive
+          persist-credentials: false
+
+      ## The setup full-check.yml uses for `make compose`, which `make package`
+      ## runs first.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: core/backend/go.mod
+          cache-dependency-path: core/backend/go.sum
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: core/pnpm-lock.yaml
+
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Core version
+        id: core
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/lib.sh
+          core="$(instance_get core)"
+          echo "core=${core}" >> "$GITHUB_OUTPUT"
+
+      - name: Build the images (linux/amd64, loaded locally)
+        shell: bash
+        env:
+          PLATFORMS: linux/amd64
+        run: make package VERSION="$VERSION"
+
+      - name: Smoke test
+        shell: bash
+        run: make smoke VERSION="$VERSION"
+
+      - name: Push the images
+        id: push
+        if: vars.REGISTRY != ''
+        shell: bash
+        env:
+          PLATFORMS: ${{ vars.PLATFORMS || 'linux/amd64' }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ## docker login takes the registry host, without the path REGISTRY
+          ## may carry.
+          printf '%s' "$REGISTRY_PASSWORD" \
+            | docker login "${REGISTRY%%/*}" -u "$REGISTRY_USERNAME" --password-stdin
+          metadata="$RUNNER_TEMP/bake-metadata.json"
+          make package VERSION="$VERSION" PUSH=1 METADATA_FILE="$metadata"
+          source scripts/lib.sh
+          repo="$(image_repo)"
+          {
+            echo "images<<IMAGES_EOF"
+            for role in api web worker; do
+              digest="$(jq -er --arg role "$role" '.[$role]."containerimage.digest"' "$metadata")"
+              echo "${repo}/${role}:${VERSION}@${digest}"
+            done
+            echo "IMAGES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: No registry
+        id: nopush
+        if: vars.REGISTRY == ''
+        shell: bash
+        run: |
+          echo "images=images were not pushed: REGISTRY is not set" >> "$GITHUB_OUTPUT"
 
   ## Reusable lanes, called rather than copied, so the bundle a release ships is
   ## built by the same workflow a manual dispatch exercises. They gate on
@@ -160,7 +262,7 @@ jobs:
   ## the same failure in a smaller size: the reader of the release page cannot
   ## tell a folder that is missing from one that was never built for their Mac.
   publish:
-    needs: [version, full-check, desktop-macos-apple-silicon, desktop-macos-intel, desktop-windows]
+    needs: [version, full-check, images, desktop-macos-apple-silicon, desktop-macos-intel, desktop-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -184,6 +286,31 @@ jobs:
         shell: bash
         run: ls -l dist
 
+      ## The notes name what the release is made of: the core release, this
+      ## repository's commit, and the pushed images by digest (or why none were
+      ## pushed). GitHub's generated notes follow them.
+      - name: Release notes
+        shell: bash
+        env:
+          CORE_VERSION: ${{ needs.images.outputs.core }}
+          COMMIT: ${{ needs.version.outputs.ref }}
+          IMAGES: ${{ needs.images.outputs.images }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Build"
+            echo
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Core | \`${CORE_VERSION}\` |"
+            echo "| Instance commit | \`${COMMIT}\` |"
+            echo
+            echo "## Images"
+            echo
+            printf '%s\n' "$IMAGES" | sed '/^$/d; s/^/- /'
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish the release
         shell: bash
         env:
@@ -202,15 +329,16 @@ jobs:
           ## existing one is the recovery, rather than a red run nobody can
           ## clear without deleting the release by hand.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release: $TAG already exists — replacing its assets"
+            echo "release: $TAG already exists — replacing its assets and notes"
             gh release upload "$TAG" dist/*.zip --clobber
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           else
             ## Spelled as a conditional rather than `[ … ] && args+=(…)`. The
             ## AND-list form is safe here — `set -e` ignores a failing command
             ## that is not the last of an AND-OR list — but "safe once you
             ## re-derive that rule" is not what the last step before publishing
             ## should ask of a reader.
-            args=(--title "$TAG" --generate-notes --verify-tag)
+            args=(--title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes --verify-tag)
             if [ "$PRERELEASE" = true ]; then
               args+=(--prerelease)
             fi

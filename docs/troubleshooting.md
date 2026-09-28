@@ -211,8 +211,8 @@ unrelated to what you are pushing (`.githooks/pre-push:23`,
 
 `release.yml` reads the tag as the version — it names the build, both zips and
 the release itself — so it checks the grammar before spending twenty minutes of
-runner time. It wants `vMAJOR.MINOR.PATCH`, optionally with an `-rc.1`-style
-suffix. Delete the tag and push one that names a version:
+runner time. It wants `vMAJOR.MINOR.PATCH`, optionally with an `-rc.N`
+suffix (`N` is 1 or greater). Delete the tag and push one that names a version:
 
 ```sh
 git push --delete origin v0.3 && git tag -d v0.3

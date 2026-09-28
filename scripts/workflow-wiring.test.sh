@@ -325,6 +325,117 @@ else
   fail "lifecycle.yml is missing"
 fi
 
+# release.yml: a release tag builds the three role images, smoke-tests them,
+# pushes them only when the repository names a registry, and publishes the
+# GitHub Release after that (design Section 9.2).
+RELEASE_WF="$WF/release.yml"
+if [ -e "$RELEASE_WF" ]; then
+  on_block="$(block_of on "$RELEASE_WF")"
+  if printf '%s\n' "$on_block" | grep -qE '^[[:space:]]+push:' \
+     && printf '%s\n' "$on_block" | grep -qF "tags: ['v*']"; then
+    ok "release.yml triggers on a pushed v* tag"
+  else
+    fail "release.yml does not trigger on push: tags: ['v*']"
+  fi
+
+  version_job="$(block_of version "$RELEASE_WF")"
+  if printf '%s\n' "$version_job" | grep -qF '[[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]'; then
+    ok "release.yml's version job checks the tag with the release pattern"
+  else
+    fail "release.yml's version job does not check [[ ! \"\$TAG\" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?\$ ]]"
+  fi
+  if printf '%s\n' "$version_job" | grep -qE '\*-rc\.\*\)[[:space:]]*prerelease=true' \
+     && [ "$(printf '%s\n' "$version_job" | grep -c 'prerelease=true')" -eq 1 ]; then
+    ok "release.yml sets prerelease=true only for -rc.N"
+  else
+    fail "release.yml does not set prerelease=true exactly for *-rc.*"
+  fi
+
+  images_job="$(block_of images "$RELEASE_WF")"
+  if [ -z "$images_job" ]; then
+    fail "release.yml has no images job"
+  else
+    ok "release.yml has an images job"
+    needs="$(printf '%s\n' "$images_job" | grep -E '^[[:space:]]+needs:' | head -1)"
+    if printf '%s\n' "$needs" | grep -qw version && printf '%s\n' "$needs" | grep -qw full-check; then
+      ok "images needs version and full-check"
+    else
+      fail "images does not need version and full-check: $needs"
+    fi
+    pkg="$(printf '%s\n' "$images_job" | grep -nE '^[[:space:]]*run:.*make package' | head -1 | cut -d: -f1)"
+    smk="$(printf '%s\n' "$images_job" | grep -nE '^[[:space:]]*run:.*make smoke' | head -1 | cut -d: -f1)"
+    if [ -n "$pkg" ] && [ -n "$smk" ] && [ "$pkg" -lt "$smk" ]; then
+      ok "images runs make package, then make smoke"
+    else
+      fail "images does not run make package and then make smoke (package line ${pkg:-none}, smoke line ${smk:-none})"
+    fi
+    if printf '%s\n' "$images_job" | grep -qF 'submodules: recursive'; then
+      ok "images checks out the submodules"
+    else
+      fail "images does not check out with submodules: recursive"
+    fi
+
+    # The step that pushes, and only it, runs under vars.REGISTRY.
+    push_step="$(printf '%s\n' "$images_job" | awk '
+      /^[[:space:]]*- / { if (buf ~ /if:[[:space:]]*vars\.REGISTRY[[:space:]]*!=[[:space:]]*'"''"'/) print buf; buf = "" }
+      { buf = buf $0 "\n" }
+      END { if (buf ~ /if:[[:space:]]*vars\.REGISTRY[[:space:]]*!=[[:space:]]*'"''"'/) print buf }')"
+    if [ -n "$push_step" ] \
+       && printf '%s\n' "$push_step" | grep -qF 'PUSH=1' \
+       && printf '%s\n' "$push_step" | grep -qF -- '--password-stdin' \
+       && printf '%s\n' "$push_step" | grep -qF 'secrets.REGISTRY_USERNAME' \
+       && printf '%s\n' "$push_step" | grep -qF 'secrets.REGISTRY_PASSWORD' \
+       && printf '%s\n' "$push_step" | grep -qF 'GITHUB_OUTPUT'; then
+      ok "images pushes under if: vars.REGISTRY != '' (login on standard input, digests to an output)"
+    else
+      fail "images has no step under if: vars.REGISTRY != '' that logs in with --password-stdin, runs PUSH=1 and writes GITHUB_OUTPUT"
+    fi
+    pushes="$(printf '%s\n' "$images_job" | grep -cE 'PUSH=1|docker push|--push' || true)"
+    in_step="$(printf '%s\n' "$push_step" | grep -cE 'PUSH=1|docker push|--push' || true)"
+    if [ "$pushes" -eq "$in_step" ]; then
+      ok "nothing in images pushes outside the vars.REGISTRY step"
+    else
+      fail "images pushes outside the vars.REGISTRY step ($pushes push lines, $in_step inside it)"
+    fi
+    if printf '%s\n' "$images_job" | grep -qF 'images were not pushed: REGISTRY is not set'; then
+      ok "images outputs the not-pushed note without REGISTRY"
+    else
+      fail "images does not output 'images were not pushed: REGISTRY is not set'"
+    fi
+  fi
+
+  publish_job="$(block_of publish "$RELEASE_WF")"
+  needs="$(printf '%s\n' "$publish_job" | grep -E '^[[:space:]]+needs:' | head -1)"
+  if printf '%s\n' "$needs" | grep -qw images; then
+    ok "publish needs images"
+  else
+    fail "publish does not need images: $needs"
+  fi
+  if printf '%s\n' "$publish_job" | grep -qF 'needs.images.outputs.'; then
+    ok "publish reads the images job's outputs for the release notes"
+  else
+    fail "publish does not read needs.images.outputs for the release notes"
+  fi
+  # --prerelease is added in exactly one place, behind the version job's flag.
+  pre_lines="$(grep -c -- '--prerelease' "$RELEASE_WF" || true)"
+  if [ "$pre_lines" -eq 1 ] \
+     && grep -B2 -- '--prerelease' "$RELEASE_WF" | grep -qF 'if [ "$PRERELEASE" = true ]' \
+     && printf '%s\n' "$publish_job" | grep -qE 'PRERELEASE:[[:space:]]*\$\{\{[[:space:]]*needs\.version\.outputs\.prerelease'; then
+    ok "publish adds --prerelease only when the version job says -rc"
+  else
+    fail "--prerelease is not added once, behind PRERELEASE from needs.version.outputs.prerelease"
+  fi
+
+  # A secret is passed through env:, never templated into a script.
+  if awk '/^[[:space:]]*run:/ {r=1} /^[[:space:]]*(env|with|if|uses|name|id|shell):/ {r=0} r' "$RELEASE_WF" | grep -qF '${{ secrets.'; then
+    fail "release.yml templates \${{ secrets. into a run: script"
+  else
+    ok "release.yml never templates \${{ secrets. into a run: script"
+  fi
+else
+  fail "release.yml is missing"
+fi
+
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%d check(s) failed\n' "$FAILURES" >&2
   exit 1

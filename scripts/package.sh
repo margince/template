@@ -14,6 +14,14 @@
 #
 # Refuses to build from a dirty tree unless told otherwise: an image tagged with
 # a commit it does not contain is worse than no tag at all.
+#
+# WHERE THE IMAGES GO. By default they are loaded into the local Docker image
+# store (--load), which is where `make smoke` runs them. A load holds one
+# platform: PLATFORMS (read by core's bake file) empty or a single platform.
+# PUSH=1 pushes them instead (--push), for every platform in PLATFORMS, and
+# requires REGISTRY: without it the names carry no registry host and a push
+# would go to the default public registry. METADATA_FILE=<path> writes bake's
+# metadata file, which records each pushed image's digest.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_core
@@ -26,6 +34,13 @@ instance_name="$(instance_get name)"
 # Read here, before `cd "$CORE"`: the release tag instance.yaml records.
 core_version="$(instance_get core)"
 ROLE="${ROLE:-}"
+
+output=(--load)
+if [ "${PUSH:-}" = "1" ]; then
+  [ -n "${REGISTRY:-}" ] || die "package: PUSH=1 requires REGISTRY (the registry host the images are pushed to)"
+  output=(--push)
+fi
+[ -n "${METADATA_FILE:-}" ] && output+=(--metadata-file "$METADATA_FILE")
 
 revision="$(git -C "$ROOT" rev-parse HEAD)"
 core_revision="$(git -C "$CORE" rev-parse HEAD)"
@@ -68,7 +83,12 @@ REPO="$REPO" VERSION="$VERSION" MARGINCE_BUILD_REVISION="$revision" \
     --set "*.labels.com.margince.core.revision=$core_revision" \
     --set "*.labels.com.margince.core.version=$core_version" \
     --set "*.labels.com.margince.instance.units=${units% }" \
+    "${output[@]}" \
     ${ROLE:+"$ROLE"}
 
+if [ "${PUSH:-}" = "1" ]; then
+  printf '\npackage: pushed %s/{api,worker,web}:%s\n' "$REPO" "$VERSION"
+  exit 0
+fi
 printf '\npackage: built. Inspect what went in:\n'
 printf '  docker inspect %s/api:%s --format "{{json .Config.Labels}}"\n' "$REPO" "$VERSION"

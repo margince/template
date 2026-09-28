@@ -29,7 +29,7 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 	fe-install fe-test fe-test-ext fe-typecheck-composed fe-ds-gates fe-lint \
 	dev dev-fresh dev-stop dev-logs seed-dev seed-demo verify-demo run \
 	infra-up infra-down infra-logs infra-reset db-up migrate \
-	lint fmt package toolcheck test-integration test-integration-ext ci \
+	lint fmt package smoke toolcheck test-integration test-integration-ext ci \
 	desktop desktop-mirror desktop-kit desktop-win-kit \
 	desktop-install desktop-run desktop-connect desktop-seed \
 	desktop-verify desktop-status desktop-logins desktop-psql desktop-dsn \
@@ -417,6 +417,8 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/deploy.test.sh
 	@bash scripts/license.test.sh
 	@bash scripts/release.test.sh
+	@bash scripts/package.test.sh
+	@bash scripts/smoke.test.sh
 	@$(MAKE) test-cli
 
 ## Reads a `git archive HEAD` export, not the working tree: gitleaks ignores
@@ -581,9 +583,17 @@ test-integration-ext: compose db-up ## Unit migrations + unit integration tests,
 ##
 ## ROLE=api builds one. VERSION= overrides the tag (default: this repo's tag or
 ## short SHA). REPO= overrides the name. ALLOW_DIRTY=1 permits a throwaway build
-## from an uncommitted tree.
-package: compose ## Build the role images with our units (ROLE=, VERSION=, REPO=)
+## from an uncommitted tree. The images are loaded into the local image store;
+## PUSH=1 (with REGISTRY=) pushes them for every platform in PLATFORMS= instead.
+package: compose ## Build the role images with our units (ROLE=, VERSION=, REPO=, PLATFORMS=, PUSH=1)
 	@bash scripts/package.sh
+
+## smoke — run the three images built by `make package VERSION=<v>` with a
+## temporary PostgreSQL and Redis on a private network, and check them: api
+## answers /readyz, web answers /, worker is running. Removes everything it
+## started. SMOKE_TIMEOUT= (seconds, default 180) bounds each wait.
+smoke: ## Start the role images with a temporary database and check them (VERSION=, SMOKE_TIMEOUT=)
+	@bash scripts/smoke.sh "$(VERSION)"
 
 # ─────────────────────────── desktop build ────────────────────────────
 
