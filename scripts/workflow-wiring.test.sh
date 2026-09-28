@@ -114,10 +114,10 @@ if [ -e "$DEPLOY_WF" ]; then
   fi
   if grep -qE 'REF_TYPE:[[:space:]]*\$\{\{[[:space:]]*github\.ref_type[[:space:]]*\}\}' "$DEPLOY_WF" \
      && grep -qF '"$REF_TYPE" != tag' "$DEPLOY_WF" \
-     && grep -qF '"$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$' "$DEPLOY_WF"; then
-    ok "deploy.yml refuses a run not dispatched from a vX.Y.Z tag"
+     && grep -qF '"$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$' "$DEPLOY_WF"; then
+    ok "deploy.yml refuses a run not dispatched from a release tag"
   else
-    fail "deploy.yml does not guard github.ref_type == tag and ref_name ^v[0-9]+\.[0-9]+\.[0-9]+\$ through env:"
+    fail "deploy.yml does not guard github.ref_type == tag and ref_name ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?\$ through env:"
   fi
   first_step="$(awk '/^[[:space:]]*steps:/ {s=1; next} s && /^[[:space:]]*- / {n++} n==1 {print} n>1 {exit}' "$DEPLOY_WF")"
   if printf '%s\n' "$first_step" | grep -qF 'github.ref_type'; then

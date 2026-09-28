@@ -10,7 +10,7 @@
 # PUSH=1 is given.
 #
 # Usage:
-#   NAME=acme DISPLAY_NAME="Acme" [VENDOR=acme] [DIR=../margince-acme] \
+#   NAME=acme DISPLAY_NAME="Acme" [DIR=../margince-acme] \
 #     [PUSH=1 OWNER=gradionhq] bash scripts/new-instance.sh
 #   (or: make new-instance NAME=… DISPLAY_NAME=… …)
 set -euo pipefail
@@ -19,7 +19,6 @@ cd "$ROOT"
 
 name="${NAME:-}"
 display="${DISPLAY_NAME:-}"
-vendor="${VENDOR:-$name}"
 dir="${DIR:-$(dirname "$ROOT")/margince-$name}"
 owner="${OWNER:-gradionhq}"
 
@@ -71,9 +70,9 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-printf 'name: %s\ndisplay_name: "%s"\ncore: %s\nflavor: %s/margince\n' "$name" "$esc_display" "$core_tag" "$vendor" > "$candidate"
+printf 'name: %s\ndisplay_name: "%s"\ncore: %s\n' "$name" "$esc_display" "$core_tag" > "$candidate"
 (cd "$ROOT/scripts/cli" && GOWORK=off go run . check -file "$candidate" -core "$CORE") \
-  || die "new-instance: the instance.yaml above would be invalid; fix NAME, DISPLAY_NAME or VENDOR"
+  || die "new-instance: the instance.yaml above would be invalid; fix NAME or DISPLAY_NAME"
 
 git clone --quiet --no-checkout "$ROOT" "$dir"
 git -C "$dir" remote remove origin
@@ -96,7 +95,7 @@ EOF
 git -C "$dir" add instance.yaml .template-version README.md
 git -C "$dir" commit --quiet -m "chore: create instance $name from margince-template ${template_sha:0:12}"
 success=1
-echo "new-instance: created $dir (flavor $vendor/margince, core $core_tag)"
+echo "new-instance: created $dir (core $core_tag)"
 
 if [ "${PUSH:-}" = "1" ]; then
   command -v gh >/dev/null || die "new-instance: PUSH=1 needs the GitHub CLI (gh)"

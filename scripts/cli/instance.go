@@ -18,7 +18,6 @@ type Instance struct {
 	Name        string                  `yaml:"name"`
 	DisplayName string                  `yaml:"display_name"`
 	Core        string                  `yaml:"core"`
-	Flavor      string                  `yaml:"flavor"`
 	Deploy      map[string]DeployTarget `yaml:"deploy"`
 }
 
@@ -29,7 +28,6 @@ type DeployTarget struct {
 
 var (
 	namePattern    = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	flavorPattern  = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*/margince$`)
 	coreTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
@@ -56,8 +54,6 @@ func (in Instance) Value(key string) (string, bool) {
 		return in.DisplayName, true
 	case "core":
 		return in.Core, true
-	case "flavor":
-		return in.Flavor, true
 	}
 	if env, ok := strings.CutPrefix(key, "deploy."); ok {
 		if env, ok = strings.CutSuffix(env, ".adapter"); ok {
@@ -90,12 +86,6 @@ func (in Instance) Validate() []string {
 	case !coreTagPattern.MatchString(in.Core):
 		problems = append(problems, fmt.Sprintf("core: %q must be a release tag like v0.0.2", in.Core))
 	}
-	switch {
-	case in.Flavor == "":
-		problems = append(problems, "flavor: required")
-	case !flavorPattern.MatchString(in.Flavor):
-		problems = append(problems, fmt.Sprintf("flavor: %q must have the form <vendor>/margince", in.Flavor))
-	}
 	envs := make([]string, 0, len(in.Deploy))
 	for env := range in.Deploy {
 		envs = append(envs, env)
@@ -109,11 +99,9 @@ func (in Instance) Validate() []string {
 		switch adapter := in.Deploy[env].Adapter; adapter {
 		case "":
 			problems = append(problems, fmt.Sprintf("deploy.%s.adapter: required", env))
-		case "hook":
-		case "d13":
-			problems = append(problems, fmt.Sprintf("deploy.%s.adapter: d13 is not available yet (issue D1); use hook", env))
+		case "hook", "host":
 		default:
-			problems = append(problems, fmt.Sprintf("deploy.%s.adapter: %q is not an adapter (want hook)", env, adapter))
+			problems = append(problems, fmt.Sprintf("deploy.%s.adapter: %q is not an adapter (want hook or host)", env, adapter))
 		}
 	}
 	return problems

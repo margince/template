@@ -9,7 +9,6 @@ import (
 const valid = `name: margince-default
 display_name: Margince Default
 core: v0.0.2
-flavor: margince/margince
 `
 
 func TestParseValid(t *testing.T) {
@@ -17,7 +16,7 @@ func TestParseValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	want := Instance{Name: "margince-default", DisplayName: "Margince Default", Core: "v0.0.2", Flavor: "margince/margince"}
+	want := Instance{Name: "margince-default", DisplayName: "Margince Default", Core: "v0.0.2"}
 	if !reflect.DeepEqual(in, want) {
 		t.Fatalf("Parse = %+v, want %+v", in, want)
 	}
@@ -33,6 +32,15 @@ func TestParseRefusesUnknownKey(t *testing.T) {
 	}
 }
 
+// flavor is gone: an instance.yaml still naming it is refused as an unknown
+// key, the same as any other misspelling.
+func TestParseRefusesFlavorAsUnknownKey(t *testing.T) {
+	_, err := Parse([]byte(valid + "flavor: a/margince\n"))
+	if err == nil || !strings.Contains(err.Error(), "flavor") {
+		t.Fatalf("Parse error = %v, want one naming the key flavor", err)
+	}
+}
+
 func TestParseRefusesEmptyFile(t *testing.T) {
 	if _, err := Parse(nil); err == nil {
 		t.Fatal("Parse(empty) succeeded, want an error")
@@ -45,18 +53,15 @@ func TestValidate(t *testing.T) {
 		in   Instance
 		want string
 	}{
-		{"missing name", Instance{DisplayName: "D", Core: "v1", Flavor: "a/margince"}, "name: required"},
-		{"upper-case name", Instance{Name: "Acme", DisplayName: "D", Core: "v1", Flavor: "a/margince"}, "name: \"Acme\""},
-		{"long name", Instance{Name: strings.Repeat("a", 33), DisplayName: "D", Core: "v1", Flavor: "a/margince"}, "at most 32"},
-		{"missing display name", Instance{Name: "a", Core: "v1", Flavor: "a/margince"}, "display_name: required"},
-		{"blank display name", Instance{Name: "a", DisplayName: "  ", Core: "v1", Flavor: "a/margince"}, "display_name: required"},
-		{"multi-line display name", Instance{Name: "a", DisplayName: "A\nB", Core: "v1", Flavor: "a/margince"}, "single line"},
-		{"missing core", Instance{Name: "a", DisplayName: "D", Flavor: "a/margince"}, "core: required"},
-		{"core is a branch, not a release tag", Instance{Name: "a", DisplayName: "D", Core: "main", Flavor: "a/margince"}, "release tag like v0.0.2"},
-		{"core is a non-release tag", Instance{Name: "a", DisplayName: "D", Core: "archive/pr100-salvage", Flavor: "a/margince"}, "release tag like v0.0.2"},
-		{"missing flavor", Instance{Name: "a", DisplayName: "D", Core: "v1"}, "flavor: required"},
-		{"flavor without product", Instance{Name: "a", DisplayName: "D", Core: "v1", Flavor: "acme"}, "<vendor>/margince"},
-		{"flavor with other product", Instance{Name: "a", DisplayName: "D", Core: "v1", Flavor: "acme/crm"}, "<vendor>/margince"},
+		{"missing name", Instance{DisplayName: "D", Core: "v1"}, "name: required"},
+		{"upper-case name", Instance{Name: "Acme", DisplayName: "D", Core: "v1"}, "name: \"Acme\""},
+		{"long name", Instance{Name: strings.Repeat("a", 33), DisplayName: "D", Core: "v1"}, "at most 32"},
+		{"missing display name", Instance{Name: "a", Core: "v1"}, "display_name: required"},
+		{"blank display name", Instance{Name: "a", DisplayName: "  ", Core: "v1"}, "display_name: required"},
+		{"multi-line display name", Instance{Name: "a", DisplayName: "A\nB", Core: "v1"}, "single line"},
+		{"missing core", Instance{Name: "a", DisplayName: "D"}, "core: required"},
+		{"core is a branch, not a release tag", Instance{Name: "a", DisplayName: "D", Core: "main"}, "release tag like v0.0.2"},
+		{"core is a non-release tag", Instance{Name: "a", DisplayName: "D", Core: "archive/pr100-salvage"}, "release tag like v0.0.2"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -85,7 +90,7 @@ func TestParseDeploy(t *testing.T) {
 }
 
 func TestValidateDeploy(t *testing.T) {
-	base := Instance{Name: "a", DisplayName: "A", Core: "v0.0.2", Flavor: "a/margince"}
+	base := Instance{Name: "a", DisplayName: "A", Core: "v0.0.2"}
 	cases := []struct {
 		name   string
 		deploy map[string]DeployTarget
@@ -93,8 +98,8 @@ func TestValidateDeploy(t *testing.T) {
 	}{
 		{"bad environment name", map[string]DeployTarget{"Prod": {Adapter: "hook"}}, `deploy: environment "Prod"`},
 		{"missing adapter", map[string]DeployTarget{"prod": {}}, "deploy.prod.adapter: required"},
-		{"d13 not yet available", map[string]DeployTarget{"prod": {Adapter: "d13"}}, "D1"},
-		{"unknown adapter", map[string]DeployTarget{"prod": {Adapter: "ssh"}}, `deploy.prod.adapter: "ssh"`},
+		{"d13 refused by the generic adapter message", map[string]DeployTarget{"prod": {Adapter: "d13"}}, `deploy.prod.adapter: "d13" is not an adapter (want hook or host)`},
+		{"unknown adapter", map[string]DeployTarget{"prod": {Adapter: "ssh"}}, `deploy.prod.adapter: "ssh" is not an adapter (want hook or host)`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -104,6 +109,13 @@ func TestValidateDeploy(t *testing.T) {
 				t.Fatalf("Validate = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsHostAdapter(t *testing.T) {
+	in := Instance{Name: "a", DisplayName: "A", Core: "v0.0.2", Deploy: map[string]DeployTarget{"prod": {Adapter: "host"}}}
+	if p := in.Validate(); len(p) != 0 {
+		t.Fatalf("Validate = %v, want no problems for adapter: host", p)
 	}
 }
 

@@ -40,7 +40,7 @@ fresh_repo() {
   cp -R "$SCRIPT_DIR" "$repo/scripts"
   git clone -q "$UP" "$repo/core"
   git -C "$repo/core" checkout -q --detach v0.0.1
-  printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.1\nflavor: acme/margince\n' > "$repo/instance.yaml"
+  printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.1\n' > "$repo/instance.yaml"
   printf '%s' "$repo"
 }
 
@@ -50,7 +50,7 @@ repo="$(fresh_repo)"
 if out="$(bash "$repo/scripts/update-core.sh" v0.0.2 2>&1)"; then ok "moves to a release tag"; else fail "moves to a release tag: $out"; fi
 if [ "$(git -C "$repo/core" rev-parse HEAD)" = "$V2" ]; then ok "core/ is at the tag"; else fail "core/ is at the tag"; fi
 if grep -qx 'core: v0.0.2' "$repo/instance.yaml"; then ok "instance.yaml records the tag"; else fail "instance.yaml records the tag"; fi
-if grep -qx 'flavor: acme/margince' "$repo/instance.yaml"; then ok "other keys are unchanged"; else fail "other keys are unchanged"; fi
+if grep -qx 'name: acme' "$repo/instance.yaml" && grep -qx 'display_name: Acme' "$repo/instance.yaml"; then ok "other keys are unchanged"; else fail "other keys are unchanged"; fi
 
 # --- refusals change nothing ---
 

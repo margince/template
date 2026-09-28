@@ -26,9 +26,8 @@ make new-instance NAME=acme DISPLAY_NAME="Acme"
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `NAME` | yes | The instance's short name. Must match `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters. Used in `instance.yaml`, the default `flavor`, and the default clone directory. |
+| `NAME` | yes | The instance's short name. Must match `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters. Used in `instance.yaml`, image names (Section 8), and the default clone directory. |
 | `DISPLAY_NAME` | yes | The instance's user-facing name. One line: a value containing a newline is refused, not silently folded. |
-| `VENDOR` | no, defaults to `NAME` | The vendor segment of `flavor` (`<vendor>/margince`), used in image names (Section 8). |
 | `DIR` | no, defaults to `../margince-<NAME>` | Where the new instance is created. Fails if the path already exists. |
 | `PUSH` | no | `PUSH=1` creates a private GitHub repository and pushes the instance to it (`gh repo create <OWNER>/margince-<NAME> --private --source <DIR> --remote origin --push`). Without it, nothing is pushed anywhere; the instance exists locally only. |
 | `OWNER` | no, defaults to `gradionhq` | The GitHub organization `PUSH=1` creates the repository in. |
@@ -161,12 +160,12 @@ REGISTRY=myregistry.example.com make package
 
 `make package` builds the `api`, `web`, and `worker` images from core's
 `docker-bake.hcl`, with the instance's units staged in. The image repository
-is the instance's `flavor` from `instance.yaml` (`<vendor>/margince`),
-prefixed with `REGISTRY` when it is set:
+is the instance's `name` from `instance.yaml`, prefixed with `REGISTRY` when
+it is set:
 
-- `REGISTRY` unset: `<vendor>/margince/api`, `/web`, `/worker`.
+- `REGISTRY` unset: `<name>/api`, `/web`, `/worker`.
 - `REGISTRY=myregistry.example.com`:
-  `myregistry.example.com/<vendor>/margince/api`, `/web`, `/worker`.
+  `myregistry.example.com/<name>/api`, `/web`, `/worker`.
 
 `REGISTRY` is supplied at build time; it is not stored in `instance.yaml`.
 `make deploy` reads `REGISTRY` from the environment the same way to name the
@@ -187,10 +186,10 @@ deploy:
     adapter: hook
 ```
 
-The environment name must match `^[a-z0-9]+(-[a-z0-9]+)*$`. The only adapter
-available today is `hook`; `adapter: d13` is refused with a message naming
-issue D1 until that adapter exists. `make check-instance` fails if an
-environment has no matching `deploy/<env>/` directory.
+The environment name must match `^[a-z0-9]+(-[a-z0-9]+)*$`. The available
+adapters are `hook` and `host`; any other value is refused, naming `hook` and
+`host` as the choices. `make check-instance` fails if an environment has no
+matching `deploy/<env>/` directory.
 
 ### Hook layout
 
@@ -269,8 +268,9 @@ make deploy ENV=staging VERSION=v1.2.3
 This runs `bash scripts/deploy.sh staging v1.2.3`. Before any hook runs, it
 does the following, in order:
 
-1. It requires `ENV` and `VERSION`. `VERSION` must be a full release tag that
-   matches `^v[0-9]+\.[0-9]+\.[0-9]+$` (for example `v1.2.3`).
+1. It requires `ENV` and `VERSION`. `VERSION` must be a release version that
+   matches `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$` (for example
+   `v1.2.3` or `v1.3.0-rc.1`).
 2. It validates `instance.yaml` (`cli validate`: every key, every adapter, and
    every `deploy/<env>/` directory; not `core/`). An invalid file stops the
    deployment with one line per problem.
@@ -297,8 +297,8 @@ release tag**: Actions → deploy → Run workflow → "Use workflow from" →
 Tags → `v1.2.3`. The release is the tag the run was dispatched from
 (`github.ref_name`), and the job checks out that tag, so the hooks and
 `deploy/<env>/` that run are the ones in the release. A run dispatched from a
-branch, or from a tag that does not match `^v[0-9]+\.[0-9]+\.[0-9]+$`, fails
-in its first step.
+branch, or from a tag that does not match
+`^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$`, fails in its first step.
 
 Create each environment ahead of time (repository Settings →
 Environments); the workflow does not create one. Configure each environment
@@ -313,7 +313,7 @@ as follows:
 The job steps run in this order:
 
 1. **Dispatched from a release tag.** Fails unless `github.ref_type` is `tag`
-   and `github.ref_name` matches `^v[0-9]+\.[0-9]+\.[0-9]+$`.
+   and `github.ref_name` matches `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$`.
 2. **Environment name is valid.** Fails unless `environment` matches
    `^[a-z0-9]+(-[a-z0-9]+)*$` (the whole value, so an embedded newline
    fails).

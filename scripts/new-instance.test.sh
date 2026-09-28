@@ -36,7 +36,7 @@ cp "$ROOT/.template-owned" "$TPL/.template-owned"
 # The real Makefile: the make-level case below runs its new-instance recipe.
 cp "$ROOT/Makefile" "$TPL/Makefile"
 printf '# margince-template\n' > "$TPL/README.md"
-printf 'name: margince-default\ndisplay_name: Margince Default\ncore: v0.0.2\nflavor: margince/margince\n' > "$TPL/instance.yaml"
+printf 'name: margince-default\ndisplay_name: Margince Default\ncore: v0.0.2\n' > "$TPL/instance.yaml"
 git -C "$TPL" submodule add -q "$CORE_UP" core
 git -C "$TPL/core" checkout -q --detach v0.0.2
 git -C "$TPL" add -A && git -C "$TPL" commit -q -m template
@@ -52,11 +52,21 @@ cli_get() { (cd "$1/scripts/cli" && GOWORK=off go run . get -file "$1/instance.y
 # --- a valid instance ---
 DIR="$TMP/margince-acme"
 if out="$(create NAME=acme DISPLAY_NAME=Acme DIR="$DIR" 2>&1)"; then ok "creates an instance"; else fail "creates an instance: $out"; fi
+if printf '%s\n' "$out" | grep -qxF "new-instance: created $DIR (core v0.0.2)"; then
+  ok "prints the created line naming the directory and core, without a flavor"
+else
+  fail "prints the created line naming the directory and core, without a flavor: $out"
+fi
 if [ "$(git -C "$DIR" rev-parse --abbrev-ref HEAD)" = "main" ]; then ok "the instance is on main"; else fail "the instance is on main"; fi
 if [ "$(git -C "$DIR" remote get-url template)" = "$TMP/template-origin.git" ]; then ok "the template remote is the template's origin"; else fail "the template remote is the template's origin"; fi
 if git -C "$DIR" remote get-url origin >/dev/null 2>&1; then fail "has no origin before a push"; else ok "has no origin before a push"; fi
 if [ "$(tr -d '[:space:]' < "$DIR/.template-version")" = "$TPL_SHA" ]; then ok "records the template commit"; else fail "records the template commit"; fi
-if grep -qx 'flavor: acme/margince' "$DIR/instance.yaml" && grep -qx 'core: v0.0.2' "$DIR/instance.yaml" && [ "$(cli_get "$DIR" display_name)" = "Acme" ]; then ok "writes instance.yaml"; else fail "writes instance.yaml"; fi
+keys="$(grep -oE '^[a-zA-Z_]+:' "$DIR/instance.yaml" | tr -d ':' | sort | tr '\n' ' ')"
+if [ "$keys" = "core display_name name " ] && [ "$(cli_get "$DIR" core)" = "v0.0.2" ] && [ "$(cli_get "$DIR" display_name)" = "Acme" ]; then
+  ok "writes instance.yaml with exactly the keys name, display_name, core"
+else
+  fail "writes instance.yaml with exactly the keys name, display_name, core: $(cat "$DIR/instance.yaml")"
+fi
 if [ "$(git -C "$DIR/core" describe --tags --exact-match 2>/dev/null)" = "v0.0.2" ]; then ok "checks out core at the pinned tag"; else fail "checks out core at the pinned tag"; fi
 if [ -z "$(git -C "$DIR" status --porcelain)" ]; then ok "commits everything"; else fail "commits everything"; fi
 if bash "$DIR/scripts/check-template.sh" >/dev/null 2>&1; then ok "the new instance passes check-template"; else fail "the new instance passes check-template"; fi
@@ -94,11 +104,6 @@ else
   fail "does not warn when HEAD is on origin/main: $out"
 fi
 git -C "$TPL" update-ref -d refs/remotes/origin/main
-
-# --- VENDOR sets the flavor ---
-DIR2="$TMP/margince-acme-eu"
-create NAME=acme-eu DISPLAY_NAME="Acme EU" VENDOR=acme DIR="$DIR2" >/dev/null 2>&1 || true
-if grep -qx 'flavor: acme/margince' "$DIR2/instance.yaml" 2>/dev/null; then ok "VENDOR sets the flavor"; else fail "VENDOR sets the flavor"; fi
 
 # --- DISPLAY_NAME with YAML-special characters round-trips exactly ---
 DIR3="$TMP/margince-acme-special"

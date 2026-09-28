@@ -34,7 +34,7 @@ func runGet(args []string, stdout, stderr io.Writer) int {
 	}
 	value, ok := in.Value(key)
 	if !ok {
-		fmt.Fprintf(stderr, "instance.yaml: unknown key %q (want name, display_name, core, flavor, deploy.<env>.adapter)\n", key)
+		fmt.Fprintf(stderr, "instance.yaml: unknown key %q (want name, display_name, core, deploy.<env>.adapter)\n", key)
 		return 2
 	}
 	if value == "" {

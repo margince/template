@@ -176,7 +176,7 @@ func TestRunReportsEveryProblem(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
-	for _, want := range []string{"name:", "display_name: required", "core: required", "flavor: required"} {
+	for _, want := range []string{"name:", "display_name: required", "core: required"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr %q lacks %q", errOut.String(), want)
 		}

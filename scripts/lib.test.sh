@@ -327,9 +327,8 @@ expect_eq_str "a relative path that does not exist is still made absolute" \
 # --- instance_get ---
 
 INSTANCE_FILE="$TMP/instance.yaml"
-printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.2\nflavor: acme/margince\n' > "$INSTANCE_FILE"
+printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.2\n' > "$INSTANCE_FILE"
 if [ "$(instance_get name)" = "acme" ]; then ok "instance_get reads a key"; else fail "instance_get reads a key"; fi
-if [ "$(instance_get flavor)" = "acme/margince" ]; then ok "instance_get reads the flavor"; else fail "instance_get reads the flavor"; fi
 if instance_get units >/dev/null 2>&1; then fail "instance_get refuses an unknown key"; else ok "instance_get refuses an unknown key"; fi
 rc=0; instance_get units >/dev/null 2>&1 || rc=$?
 if [ "$rc" -eq 2 ]; then ok "instance_get exits exactly 2 for an unknown key"; else fail "instance_get exits exactly 2 for an unknown key — exit $rc"; fi
@@ -352,9 +351,9 @@ unset INSTANCE_FILE
 
 INSTANCE_FILE="$TMP/instance.yaml"
 unset REGISTRY
-if [ "$(image_repo)" = "acme/margince" ]; then ok "image_repo is the flavor without a registry"; else fail "image_repo is the flavor without a registry"; fi
-if [ "$(REGISTRY=registry.example.com image_repo)" = "registry.example.com/acme/margince" ]; then ok "image_repo prefixes the registry"; else fail "image_repo prefixes the registry"; fi
-if [ "$(REGISTRY=registry.example.com/ image_repo)" = "registry.example.com/acme/margince" ]; then ok "image_repo drops a trailing slash"; else fail "image_repo drops a trailing slash"; fi
+if [ "$(image_repo)" = "acme" ]; then ok "image_repo is the name without a registry"; else fail "image_repo is the name without a registry"; fi
+if [ "$(REGISTRY=registry.example.com image_repo)" = "registry.example.com/acme" ]; then ok "image_repo prefixes the registry"; else fail "image_repo prefixes the registry"; fi
+if [ "$(REGISTRY=registry.example.com/ image_repo)" = "registry.example.com/acme" ]; then ok "image_repo drops a trailing slash"; else fail "image_repo drops a trailing slash"; fi
 unset INSTANCE_FILE
 
 INSTANCE_FILE="$TMP/no-such-instance.yaml"
@@ -366,6 +365,15 @@ else
   ok "image_repo fails when instance.yaml cannot be read"
 fi
 unset INSTANCE_FILE
+
+# --- is_release_version ---
+
+for v in v1.2.0 v0.1.0 v1.3.0-rc.1 v10.0.12; do
+  if is_release_version "$v"; then ok "is_release_version accepts $v"; else fail "is_release_version accepts $v"; fi
+done
+for v in 1.2.0 v1.2 v1.2.0-rc.0 v1.2.0-rc1 v1.2.0-beta.1; do
+  if is_release_version "$v"; then fail "is_release_version refuses $v"; else ok "is_release_version refuses $v"; fi
+done
 
 if [ "$FAILURES" -gt 0 ]; then
   printf '\n%s case(s) failed\n' "$FAILURES" >&2

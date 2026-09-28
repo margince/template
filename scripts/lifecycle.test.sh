@@ -102,7 +102,7 @@ git commit -q -m "feat: staging deployment"
 git tag v0.1.0
 make -s check-instance
 make -s deploy ENV=staging VERSION=v0.1.0
-grep -qx 'apply v0.1.0 lifecycle-demo/margince/api:v0.1.0' deploy/deploy.log || fail "apply did not receive the image name: $(cat deploy/deploy.log)"
+grep -qx 'apply v0.1.0 lifecycle-demo/api:v0.1.0' deploy/deploy.log || fail "apply did not receive the image name: $(cat deploy/deploy.log)"
 grep -qx 'verify v0.1.0' deploy/deploy.log || fail "verify did not run"
 
 step "a failed verify rolls back"

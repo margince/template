@@ -13,7 +13,6 @@ func TestRunGetEachKey(t *testing.T) {
 		"name":         "margince-default",
 		"display_name": "Margince Default",
 		"core":         "v0.0.2",
-		"flavor":       "margince/margince",
 	} {
 		var out, errOut bytes.Buffer
 		if code := run([]string{"get", "-file", file, key}, &out, &errOut); code != 0 {
@@ -37,7 +36,7 @@ func TestRunGetUnknownKey(t *testing.T) {
 
 func TestRunGetEmptyValue(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run([]string{"get", "-file", writeFile(t, "name: a\n"), "flavor"}, &out, &errOut); code != 1 {
+	if code := run([]string{"get", "-file", writeFile(t, "name: a\n"), "core"}, &out, &errOut); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
 }

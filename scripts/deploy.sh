@@ -14,12 +14,12 @@ env="${1:-}"
 version="${2:-}"
 [ -n "$env" ] || die "deploy: pass ENV=<environment>, e.g. make deploy ENV=staging VERSION=v1.0.0"
 [ -n "$version" ] || die "deploy: pass VERSION=<release>, e.g. make deploy ENV=$env VERSION=v1.0.0"
-[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-  die "deploy: VERSION '$version' is not a release tag; it must match ^v[0-9]+\.[0-9]+\.[0-9]+\$, e.g. v1.2.3"
+is_release_version "$version" ||
+  die "deploy: VERSION '$version' is not a release tag; it must match $RELEASE_VERSION_RE, e.g. v1.2.0"
 
-# The whole file first: `cli get` only parses, so an adapter that is not
-# available (d13), a malformed environment name, or a missing deploy/<env>/
-# directory would otherwise reach a hook.
+# The whole file first: `cli get` only parses, so an unknown adapter, a
+# malformed environment name, or a missing deploy/<env>/ directory would
+# otherwise reach a hook.
 if ! out="$(instance_validate 2>&1)"; then
   printf '%s\n' "$out" >&2
   die "deploy: instance.yaml is not valid; nothing was deployed"

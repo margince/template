@@ -73,20 +73,24 @@ instance_validate() {
   cli_run validate -file "${INSTANCE_FILE:-$ROOT/instance.yaml}"
 }
 
-# image_repo — the REPO this instance's role images are named under.
+# A template or instance release version (design Section 10).
+RELEASE_VERSION_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$'
+is_release_version() { [[ "${1:-}" =~ $RELEASE_VERSION_RE ]]; }
+
+# image_repo — <REGISTRY>/<name>, or <name> without REGISTRY.
 #
 # core's docker-bake.hcl names the images ${REPO}/api, ${REPO}/web and
-# ${REPO}/worker. The instance's flavor (<vendor>/margince) is the namespace;
-# REGISTRY, when set, is the registry host in front of it.
+# ${REPO}/worker. The instance's name is the namespace; REGISTRY, when set,
+# is the registry host in front of it.
 image_repo() {
-  local flavor
+  local name
   # `|| return 1`: a caller in an `if` or `$(...)` runs with set -e off, so a
   # failed read would otherwise yield a repo of "" or "<registry>/".
-  flavor="$(instance_get flavor)" || return 1
+  name="$(instance_get name)" || return 1
   if [ -n "${REGISTRY:-}" ]; then
-    printf '%s/%s\n' "${REGISTRY%/}" "$flavor"
+    printf '%s/%s\n' "${REGISTRY%/}" "$name"
   else
-    printf '%s\n' "$flavor"
+    printf '%s\n' "$name"
   fi
 }
 
