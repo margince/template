@@ -114,6 +114,23 @@ else
 fi
 git -C "$REPO" rm -q upper.txt && commit_all "remove it"
 
+# --- a bad pattern makes git grep itself fail, and that must not be read as
+# "clean": an unbalanced parenthesis is invalid ERE, so git grep exits >1. ---
+cp "$REPO/scripts/check-public.patterns" "$TMP/patterns.bak"
+printf 'abc(\n' >> "$REPO/scripts/check-public.patterns"
+out="$(run_check 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 2 ]; then
+  ok "an invalid pattern exits 2, not a pass"
+else
+  fail "an invalid pattern exits 2, not a pass (rc $rc): $out"
+fi
+if printf '%s\n' "$out" | grep -q 'check-public: git grep failed'; then
+  ok "an invalid pattern names the git grep failure"
+else
+  fail "an invalid pattern names the git grep failure: $out"
+fi
+cp "$TMP/patterns.bak" "$REPO/scripts/check-public.patterns"
+
 # --- a clean tree passes again, after every fixture above is undone ---
 if run_check >/dev/null 2>&1; then ok "a clean tree passes again"; else fail "a clean tree passes again"; fi
 

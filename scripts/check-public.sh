@@ -36,14 +36,38 @@ cd "$ROOT"
 # comments and blank lines included -- an empty pattern matches every line of
 # every file. Strip both before handing it to git grep.
 FILTERED="$(mktemp)"
-trap 'rm -f "$FILTERED"' EXIT
+trap 'rm -f "$FILTERED" "${HITS_FILE:-}"' EXIT
 grep -v -E '^[[:space:]]*(#|$)' "$PATTERNS" > "$FILTERED" || true
 
 PATHSPEC=(-- ':!docs/superpowers/' ':!scripts/check-public.patterns')
 
-hits="$( { git grep -n -i -E -f "$FILTERED" "${PATHSPEC[@]}" 2>/dev/null || true
-           git grep -n -i -E -f "$FILTERED" --cached "${PATHSPEC[@]}" 2>/dev/null || true
-         } | sort -u -t: -k1,1 -k2,2n)"
+# scan <git grep args...> — one git grep pass. git grep exits 0 (it found a
+# match), 1 (it found nothing, and that is a clean scan, not a failure), or
+# something else entirely (a bad pattern, no repository, ...), which must not
+# be swallowed: `|| true` after git grep would make that case indistinguishable
+# from "clean" and the privacy gate would pass on a scan that never ran.
+# Appends any matches to HITS_FILE; run at the top level, never inside a
+# pipeline or command substitution, so its `exit 2` on a real failure reaches
+# this script's own exit status instead of only a subshell's.
+HITS_FILE="$(mktemp)"
+scan() {
+  local out rc
+  out="$(git grep -n -i -E -f "$FILTERED" "$@" "${PATHSPEC[@]}" 2>&1)" && rc=0 || rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$out" >> "$HITS_FILE" ;;
+    1) : ;;
+    *)
+      echo "check-public: git grep failed (exit $rc)" >&2
+      [ -z "$out" ] || printf '%s\n' "$out" >&2
+      exit 2
+      ;;
+  esac
+}
+
+scan
+scan --cached
+
+hits="$(sort -u -t: -k1,1 -k2,2n "$HITS_FILE")"
 
 if [ -n "$hits" ]; then
   echo "check-public: a tracked or staged file names a private repository, host, organization or service:" >&2
