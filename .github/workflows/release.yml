@@ -125,12 +125,16 @@ jobs:
   ## built again. The docker-container builder is what makes bake's metadata
   ## file record the pushed digests, and QEMU runs the runtime stages of a
   ## foreign platform (core's Dockerfile cross-compiles its builder stages).
+  ##
+  ## The image list (one <repo>/<role>:<version>@<digest> line per role, or
+  ## the not-pushed note) goes to publish as an ARTIFACT, not a job output:
+  ## GitHub drops a job output that contains a secret's value, and an image
+  ## name can contain the registry user name (docker.io/acme with user acme).
   images:
     needs: [version, full-check]
     runs-on: ubuntu-latest
     outputs:
       core: ${{ steps.core.outputs.core }}
-      images: ${{ steps.push.outputs.images || steps.nopush.outputs.images }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       REGISTRY: ${{ vars.REGISTRY }}
@@ -189,28 +193,45 @@ jobs:
         run: |
           set -euo pipefail
           ## docker login takes the registry host, without the path REGISTRY
-          ## may carry.
+          ## may carry. The credential is removed from the runner on every
+          ## exit of this step, the failed push included.
+          host="${REGISTRY%%/*}"
+          trap 'docker logout "$host" >/dev/null 2>&1 || true' EXIT
           printf '%s' "$REGISTRY_PASSWORD" \
-            | docker login "${REGISTRY%%/*}" -u "$REGISTRY_USERNAME" --password-stdin
+            | docker login "$host" -u "$REGISTRY_USERNAME" --password-stdin
           metadata="$RUNNER_TEMP/bake-metadata.json"
           make package VERSION="$VERSION" PUSH=1 METADATA_FILE="$metadata"
           source scripts/lib.sh
           repo="$(image_repo)"
-          {
-            echo "images<<IMAGES_EOF"
-            for role in api web worker; do
-              digest="$(jq -er --arg role "$role" '.[$role]."containerimage.digest"' "$metadata")"
-              echo "${repo}/${role}:${VERSION}@${digest}"
-            done
-            echo "IMAGES_EOF"
-          } >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/image-list"
+          list="$RUNNER_TEMP/image-list/images.txt"
+          : > "$list"
+          for role in api web worker; do
+            digest="$(jq -er --arg role "$role" '.[$role]."containerimage.digest"' "$metadata")"
+            echo "${repo}/${role}:${VERSION}@${digest}" >> "$list"
+          done
 
       - name: No registry
-        id: nopush
         if: vars.REGISTRY == ''
         shell: bash
         run: |
-          echo "images=images were not pushed: REGISTRY is not set" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/image-list"
+          echo "images were not pushed: REGISTRY is not set" > "$RUNNER_TEMP/image-list/images.txt"
+
+      - name: Image list to the job summary
+        shell: bash
+        run: |
+          {
+            echo "## Images"
+            echo
+            sed 's/^/- /' "$RUNNER_TEMP/image-list/images.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: margince-images-${{ needs.version.outputs.version }}
+          path: ${{ runner.temp }}/image-list/images.txt
+          if-no-files-found: error
 
   ## Reusable lanes, called rather than copied, so the bundle a release ships is
   ## built by the same workflow a manual dispatch exercises. They gate on
@@ -282,6 +303,11 @@ jobs:
           name: margince-windows-${{ needs.version.outputs.version }}
           path: dist
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: margince-images-${{ needs.version.outputs.version }}
+          path: image-list
+
       - name: Show what will be attached
         shell: bash
         run: ls -l dist
@@ -294,9 +320,15 @@ jobs:
         env:
           CORE_VERSION: ${{ needs.images.outputs.core }}
           COMMIT: ${{ needs.version.outputs.ref }}
-          IMAGES: ${{ needs.images.outputs.images }}
         run: |
           set -euo pipefail
+          ## The images job always writes this file: digest lines, or the
+          ## not-pushed note. Missing or empty means something lost it, and a
+          ## release whose notes silently list no images is refused.
+          if [ ! -s image-list/images.txt ]; then
+            echo "::error::image-list/images.txt is missing or empty; refusing to publish release notes without the image list"
+            exit 1
+          fi
           {
             echo "## Build"
             echo
@@ -307,7 +339,7 @@ jobs:
             echo
             echo "## Images"
             echo
-            printf '%s\n' "$IMAGES" | sed '/^$/d; s/^/- /'
+            sed '/^$/d; s/^/- /' image-list/images.txt
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
 

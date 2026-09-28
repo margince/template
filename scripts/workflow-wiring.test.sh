@@ -385,10 +385,48 @@ if [ -e "$RELEASE_WF" ]; then
        && printf '%s\n' "$push_step" | grep -qF -- '--password-stdin' \
        && printf '%s\n' "$push_step" | grep -qF 'secrets.REGISTRY_USERNAME' \
        && printf '%s\n' "$push_step" | grep -qF 'secrets.REGISTRY_PASSWORD' \
-       && printf '%s\n' "$push_step" | grep -qF 'GITHUB_OUTPUT'; then
-      ok "images pushes under if: vars.REGISTRY != '' (login on standard input, digests to an output)"
+       && printf '%s\n' "$push_step" | grep -qF 'image-list/images.txt'; then
+      ok "images pushes under if: vars.REGISTRY != '' (login on standard input, digests to image-list/images.txt)"
     else
-      fail "images has no step under if: vars.REGISTRY != '' that logs in with --password-stdin, runs PUSH=1 and writes GITHUB_OUTPUT"
+      fail "images has no step under if: vars.REGISTRY != '' that logs in with --password-stdin, runs PUSH=1 and writes image-list/images.txt"
+    fi
+    # The registry credential leaves the runner on every exit of the push
+    # step, a failed push included: a trap on EXIT set before the login.
+    trap_line="$(printf '%s\n' "$push_step" | grep -nE "trap .*docker logout .*EXIT" | head -1 | cut -d: -f1 || true)"
+    login_line="$(printf '%s\n' "$push_step" | grep -nF -- '--password-stdin' | head -1 | cut -d: -f1 || true)"
+    if [ -n "$trap_line" ] && [ -n "$login_line" ] && [ "$trap_line" -lt "$login_line" ]; then
+      ok "the push step logs out of the registry on every exit (trap set before login)"
+    else
+      fail "the push step does not set a trap ... docker logout ... EXIT before docker login"
+    fi
+
+    # The image list travels as an artifact. A job output is dropped by
+    # GitHub when it contains a secret's value, and an image name can
+    # contain the registry user name.
+    outputs_block="$(printf '%s\n' "$images_job" | awk '
+      /^    outputs:/ {o=1; next}
+      o && /^    [^ ]/ {exit}
+      o {print}')"
+    if printf '%s\n' "$outputs_block" | grep -qE '^[[:space:]]+images[[:space:]]*:'; then
+      fail "images still exports the image list as a job output"
+    else
+      ok "images does not export the image list as a job output"
+    fi
+    upload="$(printf '%s\n' "$images_job" | awk '
+      /uses:[[:space:]]*actions\/upload-artifact@/ { match($0, /^[ ]*/); ind = RLENGTH; started = 1; print; next }
+      started { if ($0 ~ /[^[:space:]]/) { match($0, /^[ ]*/); if (RLENGTH <= ind) exit } print }')"
+    if printf '%s\n' "$upload" | grep -qE 'actions/upload-artifact@[0-9a-f]{40}' \
+       && printf '%s\n' "$upload" | grep -qF 'name: margince-images-${{ needs.version.outputs.version }}' \
+       && printf '%s\n' "$upload" | grep -qF 'image-list/images.txt' \
+       && printf '%s\n' "$upload" | grep -qE 'if-no-files-found:[[:space:]]*error'; then
+      ok "images uploads image-list/images.txt as margince-images-<version> (pinned, if-no-files-found: error)"
+    else
+      fail "images does not upload image-list/images.txt with a SHA-pinned upload-artifact, name margince-images-\${{ needs.version.outputs.version }}, if-no-files-found: error"
+    fi
+    if printf '%s\n' "$images_job" | grep -B6 'GITHUB_STEP_SUMMARY' | grep -qF 'image-list/images.txt'; then
+      ok "images writes the image list to the job summary"
+    else
+      fail "images does not write image-list/images.txt to \$GITHUB_STEP_SUMMARY"
     fi
     pushes="$(printf '%s\n' "$images_job" | grep -cE 'PUSH=1|docker push|--push' || true)"
     in_step="$(printf '%s\n' "$push_step" | grep -cE 'PUSH=1|docker push|--push' || true)"
@@ -397,10 +435,15 @@ if [ -e "$RELEASE_WF" ]; then
     else
       fail "images pushes outside the vars.REGISTRY step ($pushes push lines, $in_step inside it)"
     fi
-    if printf '%s\n' "$images_job" | grep -qF 'images were not pushed: REGISTRY is not set'; then
-      ok "images outputs the not-pushed note without REGISTRY"
+    nopush_step="$(printf '%s\n' "$images_job" | awk '
+      /^[[:space:]]*- / { if (buf ~ /if:[[:space:]]*vars\.REGISTRY[[:space:]]*==[[:space:]]*'"''"'/) print buf; buf = "" }
+      { buf = buf $0 "\n" }
+      END { if (buf ~ /if:[[:space:]]*vars\.REGISTRY[[:space:]]*==[[:space:]]*'"''"'/) print buf }')"
+    if printf '%s\n' "$nopush_step" | grep -qF 'images were not pushed: REGISTRY is not set' \
+       && printf '%s\n' "$nopush_step" | grep -qF 'image-list/images.txt'; then
+      ok "without REGISTRY, images writes the not-pushed note to image-list/images.txt"
     else
-      fail "images does not output 'images were not pushed: REGISTRY is not set'"
+      fail "no step under if: vars.REGISTRY == '' writes 'images were not pushed: REGISTRY is not set' to image-list/images.txt"
     fi
   fi
 
@@ -411,10 +454,29 @@ if [ -e "$RELEASE_WF" ]; then
   else
     fail "publish does not need images: $needs"
   fi
-  if printf '%s\n' "$publish_job" | grep -qF 'needs.images.outputs.'; then
-    ok "publish reads the images job's outputs for the release notes"
+  if printf '%s\n' "$publish_job" | grep -qF 'needs.images.outputs.core'; then
+    ok "publish reads the core version from the images job"
   else
-    fail "publish does not read needs.images.outputs for the release notes"
+    fail "publish does not read needs.images.outputs.core for the release notes"
+  fi
+  if printf '%s\n' "$publish_job" | grep -qF 'needs.images.outputs.images'; then
+    fail "publish still reads the image list from a job output"
+  else
+    ok "publish does not read the image list from a job output"
+  fi
+  download="$(printf '%s\n' "$publish_job" | grep -A3 -E 'uses:[[:space:]]*actions/download-artifact@[0-9a-f]{40}' || true)"
+  if printf '%s\n' "$download" | grep -qF 'name: margince-images-${{ needs.version.outputs.version }}' \
+     && printf '%s\n' "$download" | grep -qE 'path:[[:space:]]*image-list[[:space:]]*$'; then
+    ok "publish downloads margince-images-<version> into image-list"
+  else
+    fail "publish does not download margince-images-\${{ needs.version.outputs.version }} to path: image-list"
+  fi
+  if printf '%s\n' "$publish_job" | grep -qF '[ ! -s image-list/images.txt ]' \
+     && printf '%s\n' "$publish_job" | grep -A2 -F '[ ! -s image-list/images.txt ]' | grep -qF '::error::' \
+     && printf '%s\n' "$publish_job" | grep -qF "sed '/^\$/d; s/^/- /' image-list/images.txt"; then
+    ok "publish builds the notes from image-list/images.txt and fails with ::error:: when it is missing or empty"
+  else
+    fail "publish does not refuse a missing or empty image-list/images.txt with ::error:: and build the notes from it"
   fi
   # --prerelease is added in exactly one place, behind the version job's flag.
   pre_lines="$(grep -c -- '--prerelease' "$RELEASE_WF" || true)"

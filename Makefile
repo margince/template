@@ -591,8 +591,9 @@ package: compose ## Build the role images with our units (ROLE=, VERSION=, REPO=
 ## smoke — run the three images built by `make package VERSION=<v>` with a
 ## temporary PostgreSQL and Redis on a private network, and check them: api
 ## answers /readyz, web answers /, worker is running. Removes everything it
-## started. SMOKE_TIMEOUT= (seconds, default 180) bounds each wait.
-smoke: ## Start the role images with a temporary database and check them (VERSION=, SMOKE_TIMEOUT=)
+## started. SMOKE_TIMEOUT= (seconds, default 180) bounds each wait; SMOKE_SETTLE=
+## (seconds, default 10) is how long the worker must stay running.
+smoke: ## Start the role images with a temporary database and check them (VERSION=, SMOKE_TIMEOUT=, SMOKE_SETTLE=)
 	@bash scripts/smoke.sh "$(VERSION)"
 
 # ─────────────────────────── desktop build ────────────────────────────
