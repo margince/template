@@ -9,8 +9,16 @@
 # Everything is validated BEFORE anything is created. Nothing is pushed unless
 # PUSH=1 is given.
 #
+# The template ships its own deploy/production/ (design Section 9.8) so the
+# template itself is a deployable instance; a new instance is not the
+# template, so that directory is replaced with a fresh `deploy-init ENV=
+# production` scaffolded for the new instance's own display_name, passing
+# DOMAIN, SSH and ADMIN_EMAIL through when they are given (all optional; a
+# missing one becomes the same placeholder deploy-init always writes).
+#
 # Usage:
 #   NAME=acme DISPLAY_NAME="Acme" [DIR=../margince-acme] \
+#     [DOMAIN=<host> SSH=<user@host> ADMIN_EMAIL=<email>] \
 #     [PUSH=1 OWNER=<github owner>] bash scripts/new-instance.sh
 #   (or: make new-instance NAME=… DISPLAY_NAME=… …)
 set -euo pipefail
@@ -21,6 +29,9 @@ name="${NAME:-}"
 display="${DISPLAY_NAME:-}"
 dir="${DIR:-$(dirname "$ROOT")/margince-$name}"
 owner="${OWNER:-}"
+domain="${DOMAIN:-}"
+ssh="${SSH:-}"
+admin_email="${ADMIN_EMAIL:-}"
 
 [ ! -f .template-version ] || die "new-instance: this is an instance; run make new-instance in margince-template"
 [ -n "$name" ] || die "new-instance: pass NAME=<name>, e.g. make new-instance NAME=acme DISPLAY_NAME=Acme"
@@ -86,6 +97,11 @@ git -C "$dir" remote add template "$template_url"
 git -C "$dir" checkout --quiet -B main "$template_sha"
 git -C "$dir" submodule update --quiet --init --reference "$CORE" --dissociate core
 
+# The template's own deploy/ is instance-owned (.template-owned never lists
+# it) and describes the template's own "margince-default" instance, not this
+# one: replace it below with a fresh scaffold, rather than keep or merge it.
+rm -rf "$dir/deploy"
+
 cp "$candidate" "$dir/instance.yaml"
 printf '%s\n' "$template_sha" > "$dir/.template-version"
 cat > "$dir/README.md" <<EOF
@@ -98,7 +114,15 @@ Start with \`make install\`, then \`make dev\`. Guides are in docs/README.md.
 Template changes arrive with \`make template-sync\`.
 EOF
 
-git -C "$dir" add instance.yaml .template-version README.md
+# The default production deployment environment (design Section 9.8), scoped
+# to this instance: deploy-init reads display_name from the instance.yaml
+# just written above, and adds deploy.production to it. DOMAIN, SSH and
+# ADMIN_EMAIL are all optional; deploy-init writes its usual placeholders for
+# whichever ones are missing.
+(cd "$dir" && env ENV=production DOMAIN="$domain" SSH="$ssh" ADMIN_EMAIL="$admin_email" bash scripts/deploy-init.sh) \
+  || die "new-instance: could not scaffold the default deploy/production/ (see above)"
+
+git -C "$dir" add instance.yaml .template-version README.md deploy
 git -C "$dir" commit --quiet -m "chore: create instance $name from margince-template ${template_sha:0:12}"
 success=1
 echo "new-instance: created $dir (core $core_tag)"

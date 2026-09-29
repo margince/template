@@ -10,10 +10,16 @@
 # Refuses an existing deploy/<env>/ directory and an existing deploy.<env>
 # entry in instance.yaml; in either case nothing is created or changed.
 #
-# host (the default; ADAPTER=host) needs DOMAIN=<host> and SSH=<user@host>.
-# Writes deploy/<env>/host.env, deploy/<env>/secrets and
+# host (the default; ADAPTER=host) takes DOMAIN=<host>, SSH=<user@host> and
+# ADMIN_EMAIL=<email>, all optional (design Section 9.8). Writes
+# deploy/<env>/host.env, deploy/<env>/secrets and
 # deploy/<env>/config/margince.yaml — every default feature on, MCP off,
-# email off, ready for `make deploy` once MARGINCE_LICENSE is set.
+# email off, ready for `make deploy` once MARGINCE_LICENSE is set. A missing
+# DOMAIN or SSH is written as an empty host.env value with a comment above it
+# saying what to enter; a missing ADMIN_EMAIL defaults to admin@<DOMAIN>, or,
+# with no DOMAIN either, to the placeholder admin@example.com (with a comment
+# to change it) — the host adapter's check step refuses to deploy until
+# HOST_SSH, HOST_DOMAIN and the admin email are filled in.
 #
 # hook (ADAPTER=hook) writes deploy/<env>/hooks/apply.sh: a scaffold with a
 # comment naming the variables scripts/deploy.sh exports, for you to fill in.
@@ -57,15 +63,23 @@ else
   [ "$status" -eq 2 ] || die "deploy-init: cannot read instance.yaml: $out"
 fi
 
+# host.env is KEY=VALUE lines, written verbatim below; a raw newline would
+# split into an extra, unparseable line rather than staying part of the
+# value. DOMAIN and SSH are optional (design Section 9.8): a missing one is
+# written as an empty host.env value with a comment above it, and the host
+# adapter's check step refuses to deploy while it stays empty.
+admin_email_placeholder=0
 if [ "$adapter" = host ]; then
-  [ -n "$domain" ] || die "deploy-init: the host adapter needs DOMAIN=<host>, e.g. DOMAIN=crm.example.com"
-  [ -n "$ssh" ] || die "deploy-init: the host adapter needs SSH=<user@host>, e.g. SSH=deploy@203.0.113.10"
-  # host.env is KEY=VALUE lines, written verbatim below; a raw newline would
-  # split into an extra, unparseable line rather than staying part of the
-  # value.
   case "$domain" in *$'\n'*|*$'\r'*) die "deploy-init: DOMAIN must be a single line" ;; esac
   case "$ssh" in *$'\n'*|*$'\r'*) die "deploy-init: SSH must be a single line" ;; esac
-  [ -n "$admin_email" ] || admin_email="admin@$domain"
+  if [ -z "$admin_email" ]; then
+    if [ -n "$domain" ]; then
+      admin_email="admin@$domain"
+    else
+      admin_email="admin@example.com"
+      admin_email_placeholder=1
+    fi
+  fi
 fi
 
 display_name="$(instance_get display_name)" || die "deploy-init: cannot read display_name from instance.yaml"
@@ -82,11 +96,18 @@ esc_yaml() {
 
 write_host_files() {
   mkdir -p "$dir/config"
+  # A comment line above an empty value, saying what to enter; empty (no
+  # comment at all) when the value was given, so a given DOMAIN/SSH produces
+  # exactly the same host.env as before.
+  ssh_comment=""
+  [ -n "$ssh" ] || ssh_comment=$'# the server to deploy to, e.g. ubuntu@203.0.113.10 (user@host; no IPv6, no port) — fill this in\n'
+  domain_comment=""
+  [ -n "$domain" ] || domain_comment=$'# the public domain name the server answers on, e.g. crm.example.com — fill this in\n'
   cat > "$dir/host.env" <<EOF
 # deploy/$env/host.env — the host adapter's server (docs/deploy.md).
 # Read as KEY=VALUE lines; not executed.
-HOST_SSH=$ssh
-HOST_DOMAIN=$domain
+${ssh_comment}HOST_SSH=$ssh
+${domain_comment}HOST_DOMAIN=$domain
 EOF
 
   cat > "$dir/secrets" <<EOF
@@ -110,6 +131,8 @@ EOF
 MARGINCE_LICENSE
 EOF
 
+  email_comment=""
+  [ "$admin_email_placeholder" != 1 ] || email_comment=" # change this — the placeholder admin email; the host adapter refuses to deploy until it is set"
   cat > "$dir/config/margince.yaml" <<EOF
 # yaml-language-server: \$schema=../../../core/config/margince.schema.json
 #
@@ -127,7 +150,7 @@ workspace:
   timezone: UTC                       # change this — the IANA timezone name
 
 bootstrap_admin:
-  email: "$(esc_yaml "$admin_email")"
+  email: "$(esc_yaml "$admin_email")"${email_comment}
   display_name: Admin
   # Read at boot from /app/secrets/admin-password (the api's working
   # directory is /app; core/docs/deployment.md, "First-boot bootstrap
@@ -151,7 +174,7 @@ email:
   #   port: 587
   #   username: <smtp-username>
   #   password: \${env:MARGINCE_SMTP_PASSWORD}
-  #   from_address: noreply@$domain
+  #   from_address: noreply@${domain:-example.com}
 EOF
 }
 
@@ -238,6 +261,9 @@ echo "deploy-init: wrote deploy/$env/ and added deploy.$env: { adapter: $adapter
 echo
 echo "next steps:"
 if [ "$adapter" = host ]; then
+  if [ -z "$ssh" ] || [ -z "$domain" ]; then
+    echo "  fill in deploy/$env/host.env and the admin email in deploy/$env/config/margince.yaml"
+  fi
   echo "  set MARGINCE_LICENSE (production) — or list MARGINCE_ENV in deploy/$env/secrets and set it to test"
   echo "  make host-bootstrap ENV=$env"
 else

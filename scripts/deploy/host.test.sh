@@ -730,5 +730,69 @@ bad_env "check refuses a HOST_SSH that starts with -" 'HOST_SSH=-oProxyCommand=x
 bad_env "check refuses a relative HOST_DIR" 'HOST_SSH=deploy@203.0.113.10\nHOST_DOMAIN=crm.example.test\nHOST_DIR=opt/m\n'
 bad_env "check refuses a HOST_DIR with a quote" "HOST_SSH=deploy@203.0.113.10\nHOST_DOMAIN=crm.example.test\nHOST_DIR=/opt/m'x\n"
 
+# check refuses HOST_SSH / HOST_DOMAIN present but empty (deploy-init's
+# placeholder form), not just a missing key, naming host.env in the message.
+bad_env_named() {
+  local label="$1" body="$2"
+  cp "$INST/deploy/prod/host.env" "$TMP/host.env.bak"
+  printf '%b' "$body" > "$INST/deploy/prod/host.env"
+  commit_all "$INST"
+  fresh_server
+  if ! deploy v1.0.0 && [ ! -e "$STUB_STATE/ssh.log" ] && out | grep -qF 'host.env'; then
+    ok "$label"
+  else
+    fail "$label: $(out)"
+  fi
+  cp "$TMP/host.env.bak" "$INST/deploy/prod/host.env"
+  commit_all "$INST"
+}
+bad_env_named "check refuses an empty HOST_SSH, naming host.env" 'HOST_SSH=\nHOST_DOMAIN=crm.example.test\n'
+bad_env_named "check refuses an empty HOST_DOMAIN, naming host.env" 'HOST_SSH=deploy@203.0.113.10\nHOST_DOMAIN=\n'
+
+# check refuses the placeholder admin email in config/margince.yaml — quoted
+# (as deploy-init writes it) and unquoted (a client-edited file) — naming that
+# file in the message.
+bad_admin_email() {
+  local label="$1" content="$2"
+  cp "$INST/deploy/prod/config/margince.yaml" "$TMP/margince.yaml.bak"
+  printf '%s' "$content" > "$INST/deploy/prod/config/margince.yaml"
+  commit_all "$INST"
+  fresh_server
+  if ! deploy v1.0.0 && [ ! -e "$STUB_STATE/ssh.log" ] && out | grep -qF 'config/margince.yaml'; then
+    ok "$label"
+  else
+    fail "$label: $(out)"
+  fi
+  cp "$TMP/margince.yaml.bak" "$INST/deploy/prod/config/margince.yaml"
+  commit_all "$INST"
+}
+bad_admin_email "check refuses the placeholder admin email (quoted)" \
+  $'version: 1\nworkspace:\n  name: Acme\nbootstrap_admin:\n  email: "admin@example.com"\n  display_name: Admin\n'
+bad_admin_email "check refuses the placeholder admin email (unquoted)" \
+  $'version: 1\nworkspace:\n  name: Acme\nbootstrap_admin:\n  email: admin@example.com\n  display_name: Admin\n'
+# The exact line deploy-init.sh writes for the placeholder: quoted, with a
+# trailing same-line comment telling the client to change it.
+bad_admin_email "check refuses the placeholder admin email exactly as deploy-init writes it (quoted, with a trailing comment)" \
+  $'version: 1\nworkspace:\n  name: Acme\nbootstrap_admin:\n  email: "admin@example.com" # change this — the placeholder admin email; the host adapter refuses to deploy until it is set\n  display_name: Admin\n'
+
+# check accepts a real admin email — quoted or unquoted, under bootstrap_admin:
+# — and a top-level email: block (SMTP, unrelated) never confuses the reader.
+good_admin_email() {
+  local label="$1" content="$2"
+  cp "$INST/deploy/prod/config/margince.yaml" "$TMP/margince.yaml.bak"
+  printf '%s' "$content" > "$INST/deploy/prod/config/margince.yaml"
+  commit_all "$INST"
+  fresh_server
+  if deploy v1.0.0; then ok "$label"; else fail "$label: $(out)"; fi
+  cp "$TMP/margince.yaml.bak" "$INST/deploy/prod/config/margince.yaml"
+  commit_all "$INST"
+}
+good_admin_email "check accepts a real admin email (quoted)" \
+  $'version: 1\nworkspace:\n  name: Acme\nbootstrap_admin:\n  email: "ops@acme.test"\n  display_name: Admin\n'
+good_admin_email "check accepts a real admin email (unquoted)" \
+  $'version: 1\nworkspace:\n  name: Acme\nbootstrap_admin:\n  email: ops@acme.test\n  display_name: Admin\n'
+good_admin_email "check accepts a real admin email while a top-level email: block exists" \
+  $'version: 1\nworkspace:\n  name: Acme\nbootstrap_admin:\n  email: ops@acme.test\n  display_name: Admin\nemail:\n  enabled: false\n'
+
 if [ "$FAILURES" -gt 0 ]; then printf '\nhost.test.sh: %s failure(s)\n' "$FAILURES" >&2; exit 1; fi
 printf '\nhost.test.sh: all passed\n'

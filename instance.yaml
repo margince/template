@@ -3,3 +3,5 @@
 name: margince-default
 display_name: Margince Default
 core: v0.0.2
+deploy:
+  production: { adapter: host }

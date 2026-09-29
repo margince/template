@@ -255,10 +255,13 @@ ci: ## Everything check runs, plus the real-database and submodule lanes
 ## double quotes a DISPLAY_NAME holding `"`, a backtick or `$` would be cut
 ## short, run as a command, or expanded. Each `'` becomes '\'' (close, escaped
 ## quote, reopen).
-new-instance: ## Create a client instance repository from this template (NAME=, DISPLAY_NAME=, DIR=, PUSH=1 OWNER=)
+new-instance: ## Create a client instance repository from this template (NAME=, DISPLAY_NAME=, DIR=, DOMAIN=, SSH=, ADMIN_EMAIL=, PUSH=1 OWNER=)
 	@NAME='$(subst ','\'',$(value NAME))' \
 		DISPLAY_NAME='$(subst ','\'',$(value DISPLAY_NAME))' \
 		DIR='$(subst ','\'',$(value DIR))' \
+		DOMAIN='$(subst ','\'',$(value DOMAIN))' \
+		SSH='$(subst ','\'',$(value SSH))' \
+		ADMIN_EMAIL='$(subst ','\'',$(value ADMIN_EMAIL))' \
 		PUSH='$(subst ','\'',$(value PUSH))' \
 		OWNER='$(subst ','\'',$(value OWNER))' \
 		bash scripts/new-instance.sh

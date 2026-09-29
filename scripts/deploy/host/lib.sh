@@ -141,6 +141,47 @@ host_dir() {
   printf '%s\n' "$d"
 }
 
+# host_config_admin_email <file> — bootstrap_admin.email from a host
+# config/margince.yaml: the value of the `email:` line found inside the
+# bootstrap_admin: block (a minimal line match, not a YAML parser — the
+# top-level email: block, for outbound SMTP, is a different key and is never
+# read here). A trailing same-line comment (a run of blanks then `#`, as
+# deploy-init.sh writes on the placeholder line) is dropped first; then one
+# pair of surrounding quotes is removed like host_env_get, so `email: "x@y"`
+# (as deploy-init writes it, with or without a trailing comment) and
+# `email: x@y` (unquoted) are all read the same way. Prints the empty string
+# when the file, the bootstrap_admin: block, or its email: line is missing.
+host_config_admin_email() {
+  local file="$1" line in_block=0 v=""
+  [ -f "$file" ] || { printf '\n'; return 0; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^bootstrap_admin:[[:space:]]*(#.*)?$ ]]; then
+      in_block=1
+      continue
+    fi
+    if [ "$in_block" = 1 ]; then
+      # A non-blank line back at column 0 ends the block (the next top-level
+      # key, or a column-0 comment).
+      case "$line" in [![:space:]]*) in_block=0 ;; esac
+    fi
+    if [ "$in_block" = 1 ] && [[ "$line" =~ ^[[:space:]]+email:[[:space:]]*(.*)$ ]]; then
+      v="${BASH_REMATCH[1]}"
+      v="${v%% #*}"
+      v="${v%"${v##*[![:space:]]}"}"
+      if [ "${#v}" -ge 2 ]; then
+        case "$v" in
+          \"*\") v="${v#\"}"; v="${v%\"}" ;;
+          \'*\') v="${v#\'}"; v="${v%\'}" ;;
+        esac
+      fi
+      printf '%s\n' "$v"
+      return 0
+    fi
+  done < "$file"
+  printf '%s\n' "$v"
+}
+
 # host_secrets_lists <name> — 0 when $DEPLOY_DIR/secrets lists <name> (the
 # same reading as render.sh: blanks around a name removed, blank lines and #
 # comments skipped); 1 otherwise, also when the file is missing.

@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=../../../core/config/margince.schema.json
+#
+# deploy/production/config/margince.yaml — this environment's installation
+# configuration (core/config/margince.schema.json), mounted read-only into
+# the api and worker containers. Consumed once, at first boot against an
+# empty database; Settings edits these values afterwards. See
+# core/config/margince.example.yaml and core/docs/deployment.md for the full
+# reference.
+version: 1
+
+workspace:
+  name: "Margince Default" # change this — the workspace name shown in the app
+  base_currency: EUR                  # change this — the ISO 4217 code deals convert against
+  timezone: UTC                       # change this — the IANA timezone name
+
+bootstrap_admin:
+  email: "admin@example.com" # change this — the placeholder admin email; the host adapter refuses to deploy until it is set
+  display_name: Admin
+  # Read at boot from /app/secrets/admin-password (the api's working
+  # directory is /app; core/docs/deployment.md, "First-boot bootstrap
+  # config"). The generated password lands there from shared/instance.env on
+  # the server, unless you list MARGINCE_ADMIN_PASSWORD in
+  # deploy/production/secrets.
+  password_file: secrets/admin-password
+
+# Remote MCP connector (design Section 5.5, Gate 1). Off: turning it on
+# exposes an internet-facing authorization server and the agent tool
+# surface, which is an explicit operator decision.
+mcp:
+  connector_enabled: false
+
+# Outbound transactional email (password reset). Off until you set an SMTP
+# relay: uncomment enabled and smtp below.
+email:
+  enabled: false
+  # smtp:
+  #   host: smtp.example.test
+  #   port: 587
+  #   username: <smtp-username>
+  #   password: ${env:MARGINCE_SMTP_PASSWORD}
+  #   from_address: noreply@example.com

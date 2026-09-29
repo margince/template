@@ -77,16 +77,71 @@ if [ "$(git -C "$DIR" rev-parse --abbrev-ref HEAD)" = "main" ]; then ok "the ins
 if [ "$(git -C "$DIR" remote get-url template)" = "$TMP/template-origin.git" ]; then ok "the template remote is the template's origin"; else fail "the template remote is the template's origin"; fi
 if git -C "$DIR" remote get-url origin >/dev/null 2>&1; then fail "has no origin before a push"; else ok "has no origin before a push"; fi
 if [ "$(tr -d '[:space:]' < "$DIR/.template-version")" = "$TPL_SHA" ]; then ok "records the template commit"; else fail "records the template commit"; fi
-keys="$(grep -oE '^[a-zA-Z_]+:' "$DIR/instance.yaml" | tr -d ':' | sort | tr '\n' ' ')"
-if [ "$keys" = "core display_name name " ] && [ "$(cli_get "$DIR" core)" = "v0.0.2" ] && [ "$(cli_get "$DIR" display_name)" = "Acme" ]; then
-  ok "writes instance.yaml with exactly the keys name, display_name, core"
+keys="$(grep -oE '^[a-zA-Z_]+:' "$DIR/instance.yaml" | tr -d ':' | sort -u | tr '\n' ' ')"
+if [ "$keys" = "core deploy display_name name " ] && [ "$(cli_get "$DIR" core)" = "v0.0.2" ] && [ "$(cli_get "$DIR" display_name)" = "Acme" ]; then
+  ok "writes instance.yaml with exactly the keys name, display_name, core, deploy"
 else
-  fail "writes instance.yaml with exactly the keys name, display_name, core: $(cat "$DIR/instance.yaml")"
+  fail "writes instance.yaml with exactly the keys name, display_name, core, deploy: $(cat "$DIR/instance.yaml")"
+fi
+if [ "$(cli_get "$DIR" deploy.production.adapter)" = "host" ]; then
+  ok "instance.yaml has deploy.production.adapter: host"
+else
+  fail "instance.yaml has deploy.production.adapter: host: $(cat "$DIR/instance.yaml")"
+fi
+if [ -f "$DIR/deploy/production/host.env" ] && [ -f "$DIR/deploy/production/secrets" ] && [ -f "$DIR/deploy/production/config/margince.yaml" ]; then
+  ok "creates deploy/production/ for the new instance"
+else
+  fail "creates deploy/production/ for the new instance: $(find "$DIR/deploy" 2>&1)"
+fi
+if grep -qF 'name: "Acme"' "$DIR/deploy/production/config/margince.yaml"; then
+  ok "deploy/production/config/margince.yaml's workspace name is this instance's display_name"
+else
+  fail "deploy/production/config/margince.yaml's workspace name is this instance's display_name: $(cat "$DIR/deploy/production/config/margince.yaml")"
+fi
+if grep -qx 'HOST_SSH=' "$DIR/deploy/production/host.env" && grep -qx 'HOST_DOMAIN=' "$DIR/deploy/production/host.env"; then
+  ok "no DOMAIN/SSH given: deploy/production/host.env has the empty placeholders"
+else
+  fail "no DOMAIN/SSH given: deploy/production/host.env has the empty placeholders: $(cat "$DIR/deploy/production/host.env")"
 fi
 if [ "$(git -C "$DIR/core" describe --tags --exact-match 2>/dev/null)" = "v0.0.2" ]; then ok "checks out core at the pinned tag"; else fail "checks out core at the pinned tag"; fi
 if [ -z "$(git -C "$DIR" status --porcelain)" ]; then ok "commits everything"; else fail "commits everything"; fi
 if bash "$DIR/scripts/check-template.sh" >/dev/null 2>&1; then ok "the new instance passes check-template"; else fail "the new instance passes check-template"; fi
 if (cd "$DIR/scripts/cli" && GOWORK=off go run . check -file "$DIR/instance.yaml" -core "$DIR/core" >/dev/null 2>&1); then ok "the new instance passes check-instance"; else fail "the new instance passes check-instance"; fi
+
+# --- DOMAIN, SSH and ADMIN_EMAIL, when given, land in deploy/production/ ---
+DIR9="$TMP/margince-withdeploy"
+if out="$(create NAME=withdeploy DISPLAY_NAME=WithDeploy DIR="$DIR9" DOMAIN=crm.example.test SSH=deploy@203.0.113.10 ADMIN_EMAIL=ops@acme.test 2>&1)"; then
+  ok "creates an instance with DOMAIN, SSH and ADMIN_EMAIL"
+else
+  fail "creates an instance with DOMAIN, SSH and ADMIN_EMAIL: $out"
+fi
+if grep -qx 'HOST_SSH=deploy@203.0.113.10' "$DIR9/deploy/production/host.env" \
+  && grep -qx 'HOST_DOMAIN=crm.example.test' "$DIR9/deploy/production/host.env"; then
+  ok "deploy/production/host.env holds the given HOST_SSH and HOST_DOMAIN"
+else
+  fail "deploy/production/host.env holds the given HOST_SSH and HOST_DOMAIN: $(cat "$DIR9/deploy/production/host.env")"
+fi
+if grep -qF 'email: "ops@acme.test"' "$DIR9/deploy/production/config/margince.yaml"; then
+  ok "deploy/production/config/margince.yaml holds the given ADMIN_EMAIL"
+else
+  fail "deploy/production/config/margince.yaml holds the given ADMIN_EMAIL: $(cat "$DIR9/deploy/production/config/margince.yaml")"
+fi
+if grep -qF 'name: "WithDeploy"' "$DIR9/deploy/production/config/margince.yaml"; then
+  ok "deploy/production/config/margince.yaml's workspace name is this instance's display_name"
+else
+  fail "deploy/production/config/margince.yaml's workspace name is this instance's display_name: $(cat "$DIR9/deploy/production/config/margince.yaml")"
+fi
+if [ "$(cli_get "$DIR9" deploy.production.adapter)" = "host" ]; then
+  ok "with DOMAIN/SSH/ADMIN_EMAIL given: instance.yaml still has deploy.production.adapter: host"
+else
+  fail "with DOMAIN/SSH/ADMIN_EMAIL given: instance.yaml still has deploy.production.adapter: host"
+fi
+if (cd "$DIR9/scripts/cli" && GOWORK=off go run . check -file "$DIR9/instance.yaml" -core "$DIR9/core" >/dev/null 2>&1); then
+  ok "the new instance with DOMAIN/SSH/ADMIN_EMAIL passes check-instance"
+else
+  fail "the new instance with DOMAIN/SSH/ADMIN_EMAIL passes check-instance"
+fi
+if [ -z "$(git -C "$DIR9" status --porcelain)" ]; then ok "commits deploy/ along with instance.yaml"; else fail "commits deploy/ along with instance.yaml: $(git -C "$DIR9" status --porcelain)"; fi
 
 # --- core is dissociated from the template's checkout ---
 # Without --dissociate, core/'s objects depend on the template's own core

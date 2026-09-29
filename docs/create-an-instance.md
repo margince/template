@@ -29,20 +29,27 @@ make new-instance NAME=acme DISPLAY_NAME="Acme"
 | `NAME` | yes | The instance's short name. Must match `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters. Used in `instance.yaml`, image names (Section 8), and the default clone directory. |
 | `DISPLAY_NAME` | yes | The instance's user-facing name. One line: a value containing a newline is refused, not silently folded. |
 | `DIR` | no, defaults to `../margince-<NAME>` | Where the new instance is created. Fails if the path already exists. |
+| `DOMAIN` | no | The `production` environment's server domain (`HOST_DOMAIN`). Missing: an empty placeholder in `deploy/production/host.env`, to fill in later. |
+| `SSH` | no | The `production` environment's server (`HOST_SSH`, `user@host`). Missing: an empty placeholder in `deploy/production/host.env`, to fill in later. |
+| `ADMIN_EMAIL` | no | The `production` environment's first admin email. Missing: defaults to `admin@<DOMAIN>` when `DOMAIN` is given, otherwise the placeholder `admin@example.com`, to fill in later. |
 | `PUSH` | no | `PUSH=1` creates a private GitHub repository and pushes the instance to it (`gh repo create <OWNER>/margince-<NAME> --private --source <DIR> --remote origin --push`). Without it, nothing is pushed anywhere; the instance exists locally only. |
 | `OWNER` | yes, with `PUSH=1` | The GitHub organization `PUSH=1` creates the repository in. |
 
 Everything is validated before anything is created: `new-instance.sh` builds
 the candidate `instance.yaml` and runs it through `cli check` first. If that
 fails, nothing is created. If a later step fails (the clone, the submodule
-checkout, or the commit), the half-created directory is removed rather than
-left behind looking like a working instance.
+checkout, the default `deploy/production/` scaffold, or the commit), the
+half-created directory is removed rather than left behind looking like a
+working instance.
 
 On success, the new instance has a `template` remote pointing at this
 template (no `origin`, unless `PUSH=1` added one), a single commit on `main`
-adding `instance.yaml`, `.template-version`, and `README.md`, and `core/`
-checked out at the tag the template currently pins. The command prints the
-new directory and the next steps:
+adding `instance.yaml`, `.template-version`, `README.md`, and
+`deploy/production/` (the template's default deployment environment, Section
+9 below, regenerated for this instance's own `display_name` and, when given,
+`DOMAIN`/`SSH`/`ADMIN_EMAIL`), and `core/` checked out at the tag the
+template currently pins. The command prints the new directory and the next
+steps:
 
 ```
 cd <dir> && make install && make dev
@@ -178,14 +185,25 @@ revision and release tag (`com.margince.core.version`, from `core:` in
 
 ## 9. Deploy
 
-Start your first deployment with `make deploy-init ENV=<env> [ADAPTER=host|hook]
-[DOMAIN=<host>] [SSH=user@host]`: it scaffolds `deploy/<env>/` (for the `host`
-adapter: `host.env`, `secrets`, `config/margince.yaml`) and adds the
-environment under `deploy:` in `instance.yaml` in one step, printing the next
-commands (setting `MARGINCE_LICENSE`, bootstrapping or wiring the target, then
-`make deploy`). It refuses to run over an existing `deploy/<env>/` directory
-or an existing `deploy.<env>` entry, so it is safe to run once per
-environment.
+Every new instance already has `deploy/production: { adapter: host }` in
+`instance.yaml` and a `deploy/production/` directory (`make new-instance`'s
+`DOMAIN`/`SSH`/`ADMIN_EMAIL`, Section 2 above, or their placeholders otherwise).
+Fill in `deploy/production/host.env` and the admin email in
+`deploy/production/config/margince.yaml`, then `make host-bootstrap
+ENV=production` and `make deploy ENV=production VERSION=<v>` with
+`MARGINCE_LICENSE` set.
+
+For another environment, `make deploy-init ENV=<env> [ADAPTER=host|hook]
+[DOMAIN=<host>] [SSH=user@host] [ADMIN_EMAIL=<email>]`: it scaffolds
+`deploy/<env>/` (for the `host` adapter: `host.env`, `secrets`,
+`config/margince.yaml`) and adds the environment under `deploy:` in
+`instance.yaml` in one step, printing the next commands (setting
+`MARGINCE_LICENSE`, bootstrapping or wiring the target, then `make deploy`).
+`DOMAIN`, `SSH` and `ADMIN_EMAIL` are all optional — a missing one is written
+as a placeholder to fill in later, and `check` (so `make deploy`) refuses to
+run while one is still a placeholder, naming the file to edit. It refuses to
+run over an existing `deploy/<env>/` directory or an existing `deploy.<env>`
+entry, so it is safe to run once per environment.
 
 To add an environment by hand instead, add it under `deploy:` in
 `instance.yaml`:

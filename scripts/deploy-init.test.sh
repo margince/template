@@ -89,23 +89,65 @@ else
   ok "refuses an unknown ADAPTER"
 fi
 
-# --- host: requires DOMAIN and SSH ---
-inst="$(fresh_instance)"
-if deploy_init "$inst" ENV=staging SSH=deploy@203.0.113.10 >/dev/null 2>&1; then
-  fail "the host adapter refuses a missing DOMAIN — it succeeded"
-elif [ -e "$inst/deploy" ]; then
-  fail "the host adapter refuses a missing DOMAIN — it created deploy/"
+# --- host: DOMAIN, SSH and ADMIN_EMAIL are all optional (design Section 9.8) ---
+# Missing DOMAIN and SSH: empty host.env values, each with a comment above it
+# saying what to enter; the admin email falls back to the general placeholder
+# admin@example.com (there is no DOMAIN to build admin@<DOMAIN> from), with a
+# comment to change it; the next steps start by naming the two files to fill in.
+inst_ph="$(fresh_instance)"
+out_ph="$(deploy_init_out "$inst_ph" ENV=production)"
+dir_ph="$inst_ph/deploy/production"
+if [ -f "$dir_ph/host.env" ] && [ -f "$dir_ph/secrets" ] && [ -f "$dir_ph/config/margince.yaml" ]; then
+  ok "the host adapter accepts a missing DOMAIN and SSH"
 else
-  ok "the host adapter refuses a missing DOMAIN"
+  fail "the host adapter accepts a missing DOMAIN and SSH: $out_ph"
 fi
-
-inst="$(fresh_instance)"
-if deploy_init "$inst" ENV=staging DOMAIN=crm.example.test >/dev/null 2>&1; then
-  fail "the host adapter refuses a missing SSH — it succeeded"
-elif [ -e "$inst/deploy" ]; then
-  fail "the host adapter refuses a missing SSH — it created deploy/"
+if grep -qx 'HOST_SSH=' "$dir_ph/host.env" && grep -qx 'HOST_DOMAIN=' "$dir_ph/host.env"; then
+  ok "host.env has HOST_SSH= and HOST_DOMAIN= empty when not given"
 else
-  ok "the host adapter refuses a missing SSH"
+  fail "host.env has HOST_SSH= and HOST_DOMAIN= empty when not given: $(cat "$dir_ph/host.env")"
+fi
+ssh_comment_line="$(grep -B1 -x 'HOST_SSH=' "$dir_ph/host.env" | head -1)"
+domain_comment_line="$(grep -B1 -x 'HOST_DOMAIN=' "$dir_ph/host.env" | head -1)"
+case "$ssh_comment_line" in
+  '#'*) case "$domain_comment_line" in
+    '#'*) ok "a comment line above each empty host.env value says what to enter" ;;
+    *) fail "a comment line above HOST_DOMAIN= says what to enter: $(cat "$dir_ph/host.env")" ;;
+  esac ;;
+  *) fail "a comment line above HOST_SSH= says what to enter: $(cat "$dir_ph/host.env")" ;;
+esac
+if grep -qF 'email: "admin@example.com"' "$dir_ph/config/margince.yaml"; then
+  ok "the admin email defaults to the placeholder admin@example.com when DOMAIN is missing"
+else
+  fail "the admin email defaults to the placeholder admin@example.com when DOMAIN is missing: $(cat "$dir_ph/config/margince.yaml")"
+fi
+if grep -F 'email: "admin@example.com"' "$dir_ph/config/margince.yaml" | grep -qiF 'change'; then
+  ok "the placeholder admin email has a comment to change it"
+else
+  fail "the placeholder admin email has a comment to change it: $(cat "$dir_ph/config/margince.yaml")"
+fi
+if printf '%s' "$out_ph" | grep -qxF "  fill in deploy/production/host.env and the admin email in deploy/production/config/margince.yaml"; then
+  ok "next steps start with filling in host.env and the admin email"
+else
+  fail "next steps start with filling in host.env and the admin email: $out_ph"
+fi
+if cli_check "$inst_ph"; then ok "instance.yaml with placeholder deploy/production passes cli check"; else fail "instance.yaml with placeholder deploy/production passes cli check"; fi
+
+# DOMAIN given without SSH: HOST_DOMAIN is set as before, HOST_SSH is the
+# empty placeholder, and the admin email still defaults to admin@<DOMAIN> (not
+# the general placeholder) — this is a "given value", not a missing one.
+inst_partial="$(fresh_instance)"
+deploy_init "$inst_partial" ENV=production DOMAIN=crm.example.test >/dev/null
+dir_partial="$inst_partial/deploy/production"
+if grep -qx 'HOST_DOMAIN=crm.example.test' "$dir_partial/host.env" && grep -qx 'HOST_SSH=' "$dir_partial/host.env"; then
+  ok "DOMAIN given without SSH: HOST_DOMAIN is set, HOST_SSH is the empty placeholder"
+else
+  fail "DOMAIN given without SSH: $(cat "$dir_partial/host.env")"
+fi
+if grep -qF 'email: "admin@crm.example.test"' "$dir_partial/config/margince.yaml"; then
+  ok "DOMAIN given without SSH: the admin email still defaults to admin@<DOMAIN>, not the general placeholder"
+else
+  fail "DOMAIN given without SSH: the admin email still defaults to admin@<DOMAIN>: $(cat "$dir_partial/config/margince.yaml")"
 fi
 
 # --- host scaffold: files and contents ---
@@ -121,6 +163,16 @@ if grep -qx 'HOST_SSH=deploy@203.0.113.10' "$dir/host.env" && grep -qx 'HOST_DOM
   ok "host.env holds HOST_SSH and HOST_DOMAIN"
 else
   fail "host.env holds HOST_SSH and HOST_DOMAIN: $(cat "$dir/host.env")"
+fi
+if [ "$(grep -c '^#' "$dir/host.env")" = 2 ]; then
+  ok "given DOMAIN and SSH: host.env has only its original two header comments, no fill-in comments"
+else
+  fail "given DOMAIN and SSH: host.env has only its original two header comments: $(cat "$dir/host.env")"
+fi
+if printf '%s' "$out" | grep -qF 'fill in deploy/'; then
+  fail "given DOMAIN and SSH: the next steps do not mention filling in host.env: $out"
+else
+  ok "given DOMAIN and SSH: the next steps do not mention filling in host.env"
 fi
 if grep -qx 'MARGINCE_LICENSE' "$dir/secrets"; then
   ok "secrets lists MARGINCE_LICENSE"

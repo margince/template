@@ -6,8 +6,10 @@
 # DEPLOY_DIR, DEPLOY_STATE_DIR, INSTANCE_NAME, IMAGE_REPO and IMAGE_*.
 #
 # Steps:
-#   check      host.env has HOST_SSH and HOST_DOMAIN; config/margince.yaml
-#              and secrets exist. No connection.
+#   check      host.env has HOST_SSH and HOST_DOMAIN, both non-empty;
+#              config/margince.yaml and secrets exist; config/margince.yaml's
+#              bootstrap_admin.email is not the placeholder admin@example.com.
+#              No connection.
 #   preflight  The release files can be built (every name in secrets has a
 #              value); in production mode (MARGINCE_ENV, when secrets lists
 #              it, is not dev or test) secrets lists MARGINCE_LICENSE;
@@ -215,6 +217,10 @@ check() {
   load
   [ -f "$DEPLOY_DIR/config/margince.yaml" ] || fail "the host adapter needs $DEPLOY_DIR/config/margince.yaml"
   [ -f "$DEPLOY_DIR/secrets" ] || fail "the host adapter needs $DEPLOY_DIR/secrets (one environment variable name per line)"
+  local email
+  email="$(host_config_admin_email "$DEPLOY_DIR/config/margince.yaml")"
+  [ "$email" != "admin@example.com" ] ||
+    fail "$DEPLOY_DIR/config/margince.yaml still has the placeholder admin email admin@example.com; set bootstrap_admin.email to the real admin address"
 }
 
 preflight() {

@@ -13,6 +13,26 @@ The environment name must match `^[a-z0-9]+(-[a-z0-9]+)*$`. Each environment
 needs a `deploy/<env>/` directory. The adapter is `hook` (your own scripts) or
 `host` (the built-in single-server adapter, over SSH and Docker Compose).
 
+## Default `deploy/production/`
+
+The template deploys to one Linux virtual machine (for example AWS EC2) by
+default: it ships `deploy/production/` for the `host` adapter, and
+`instance.yaml` already lists `production: { adapter: host }`. `make
+new-instance` gives every new instance its own `deploy/production/`, scaffolded
+for that instance's `display_name` (and, when `make new-instance` is given
+`DOMAIN`, `SSH` or `ADMIN_EMAIL`, filled in with those values — see
+[create-an-instance.md](create-an-instance.md#2-create)).
+
+Without `DOMAIN`/`SSH`/`ADMIN_EMAIL`, `deploy/production/host.env` has
+`HOST_SSH=` and `HOST_DOMAIN=` empty (each with a comment above it saying what
+to enter) and `deploy/production/config/margince.yaml`'s admin email is the
+placeholder `admin@example.com` (with a comment to change it). A client's
+first deployment is: fill in `deploy/production/host.env` and the admin email
+in `deploy/production/config/margince.yaml`, then `make host-bootstrap
+ENV=production` and `make deploy ENV=production VERSION=<v>` with
+`MARGINCE_LICENSE` set. `check` refuses to run — naming the file to edit —
+while any of the three is still a placeholder.
+
 ## The four-step contract
 
 ```
@@ -94,7 +114,9 @@ make deploy ENV=staging VERSION=v1.2.3
 ## The `host` adapter
 
 The built-in adapter for one Linux server, deployed over SSH with Docker
-Compose — for example an AWS EC2 instance.
+Compose — for example an AWS EC2 instance. It is the template's default: every
+new instance already has `deploy/production/`, ready to fill in (Section
+"Default `deploy/production/`" below).
 
 ### End to end on AWS EC2
 
@@ -115,7 +137,15 @@ Compose — for example an AWS EC2 instance.
    ENV=<env> ADAPTER=host DOMAIN=<domain> SSH=user@host` scaffolds all three
    below and registers `<env>` under `deploy:` in `instance.yaml` in one step
    (`ADMIN_EMAIL=` overrides the default `admin@<domain>`); write them by hand
-   only if you need something `deploy-init` does not produce:
+   only if you need something `deploy-init` does not produce.
+
+   `DOMAIN`, `SSH` and `ADMIN_EMAIL` are all optional. A missing `DOMAIN` or
+   `SSH` is written as an empty `host.env` value with a comment above it
+   saying what to enter; a missing `ADMIN_EMAIL` defaults to `admin@<domain>`
+   when `DOMAIN` is given, or to the placeholder `admin@example.com`
+   otherwise, with a comment to change it. `check` (and so `make deploy`)
+   refuses to run while any of the three stays a placeholder, naming the file
+   to edit.
 
    | File | Content |
    |---|---|
@@ -259,7 +289,7 @@ from that variable at runtime.
 
 | Step | Action |
 |---|---|
-| `check` | `host.env` has `HOST_SSH` and `HOST_DOMAIN`; `config/margince.yaml` and `secrets` exist. No connection made. |
+| `check` | `host.env` has non-empty `HOST_SSH` and `HOST_DOMAIN`; `config/margince.yaml` and `secrets` exist; `bootstrap_admin.email` in `config/margince.yaml` is not the placeholder `admin@example.com`. Each refusal names the file to edit. No connection made. |
 | `preflight` | The release files can be built (every name in `secrets` has a value); `HOST_KNOWN_HOSTS` is set; SSH connects; the server has Docker, `timeout`, and Docker Compose 2.30.0 or later; the server can log in to the registry and read the three image manifests. Nothing is uploaded. |
 | `apply` | Records the release `current` points to (for rollback); builds the release files; uploads them; logs in to the registry; runs `compose pull` and `compose up -d --remove-orphans`; installs a changed Caddyfile once `up` succeeds and reloads Caddy; points `current` at the new release; prunes old release directories. |
 | `verify` | Within `HOST_VERIFY_TIMEOUT` (default 300s): the api answers `/readyz` and the worker is running, on the server; then, unless `HOST_VERIFY_PUBLIC=0`, `https://$HOST_DOMAIN/` answers a status below 500. |
