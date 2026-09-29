@@ -150,7 +150,7 @@ log "reading secrets from Key Vault $KEY_VAULT_NAME"
 MARGINCE_FETCH_ATTEMPTS=60 margince-fetch-secrets
 
 log "building Margince at $GIT_REF (takes a while)"
-MARGINCE_BUILD_NO_RESTART=1 margince-build "$GIT_REF"
+MARGINCE_BUILD_NO_RESTART=1 MARGINCE_BUILD_PREFER_DEPLOYED=1 margince-build "$GIT_REF"
 
 log "bootstrapping the database"
 margince-bootstrap-db

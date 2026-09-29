@@ -14,8 +14,11 @@
 # Limits of one replica:
 #   - Not zone-redundant: a zone or node failure restarts Redis elsewhere and
 #     it reloads the AOF from the share.
-#   - A new revision (image or setting change) briefly runs next to the old
-#     one on the same /data. Change this app in a quiet window.
+#   - A new revision would briefly run next to the old one on the same /data
+#     and can corrupt the AOF. lifecycle below ignores template changes, so a
+#     plain apply never creates one. Change Redis with
+#     `terraform apply -replace=azurerm_container_app.redis`: the replacement
+#     destroys the old app before it creates the new one.
 
 resource "random_password" "redis" {
   length  = 40
@@ -147,4 +150,10 @@ resource "azurerm_container_app" "redis" {
     azurerm_private_dns_zone_virtual_network_link.key_vault,
     azurerm_private_dns_zone_virtual_network_link.storage_file,
   ]
+
+  lifecycle {
+    # Image, resources and command live in template. Changing them in place
+    # starts a second Redis on the same /data; use -replace instead (above).
+    ignore_changes = [template]
+  }
 }

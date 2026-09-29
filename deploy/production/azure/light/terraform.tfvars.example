@@ -36,5 +36,6 @@ operator_ip_allowlist = ["203.0.113.10"]
 # Needs `az feature register --namespace Microsoft.Compute --name EncryptionAtHost`.
 encryption_at_host = true
 
-# Daily Azure Backup of the VM, 7-day retention (about EUR 8/month).
-enable_vm_backup = false
+# Daily Azure Backup of the VM and data disk, 7-day retention (about EUR 8/month).
+# The data disk has no other copy; set false only for disposable data.
+enable_vm_backup = true

@@ -100,8 +100,9 @@ resource "azurerm_subnet" "private_endpoints" {
 # zone-redundant in a single resource, but its GA status and regional
 # availability were not confirmed, so it is not the default. If you need
 # zone-resilient egress, evaluate StandardV2 first rather than adding one
-# Standard NAT gateway per zone behind new zone-pinned subnets. Container
-# Apps and Postgres are already zone-redundant at the resource level.
+# Standard NAT gateway per zone behind new zone-pinned subnets. The Container
+# Apps environment is zone-redundant. Postgres is zone-redundant only with
+# db_zone_redundant_ha = true (off by default), and Redis is one replica.
 resource "azurerm_public_ip" "nat" {
   name                = "${var.name_prefix}-nat"
   location            = azurerm_resource_group.this.location
@@ -247,6 +248,20 @@ resource "azurerm_network_security_group" "postgres" {
     destination_port_range     = "5432"
     source_address_prefix      = cidrsubnet(var.vnet_cidr, 8, 6)
     destination_address_prefix = "*"
+  }
+
+  # Postgres ZoneRedundant HA (db_zone_redundant_ha) replicates between the
+  # primary and the standby inside this delegated subnet.
+  security_rule {
+    name                       = "AllowPostgresSubnetInternal"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = cidrsubnet(var.vnet_cidr, 8, 4)
+    destination_address_prefix = cidrsubnet(var.vnet_cidr, 8, 4)
   }
 
   # Deny by default inside the VNet: without this, the built-in

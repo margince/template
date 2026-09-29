@@ -9,7 +9,7 @@ images are built from the Margince source repository; this stack deploys them.
 | Area | Resources |
 |---|---|
 | Compute | Container Apps environment (workload profiles, Consumption profile, zone-redundant). **api** app (3 to 6 replicas, CPU and HTTP scale rules): `cmd/api` plus an **edge** nginx container that serves the SPA and is the only public entry. **worker** app: no ingress. **redis** app: Redis 7.2, one replica, internal TCP only. |
-| Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
+| Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
 | Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, registry, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
 | Identity | Entra app registration (single tenant, assignment required, your security group), managed identities for api, worker, Dataverse and customer-managed keys |
 | Delivery | Container Registry Premium, optional jumpbox VM with Azure Bastion Developer, build scripts for Mac or jumpbox |
@@ -324,16 +324,16 @@ Resource Manager ID; the storage lock also refuses the delete.
 - **One Entra app** serves sign-in and Graph mail; its client secret rotates
   every 180 days on apply, with a Key Vault near-expiry event 30 days ahead.
 - **Redis is one container.** It is not zone-redundant. Container Apps starts
-  a new revision before stopping the old one, so a change to the redis app
-  (image, resources, command) would briefly run two Redis processes on the
-  same `/data` and can corrupt its append-only file. Stop the running revision
-  first, then apply (api and worker reconnect once Redis is back):
+  a new revision before stopping the old one, so an in-place change to the
+  redis app (image, resources, command) would briefly run two Redis processes
+  on the same `/data` and can corrupt its append-only file. The redis app
+  therefore ignores changes to its template: a plain `terraform apply` leaves
+  it alone. To change `redis_image`, `redis_memory` or `redis_maxmemory`,
+  replace the app, which stops the old Redis before the new one starts (api
+  and worker reconnect once Redis is back):
 
   ```bash
-  RG=$(terraform output -raw resource_group_name)
-  az containerapp revision list -g "$RG" -n <name_prefix>-redis --query "[?properties.active].name" -o tsv \
-    | xargs -n1 az containerapp revision deactivate -g "$RG" -n <name_prefix>-redis --revision
-  terraform apply
+  terraform apply -replace=azurerm_container_app.redis
   ```
 - **Needs app changes**: Entra-only Postgres (no passwords), Redis with
   Entra auth (Azure Managed Redis) and a federated credential instead of the

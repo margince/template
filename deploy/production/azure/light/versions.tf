@@ -42,6 +42,11 @@ provider "azurerm" {
     resource_group {
       prevent_deletion_if_contains_resources = true
     }
+    recovery_service {
+      # A VM replacement (any custom_data change) re-creates the protected
+      # item. Keep the old recovery points instead of deleting them.
+      vm_backup_stop_protection_and_retain_data_on_destroy = true
+    }
   }
 }
 

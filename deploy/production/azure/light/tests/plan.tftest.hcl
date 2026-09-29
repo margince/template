@@ -141,9 +141,21 @@ run "platform_hardening" {
     error_message = "Postgres auto-grows storage, throttles failed logins and requires TLS 1.2+."
   }
   assert {
-    condition     = length(azurerm_recovery_services_vault.this) == 0
-    error_message = "VM backup is off by default."
+    condition     = length(azurerm_recovery_services_vault.this) == 1
+    error_message = "VM backup is on by default: the data disk has no other copy."
   }
+  assert {
+    condition     = azurerm_linux_virtual_machine.this.admin_username != "margince"
+    error_message = "The SSH admin is not the service user margince."
+  }
+}
+
+run "admin_cannot_be_service_user" {
+  command = plan
+  variables {
+    admin_username = "margince"
+  }
+  expect_failures = [var.admin_username]
 }
 
 run "vm_backup" {

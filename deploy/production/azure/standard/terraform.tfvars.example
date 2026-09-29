@@ -35,6 +35,10 @@ bind_custom_domain = false
 # (curl -s https://api.ipify.org). Set back to [] afterwards.
 operator_ip_allowlist = ["203.0.113.20"]
 
+# Key Vault Administrator for these Entra object ids, ideally one group with
+# every operator and the CI identity. Empty: whoever runs terraform apply.
+# key_vault_admin_principal_ids = ["00000000-0000-0000-0000-000000000000"]
+
 # SSH public key for the jumpbox (enable_jumpbox, default true):
 # ssh-keygen -t ed25519 (RSA also works).
 jumpbox_ssh_public_key = "ssh-ed25519 AAAA... you@example.com"

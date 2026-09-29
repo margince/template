@@ -49,6 +49,14 @@ variables {
 run "first_apply_without_apps" {
   command = plan
   assert {
+    condition     = azurerm_key_vault.this.public_network_access_enabled && azurerm_key_vault.this.network_acls[0].default_action == "Deny" && azurerm_storage_account.this.public_network_access_enabled && azurerm_storage_account.this.network_rules[0].default_action == "Deny"
+    error_message = "Key Vault and Storage keep the public endpoint behind a default-deny firewall, so trusted-service CMK access keeps working."
+  }
+  assert {
+    condition     = anytrue([for r in azurerm_network_security_group.postgres.security_rule : r.name == "AllowPostgresSubnetInternal"])
+    error_message = "The Postgres NSG admits traffic inside its own subnet for HA replication."
+  }
+  assert {
     condition     = length(azurerm_container_app.api) == 0 && length(azurerm_container_app.worker) == 0
     error_message = "deploy_apps defaults to false: no apps on the first apply."
   }

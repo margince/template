@@ -22,9 +22,12 @@ resource "azurerm_key_vault" "this" {
   rbac_authorization_enabled = true
   purge_protection_enabled   = true
   soft_delete_retention_days = 90
-  # Public endpoint only while operator_ip_allowlist is set (setup, laptop
-  # access); default-deny below lets in nothing else.
-  public_network_access_enabled = length(var.operator_ip_allowlist) > 0
+  # Enabled, with the firewall below denying everything except
+  # operator_ip_allowlist and trusted Azure services. With an empty allowlist
+  # nothing reaches it from the internet. Not disabled: Storage and Postgres
+  # unwrap their customer-managed keys through the AzureServices bypass, and
+  # a disabled public endpoint can cut that path off and take both down.
+  public_network_access_enabled = true
 
   network_acls {
     # AzureServices bypass, not None: Storage/Postgres/ACR's own
@@ -49,10 +52,24 @@ resource "azurerm_key_vault" "this" {
 # in this stack fails Forbidden the moment it tries to write. Role
 # assignments can take a short time to propagate — a fresh `terraform apply`
 # immediately after this grant lands may need one retry.
+#
+# key_vault_admin_principal_ids names who gets the grant (ideally one Entra
+# group holding every operator and the CI identity). Empty, it falls back to
+# the identity running this apply, which ties the vault to one person: a
+# second operator's apply would replace the grant and lock the first out.
+locals {
+  key_vault_admin_principal_ids = toset(
+    length(var.key_vault_admin_principal_ids) > 0
+    ? var.key_vault_admin_principal_ids
+    : [data.azurerm_client_config.current.object_id]
+  )
+}
+
 resource "azurerm_role_assignment" "terraform_key_vault_administrator" {
+  for_each             = local.key_vault_admin_principal_ids
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Administrator"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = each.value
 }
 
 resource "azurerm_key_vault_key" "data" {

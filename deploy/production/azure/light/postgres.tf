@@ -58,6 +58,10 @@ resource "azurerm_postgresql_flexible_server" "this" {
   depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres]
 
   lifecycle {
+    # Changing db_version, vnet_cidr, name_prefix or resource_group_name
+    # replaces the server, which deletes the database and its backups.
+    # Remove this line on purpose to allow that.
+    prevent_destroy = true
     # Azure picks the zone; auto-grow raises storage (and its tier).
     ignore_changes = [zone, storage_mb, storage_tier]
   }

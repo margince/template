@@ -51,6 +51,34 @@ git fetch --force --tags origin "$REF"
 git checkout --force --detach FETCH_HEAD
 git clean -ffdx -e node_modules
 SHA="$(git rev-parse HEAD)"
+
+# ---- Downgrade guard --------------------------------------------------------------
+# The data disk records the commit last installed. Migrations run forward
+# only, so building an older commit runs old binaries on a newer schema.
+# That happens when the VM is replaced (any custom_data change) while
+# terraform.tfvars still names the ref that was current before a
+# `margince-build <newer-ref>` upgrade. With MARGINCE_BUILD_PREFER_DEPLOYED=1
+# (first boot) an older ref builds the recorded commit instead; otherwise the
+# build stops. MARGINCE_ALLOW_DOWNGRADE=1 skips the guard.
+DEPLOYED_FILE="$DATA/deployed-commit"
+if [[ -s "$DEPLOYED_FILE" && -z "${MARGINCE_ALLOW_DOWNGRADE:-}" ]]; then
+  DEPLOYED="$(cat "$DEPLOYED_FILE")"
+  if [[ "$DEPLOYED" != "$SHA" ]]; then
+    git cat-file -e "$DEPLOYED^{commit}" 2>/dev/null || git fetch --force origin "$DEPLOYED"
+    if ! git merge-base --is-ancestor "$DEPLOYED" "$SHA"; then
+      if [[ -n "${MARGINCE_BUILD_PREFER_DEPLOYED:-}" ]]; then
+        log "$REF ($SHA) does not contain the deployed commit $DEPLOYED; building $DEPLOYED instead"
+        log "set margince_git_ref to $DEPLOYED or newer in terraform.tfvars"
+        git checkout --force --detach "$DEPLOYED"
+        git clean -ffdx -e node_modules
+        SHA="$DEPLOYED"
+      else
+        echo "margince-build: $REF ($SHA) does not contain the deployed commit $DEPLOYED; refusing a downgrade (MARGINCE_ALLOW_DOWNGRADE=1 overrides)" >&2
+        exit 1
+      fi
+    fi
+  fi
+fi
 REL="$(git rev-parse --short=12 HEAD)"
 log "building $REL ($SHA)"
 
@@ -132,6 +160,7 @@ rm -rf "${RELEASES:?}/$REL"
 cp -a "$OUT" "$RELEASES/$REL"
 ln -sfn "$RELEASES/$REL" /opt/margince/current.new
 mv -Tf /opt/margince/current.new /opt/margince/current
+echo "$SHA" >"$DATA/deployed-commit"
 log "installed release $REL"
 
 # Keep the three newest releases for a manual rollback (ln -sfn + restart).

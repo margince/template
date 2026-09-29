@@ -132,6 +132,12 @@ resource "azurerm_managed_disk" "data" {
   create_option        = "Empty"
   disk_size_gb         = var.data_disk_gb
   tags                 = local.common_tags
+
+  lifecycle {
+    # Holds attachments, margince.yaml, certificates and the Redis AOF.
+    # Remove this line on purpose to allow a replacement.
+    prevent_destroy = true
+  }
 }
 
 resource "azurerm_virtual_machine_data_disk_attachment" "data" {

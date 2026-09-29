@@ -55,7 +55,7 @@ variable "az_count" {
   default     = 2
   validation {
     condition     = var.az_count >= 2
-    error_message = "az_count must be at least 2 — Postgres Flexible Server's ZoneRedundant HA mode needs a primary and a standby zone."
+    error_message = "az_count must be at least 2: the api spreads across zones, and Postgres ZoneRedundant HA (db_zone_redundant_ha) needs a primary and a standby zone."
   }
 }
 
@@ -421,6 +421,17 @@ variable "alert_email" {
 }
 
 # ---- Operator access and image builds -------------------------------------------
+
+variable "key_vault_admin_principal_ids" {
+  description = <<-EOT
+    Entra object ids granted Key Vault Administrator on this stack's vault,
+    ideally one group that holds every operator and the CI identity. Whoever
+    runs terraform apply must be covered, or the secret writes fail. Empty:
+    the identity running apply, which only works while one person applies.
+  EOT
+  type        = list(string)
+  default     = []
+}
 
 variable "operator_ip_allowlist" {
   description = <<-EOT

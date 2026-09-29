@@ -105,8 +105,13 @@ variable "vm_size" {
 }
 
 variable "admin_username" {
-  type    = string
-  default = "margince"
+  description = "Login for SSH administration. Must differ from the service user margince, which runs api and worker without sudo."
+  type        = string
+  default     = "azureadmin"
+  validation {
+    condition     = var.admin_username != "margince"
+    error_message = "admin_username must not be margince: that is the unprivileged service user, and Azure would give it sudo."
+  }
 }
 
 variable "admin_ssh_public_key" {
@@ -125,9 +130,9 @@ variable "encryption_at_host" {
 }
 
 variable "enable_vm_backup" {
-  description = "Adds a Recovery Services vault backing up the VM (OS and data disk) daily with 7-day retention. About EUR 8/month."
+  description = "Adds a Recovery Services vault backing up the VM (OS and data disk) daily with 7-day retention. About EUR 8/month. The data disk holds attachments, margince.yaml, certificates and the Redis AOF, and has no other copy, so leave this on unless the data is disposable."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "os_disk_gb" {

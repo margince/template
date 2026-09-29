@@ -26,7 +26,7 @@ Internet ─443─> nginx ──127.0.0.1:8080──> margince-api ─┬─> Po
 
 - **One VM, no high availability.** A VM or zone failure is an outage until
   the VM is back. Postgres has point-in-time restore; the VM and its data
-  disk are backed up only with `enable_vm_backup = true` (daily, 7 days).
+  disk are backed up daily for 7 days (`enable_vm_backup`, on by default).
 - **Builds on the box.** First boot clones the repository and compiles the
   Go binaries and the SPA (about 15 minutes on B2ms). Nothing is signed or
   pinned beyond the git ref you choose.
@@ -35,7 +35,7 @@ Internet ─443─> nginx ──127.0.0.1:8080──> margince-api ─┬─> Po
 
 Cost, West Europe, pay-as-you-go: about **EUR 80/month** (VM ~55, Postgres
 ~17, disks ~8, public IP ~3; Bastion Developer and Key Vault are free or
-cents). `enable_vm_backup` adds about EUR 8. Stop the VM and Postgres to pay
+cents), plus about EUR 8 for `enable_vm_backup`. Stop the VM and Postgres to pay
 mostly for storage.
 
 ## Steps
@@ -121,6 +121,20 @@ git ref, posture) **replaces the VM**. The data disk, public IP, Key Vault and
 Postgres stay; the new VM rebuilds in about 20 minutes and keeps
 `margince.yaml`, attachments and certificates. Plain upgrades should use
 `margince-build` instead.
+
+The data disk records the commit last installed (`/var/lib/margince/deployed-commit`).
+`margince-build` refuses a ref that does not contain it, because migrations
+run forward only. On a replaced VM whose `margince_git_ref` is older than the
+recorded commit, first boot builds the recorded commit and logs a reminder to
+update `margince_git_ref`.
+
+The Postgres server and the data disk have `prevent_destroy`. A plan that
+would replace either (changing `db_version`, `vnet_cidr`, `name_prefix` or
+`resource_group_name`) fails instead of deleting the data.
+
+SSH in as `admin_username` (default `azureadmin`). The services run as the
+separate `margince` user, which has no sudo; `admin_username` cannot be
+`margince`.
 
 Dataverse: add the `egress_ip` output to the Dataverse IP firewall.
 

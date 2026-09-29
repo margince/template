@@ -26,9 +26,9 @@ resource "azurerm_storage_account" "this" {
 
   account_kind = "StorageV2"
   account_tier = "Standard"
-  # ZRS, not LRS: the stack uses zone redundancy wherever it can (Postgres
-  # ZoneRedundant HA, the zone-redundant Container Apps environment), and LRS
-  # would make the attachment store the exception. Not GRS: the stack is
+  # ZRS, not LRS: the Container Apps environment is zone-redundant, and
+  # Postgres can be (db_zone_redundant_ha); LRS would make the attachment
+  # store a single-zone exception. Not GRS: the stack is
   # single-region by design, so cross-region replication here would buy a DR
   # posture nothing else has.
   account_replication_type = "ZRS"
@@ -36,10 +36,13 @@ resource "azurerm_storage_account" "this" {
   min_tls_version = "TLS1_2"
   # No object replication to storage accounts in other tenants.
   cross_tenant_replication_enabled = false
-  # Public endpoint only while operator_ip_allowlist is set; the network rules
-  # below still deny everyone else. Container Apps reach the shares through
-  # the private endpoint either way.
-  public_network_access_enabled   = length(var.operator_ip_allowlist) > 0
+  # Enabled, with the network rules below denying everything except
+  # operator_ip_allowlist and trusted Azure services (Azure Backup, flow-log
+  # writes). With an empty allowlist nothing reaches it from the internet.
+  # Storage honours no firewall exception while public access is disabled, so
+  # disabling it would stop those services. Container Apps reach the shares
+  # through the private endpoint either way.
+  public_network_access_enabled   = true
   allow_nested_items_to_be_public = false
 
   network_rules {
