@@ -1,141 +1,252 @@
-# Adding a unit
+# Adding an extension
 
-The upstream contract is `core/docs/how-to/add-an-extension.md`, and it is the
-authority on what each capability means. This page covers only what is
-different because we build *downstream* of the core rather than inside it.
+This guide covers the extension units of an instance: creating a unit with
+`make new-unit`, its files, composing it into core, testing it, and the gates
+that check it. It is for the developer who writes a unit in an instance. The
+extension contract itself (what a unit may declare and what each capability
+means) is core's, in
+[core/docs/how-to/add-an-extension.md](../core/docs/how-to/add-an-extension.md)
+and [core/docs/explanation/extensibility.md](../core/docs/explanation/extensibility.md).
+This guide covers only what differs because the instance builds on top of the
+`core/` submodule.
 
-## The workflow
+## 1. Prerequisites
 
-0. **Scaffold it.** `make new-unit NAME=<name>` renders `scripts/unit-skeleton/`
-   and rewrites the names. It validates everything before creating anything, so
-   a bad name costs nothing. The steps below are what the scaffold leaves you
-   to fill in.
+- An instance checkout on which `make install` has run
+  ([create-an-instance.md](create-an-instance.md)).
+- Docker running, for the gates that need a database
+  (`make check-ext-migrations`, `make test-integration-ext`).
+- `fswatch`, only for `make watch`.
 
-1. **The directory name is the unit's canonical name.** It is the prefix for the
-   unit's SQL identifiers and the `#/ext/<name>` route segment, so it must be
-   identical to the `Name` field you declare. Grammar is
-   `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters. `scripts/stage.sh` checks
-   this before the composer does, so a bad name fails with a clear message.
+## 2. How units reach core
 
-2. **Add its `go.mod`.** Its own module, as every unit is. Give it this path:
+A unit is one directory under `extensions/`. Presence of the directory is the
+enablement; there is no list of units.
 
-   ```text
-   module margince.instance/extensions/<name>
+Core's composer only reads `core/extensions/`. `make stage` therefore copies
+each unit from `extensions/<name>/` to `core/extensions/<name>/` (without
+`node_modules`). Every lane that builds or tests the composition runs
+`make stage` first. `make compose` runs `make stage`, then core's composer,
+then copies each unit's generated `manifest.generated.json` back to
+`extensions/<name>/`.
 
-   go 1.26.6
+- `extensions/<name>/` is the source. Edit only this directory.
+- `core/extensions/<name>/` is a staged copy. The next `make stage` deletes and
+  replaces it, and `make unstage` removes it.
+- Most lanes that call core rewrite an absolute path inside a staged copy in
+  their output to the path in `extensions/<name>/`.
+
+## 3. Create a unit
+
+1. Choose a name. It must match `^[a-z0-9]+(-[a-z0-9]+)*$`, have at most 32
+   characters, and not be the name of a unit that core ships (list them with
+   `git -C core ls-files extensions/ | cut -d/ -f2 | sort -u`).
+2. Run `make new-unit`:
+
+   ```sh
+   make new-unit NAME=<name>
    ```
 
-   Nothing ever downloads this path. The composed workspace written by
-   `gen-composition` resolves the unit locally; no module proxy is contacted.
-   The path only has to be unique among this instance's units — it is never
-   fetched, so it does not need to describe where the source lives.
+   The script validates the name before it creates anything. It refuses an
+   existing `extensions/<name>/` and a name that core already uses.
+3. Declare what the unit does in `extensions/<name>/<pkg>.go`.
+4. Generate the manifest:
 
-   Note the two module namespaces, which are unrelated: our units live under
-   `margince.instance/...`, and the host they import is
-   `github.com/margince/margince/...`.
+   ```sh
+   make compose
+   ```
 
-3. **Write `<name>.go`** exporting `func New() extension.Extension`. Start from
-   `scripts/unit-skeleton/` and grow it. A hyphenated unit drops the hyphen in
-   the Go **package identifier** only (`acme-sync` → `package acmesync`); the
-   directory, module path and `Extension.Name` all keep it.
+5. Add the unit to git, including `manifest.generated.json`:
 
-4. **Import only `backend/pkg/**` packages carrying the
-   `//margince:extension-surface` marker** — `pkg/extension`,
-   `pkg/extension/jurisdiction`, `pkg/extension/crm` today. Anything else fails
-   upstream's arch test.
+   ```sh
+   git add extensions/<name>
+   ```
 
-5. **Generate and commit the manifest.** `make compose` writes
-   `extensions/<name>/manifest.generated.json`; `git add extensions/<name>`
-   stages it alongside the unit. `make u` below fails on an untracked
-   manifest, so a first run needs this step first.
+6. Run the unit's tests and the policy gates:
 
-6. **Prove it.** `make u NAME=<name>` is the inner loop: that unit's Go tests
-   plus the cheap policy gates, in seconds. `make u-check NAME=<name>` adds the
-   screen suites and the composed typecheck. `make ci` is the full answer, and
-   the one to run before opening a pull request.
+   ```sh
+   make u NAME=<name>
+   ```
 
-## What is different downstream
+`make u` fails until step 5 is done, because `make check-manifests` refuses an
+untracked manifest.
 
-**Name collisions with upstream are fatal, by design.** Upstream ships its own
-units under `extensions/` in the vanilla tree. If we create a unit with a name
-upstream already uses, staging would overwrite theirs with ours inside the
-submodule and leave no trace of the substitution. `scripts/stage.sh` refuses
-instead, and names the unit that collided. Rename ours.
+The instance's `.gitignore` does not ignore `extensions/`. Core's guide asks for
+a `.gitignore` exception per unit; that rule applies to units inside core, not
+to an instance.
 
-To see the current list, ask git rather than a doc — the set changes with every
-`make update-core`:
+## 4. Unit layout
+
+`<pkg>` is the name without hyphens: the unit `acme-sync` has the Go package
+`acmesync` and the files `acmesync.go` and `acmesync_test.go`. The directory,
+the module path, and `Extension.Name` keep the hyphen.
+
+| Path | Created by | Content |
+|---|---|---|
+| `go.mod` | `make new-unit` | `module margince.instance/extensions/<name>` and `go 1.26.6`. |
+| `<pkg>.go` | `make new-unit` | `func New() extension.Extension`: the declaration, with `Name`, `Version` (`0.1.0`), and `Description`. |
+| `<pkg>_test.go` | `make new-unit` | A test that `Name` is the directory name and that `Name` and `Version` are valid. |
+| `manifest.generated.json` | `make compose` | The derived record of the unit's risk tiers, secrets, subscriptions, and ingress. Committed. |
+| `api/crm.yaml`, `api/jobs.yaml` | you | Contract fragments: governed operations and scheduled jobs. |
+| `migrations/NNNN_<name>.up.sql`, `.down.sql` | you | The unit's tables, embedded with `//go:embed migrations` and the `Migrations:` field. |
+| `frontend/package.json`, `frontend/screen.tsx` | you | The unit's screen at `#/ext/<name>`. |
+| `frontend/i18n/en.json`, `de.json`, `vi.json` | you | The screen's copy, all three locales. |
+| `frontend/*.test.tsx` | you | The screen's tests. |
+
+The module path `margince.instance/extensions/<name>` is never downloaded:
+the composed workspace (`core/build/composition/go.work`) resolves it locally.
+The unit imports core as `github.com/margince/margince/backend/...`, and only
+the packages under `core/backend/pkg/` that carry the
+`//margince:extension-surface` marker. List them with:
 
 ```sh
-git -C core ls-files extensions/ | cut -d/ -f2 | sort -u
+grep -rl 'margince:extension-surface' core/backend/pkg | xargs -n1 dirname | sort -u
 ```
 
-**`manifest.generated.json` is generated, and it is committed.** The composer
-writes it beside the unit it scanned, which is the staged copy. `make compose`
-then copies it back beside the source in `extensions/<name>/`. That copy is what
-you commit.
+A unit that needs a core package outside that set needs a change to core
+([contributing-to-core.md](contributing-to-core.md)).
 
-**Commit the manifest whenever `make compose` changes it.** An operator reads it
-to see a unit's risk tiers, secrets and subscriptions before enabling the unit,
-so a stale one understates what the unit can do. `make check-manifests` enforces
-this, and it also fails when a manifest is not tracked by git at all — the state
-a newly scaffolded unit starts in, because `make new-unit` does not create one;
-the first `make compose` writes it.
+## 5. Capabilities
 
-**A unit with a `frontend/` resolves in the composed workspace, not core's.**
-`gen-composition` generates the workspace at
-`core/build/composition-frontend/workspace/`, using the same `extensions/` scan
-the Go side uses. That workspace's lockfile is build output and is gitignored.
-Core's tracked `pnpm-lock.yaml` is never modified.
+Core's guide defines each capability and its rules. This table names the files
+and the gate that checks each one here.
 
-A unit frontend may therefore have dependencies of its own.
-`core/extensions/openchannel/frontend/` is upstream's own worked example: its
-`package.json` declares `vitest` and `@testing-library/react` as dev
-dependencies, and core's lockfile is untouched.
-
-Two rules follow:
-
-- **Declare what the host owns as `peerDependencies`, not direct dependencies**
-  — `@margince/frontend`, `react`, `@tanstack/react-query`. The composed
-  workspace links those from `core/frontend/node_modules`, so a unit cannot end
-  up with a second copy of something the host owns.
-- **The screen suites run in `make u-fe`, not `make u`.** They need the composed
-  workspace installed and the SPA built. That takes minutes, not seconds.
-  `make u-check NAME=<unit>` and `make check` both include them.
-
-`core/pnpm-workspace.yaml` records why membership lives in the generated
-workspace rather than core's root one.
-
-## What each capability needs
-
-`make new-unit` gives you `<name>.go`, `<name>_test.go` and `go.mod`. Everything
-else you add yourself. This table says which file, and which gate proves it.
-`core/extensions/openchannel/` is upstream's own worked example for all of it —
-a unit that owns tables, a scheduled job, a screen, and an anonymous edge an
-outside provider posts to — and the package comment at the top of its `doc.go`
-explains the design.
-
-| To add | Write | Proven by |
+| Capability | Files | Checked by |
 |---|---|---|
-| A tool (an operation) | An entry in `api/crm.yaml` — tier, scope, RBAC object, prose, schemas. Governance is declared here, not in Go. | `make u` |
-| A database table | `migrations/000N_<thing>.up.sql` and a matching `.down.sql`, plus the `//go:embed` and the `Migrations:` field in `New()` | `make check-ext-migrations` — applies it as your unit's restricted `ext_<name>` role, then reverts it |
-| A scheduled job or poller | `api/jobs.yaml` — cadence and wall clocks — and the job function | `make u`; `make dev` runs it in the worker |
-| A secret | Declare it in `New()`. Members deposit it through your unit's own tools; no operation returns it, masked or otherwise. | `make u` |
-| A screen | `frontend/screen.tsx`, `frontend/package.json` (host packages as `peerDependencies`) | `make u-fe` — **not** `make u` |
-| Screen copy | `frontend/i18n/en.json`, `de.json` **and** `vi.json`. All three or none: the composer refuses a locale supplied for one language and not another. Prefix keys with your unit's camel-case name, e.g. `extCrmSync.`. | `make compose` |
-| Reaching core capture | An `Ingress` declaration in `New()` | `make u`; it is what an operator reads to see the unit reaches capture at all |
+| A governed operation (a tool) | An operation in `api/crm.yaml`, with its `x-mcp-tool` block, and a `Tools` entry in `New()`. | `make compose`, `make u` |
+| Tables | `migrations/`, the `//go:embed migrations` variable, and the `Migrations:` field. | `make check-ext-migrations`, `make test-integration-ext` |
+| A scheduled job | `api/jobs.yaml` and a `Jobs` entry in `New()`. | `make compose`, `make u` |
+| A secret | A `Secrets` entry in `New()`. | `make u` |
+| A screen | `frontend/package.json` and the module it names. | `make u-fe`, `make fe-ds-gates`, `make fe-typecheck-composed` |
+| Screen copy | `frontend/i18n/en.json`, `de.json`, and `vi.json`, keyed `ext<CamelName>.`. | `make compose` |
+| An event subscription or ingress | `Subscriptions` or `Ingress` in `New()`. | `make u` |
 
-Two things are generated and must be committed: `manifest.generated.json`, and
-the OpenAPI fragments the composer derives from your `api/` files. `make compose`
-writes them; `make check-manifests` fails if you did not commit them.
+`core/extensions/openchannel/` is core's reference unit: it has tables, jobs,
+secrets, ingress, and a screen with tests.
 
-For a database test, tag the file `//go:build integration`. Without that tag
-`make test-integration-ext` does not run it, and reports zero integration tests
-as a pass. The harness supplies `MARGINCE_TEST_DSN` and `MARGINCE_TEST_APP_DSN`,
-and it applies your migrations twice — they must be idempotent on a second
-`migrate up`, which is the thing a poller's cursor table usually gets wrong.
+### 5.1 A unit screen
 
-## Where the source of truth is
+A unit's `frontend/` is a member of the composed pnpm workspace that the
+composer writes to `core/build/composition-frontend/workspace/`, not of core's
+root workspace. That workspace's lockfile is build output: `make compose`
+deletes it, and core's `pnpm-lock.yaml` is not changed.
 
-`extensions/` in this repo. `core/extensions/<our-name>/` is a copy that
-`make unstage` deletes. Never edit the staged copy — the next `make compose`
-overwrites it without warning.
+- Declare `@margince/frontend`, `react`, `react-dom`, and
+  `@tanstack/react-query` as `peerDependencies`. The host provides them.
+- Declare test tools such as `vitest` and `@testing-library/react` as
+  `devDependencies`.
+- `make u` does not run screen tests. `make u-fe` runs every unit's screen
+  suite; it installs the composed workspace and builds the SPA, and takes
+  minutes.
+
+### 5.2 Database tests
+
+Tag a test that needs a database with `//go:build integration`.
+`make test-integration-ext` runs these tests; a unit without such a test is
+listed as skipped. The lane:
+
+1. Creates the database `margince_ext_it` on the test cluster
+   (`EXT_IT_DB` may name `margince_ext_it_<suffix>` instead).
+2. Runs `migrate up` and checks that each unit with `migrations/` appears in
+   the output.
+3. Runs `migrate up` again, which must apply nothing.
+4. Runs `go test -tags integration` in each unit that has an integration test,
+   with `MARGINCE_TEST_DSN` and `MARGINCE_TEST_APP_DSN` set to that database.
+5. Drops the database.
+
+## 6. Test a unit
+
+| Command | Runs | Time |
+|---|---|---|
+| `make u NAME=<name>` | `make compose`; the unit's Go tests in the staged copy with the composed workspace; core's `ext-imports` and `fitness-jurisdiction` gates; `make compose` again; `make check-manifests`. | Seconds |
+| `make u-fe` | `make compose`, then core's `fe-test-ext`: every unit's screen suite. No `NAME` filter. | Minutes |
+| `make u-check NAME=<name>` | `make u`, `make u-fe`, and core's `fe-typecheck-composed`. | Minutes |
+| `make test-extensions` | Every unit's Go tests. | Minutes |
+| `make check` | The full gate (Section 8). | Long |
+| `make ci` | `make check`, `make test-integration-ext`, `make core-check-pin`, and the check that `core/` is unchanged. | Long |
+
+Run `make u` while you work, `make u-check` for a unit with a screen, and
+`make ci` before you open a pull request.
+
+`make dev` runs the development stack with the instance's units. A unit's
+routes and its screen at `#/ext/<name>` are served on the port that
+`make dev` prints. `make watch` stages the units again when a file under
+`extensions/` changes (it needs `fswatch`).
+
+## 7. Lint and format
+
+| Command | Effect |
+|---|---|
+| `make lint` | Checks `extensions/` with gofmt, golangci-lint (per unit module, with `core/backend/.golangci.yml`), craft (`craft static --strict`), and Biome (unit frontends, with core's configuration). Changes nothing. |
+| `make fmt` | Rewrites `extensions/` in place: `gofmt -w`, then Biome's safe fixes and formatting. |
+
+`make lint` needs golangci-lint from core's tools (`make init` installs it).
+When Biome is not installed, `make lint` skips the Biome check and names
+`make fe-install`.
+
+## 8. What `make check` runs
+
+`make check` first runs `toolcheck`, `check-instance`, `check-template`,
+`check-public` (only in the template, where `.template-version` does not
+exist), `test-scripts`, `test-secret-scan`, and `secret-scan`. It then runs two
+passes:
+
+1. **Pass 1**: `make unstage`, then core's own `check` on a `core/` without
+   the instance's units.
+2. **Pass 2**: with the units staged, `lint`, `check-composition`, `build`,
+   `test-extensions`, `arch`, `fe-test-ext`, `fe-typecheck-composed`,
+   `fe-ds-gates`, `ext-imports`, `check-ext-migrations`, `check-manifests`,
+   `check-docs`, and `drift`.
+
+| Gate | Checks |
+|---|---|
+| `check-composition` | Generating the composition again gives the same files. |
+| `arch` | Core's tests `TestExtensionsImportOnlyTheAllowlistedSurface`, `TestSurfaceMarkerLivesOnlyUnderPkg`, and `TestCompositionWiredOnlyFromCmd` on the composed tree. |
+| `ext-imports` | The import allowlist of unit code. |
+| `check-ext-migrations` | Applies each unit's migrations as its restricted `ext_<name>` role on a temporary database, checks the catalog, and reverts them. Starts the database when a staged unit has `migrations/`. |
+| `check-manifests` | Every `extensions/*/manifest.generated.json` is tracked by git and has no uncommitted change. |
+| `drift` | Generated files match their generators. |
+| `fe-ds-gates` | Core's design-system gates over the unit screens. |
+
+CI runs a subset of these on every pull request; see
+[release.md](release.md#9-ci-workflows).
+
+## 9. The manifest
+
+`make compose` writes `manifest.generated.json` into the staged copy, and
+`scripts/sync-manifests.sh` copies it to `extensions/<name>/` when it changed.
+Commit it with the unit, and again whenever `make compose` changes it. The
+manifest lists what an operator approves before enabling the unit, so a stale
+manifest is refused by `make check-manifests`.
+
+`make new-unit` does not create a manifest. The first `make compose` writes it.
+
+## 10. Remove a unit
+
+1. Remove the staged copies while the unit still exists:
+
+   ```sh
+   make unstage
+   ```
+
+2. Remove the directory with git, so the manifest removal is staged:
+
+   ```sh
+   git rm -r extensions/<name>
+   ```
+
+3. Run `make check`.
+
+Run `make unstage` first. `make stage` does not delete the staged copy of a
+unit that is no longer in `extensions/`.
+
+## Related guides
+
+- [core/docs/how-to/add-an-extension.md](../core/docs/how-to/add-an-extension.md):
+  the extension contract.
+- [contributing-to-core.md](contributing-to-core.md): change an extension seam
+  in core.
+- [release.md](release.md): the images that contain the units.
+- [troubleshooting.md](troubleshooting.md#3-units-and-staging): unit and
+  staging errors.
+- [glossary.md](glossary.md): unit, staging, composition, and manifest.
