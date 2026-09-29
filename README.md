@@ -47,9 +47,16 @@ make new-instance NAME=acme DISPLAY_NAME="Acme"
 cd ../margince-acme
 # fill in deploy/production/host.env (HOST_SSH, HOST_DOMAIN) and the admin
 # email in deploy/production/config/margince.yaml
-make host-bootstrap ENV=production
-MARGINCE_LICENSE=<license> make deploy ENV=production VERSION=<v>
+HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host>)" \
+  make host-bootstrap ENV=production
+# <v> is a release built and pushed with `make release` (see docs/release.md)
+HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host>)" MARGINCE_LICENSE=<license> \
+  make deploy ENV=production VERSION=<v>
 ```
+
+`HOST_KNOWN_HOSTS` is required — `ssh-keyscan` does not verify anything by
+itself, so check the printed fingerprint against the instance's console
+output before trusting it.
 
 See [docs/deploy.md](docs/deploy.md) for the full `host` adapter walkthrough
 and [docs/create-an-instance.md](docs/create-an-instance.md) for creating the

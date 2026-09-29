@@ -35,11 +35,14 @@ make new-instance NAME=acme DISPLAY_NAME="Acme"
 | `PUSH` | no | `PUSH=1` creates a private GitHub repository and pushes the instance to it (`gh repo create <OWNER>/margince-<NAME> --private --source <DIR> --remote origin --push`). Without it, nothing is pushed anywhere; the instance exists locally only. |
 | `OWNER` | yes, with `PUSH=1` | The GitHub organization `PUSH=1` creates the repository in. |
 
-Everything is validated before anything is created: `new-instance.sh` builds
-the candidate `instance.yaml` and runs it through `cli check` first. If that
-fails, nothing is created. If a later step fails (the clone, the submodule
-checkout, the default `deploy/production/` scaffold, or the commit), the
-half-created directory is removed rather than left behind looking like a
+`new-instance.sh` builds the candidate `instance.yaml` (`name`, `display_name`,
+`core`) and runs it through `cli check` before anything is created; if that
+fails, nothing is created. The clone, the submodule checkout, and the
+default `deploy/production/` scaffold happen after, and the scaffold is
+validated (the same `cli check`) only once it exists, after the clone. If
+that check, or any later step, fails (the clone, the submodule checkout, or
+the commit), the half-created directory is removed rather than left behind
+looking like a
 working instance.
 
 On success, the new instance has a `template` remote pointing at this
@@ -185,8 +188,14 @@ revision and release tag (`com.margince.core.version`, from `core:` in
 
 ## 9. Deploy
 
-Every new instance already has `deploy/production: { adapter: host }` in
-`instance.yaml` and a `deploy/production/` directory (`make new-instance`'s
+Every new instance already has, in `instance.yaml`:
+
+```yaml
+deploy:
+  production: { adapter: host }
+```
+
+and a `deploy/production/` directory (`make new-instance`'s
 `DOMAIN`/`SSH`/`ADMIN_EMAIL`, Section 2 above, or their placeholders otherwise).
 Fill in `deploy/production/host.env` and the admin email in
 `deploy/production/config/margince.yaml`, then `make host-bootstrap

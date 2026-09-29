@@ -518,8 +518,12 @@ while `HOST_SSH` or `HOST_DOMAIN` is empty or `bootstrap_admin.email` is still
 `admin@example.com`. `preflight` keeps the license check (Section 9.7).
 
 A client's first deployment is: fill in `deploy/production/host.env` and the
-admin email, then `make host-bootstrap ENV=production` and
-`make deploy ENV=production VERSION=<v>` with `MARGINCE_LICENSE` set.
+admin email, then, with `HOST_KNOWN_HOSTS` set (`ssh-keyscan -H <host>`;
+verify the printed fingerprint against the instance's console output before
+trusting it), `make host-bootstrap ENV=production` and
+`make deploy ENV=production VERSION=<v>` with `MARGINCE_LICENSE` set, `<v>` a
+release built and pushed with `make release` (Section 9.2; see
+[docs/release.md](../../release.md)).
 
 ## 10. Versioning
 

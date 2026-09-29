@@ -28,10 +28,19 @@ Without `DOMAIN`/`SSH`/`ADMIN_EMAIL`, `deploy/production/host.env` has
 to enter) and `deploy/production/config/margince.yaml`'s admin email is the
 placeholder `admin@example.com` (with a comment to change it). A client's
 first deployment is: fill in `deploy/production/host.env` and the admin email
-in `deploy/production/config/margince.yaml`, then `make host-bootstrap
-ENV=production` and `make deploy ENV=production VERSION=<v>` with
-`MARGINCE_LICENSE` set. `check` refuses to run — naming the file to edit —
+in `deploy/production/config/margince.yaml`, then, with `HOST_KNOWN_HOSTS`
+set (`ssh-keyscan -H <host>`; verify the printed fingerprint against the
+instance's console output before trusting it — `ssh-keyscan` does not verify
+anything by itself), `make host-bootstrap ENV=production` and `make deploy
+ENV=production VERSION=<v>` with `MARGINCE_LICENSE` set, `<v>` a release
+built and pushed with `make release` ([release.md](release.md); its images
+land in `REGISTRY`). `check` refuses to run — naming the file to edit —
 while any of the three is still a placeholder.
+
+Deployed from CI instead, [`deploy.yml`](#deployyml) runs `production` inside
+a GitHub Environment named `production`, holding `HOST_KNOWN_HOSTS`,
+`HOST_SSH_KEY` and `MARGINCE_LICENSE` as that environment's secrets — set up
+once, [below](#setting-this-up-on-github).
 
 ## The four-step contract
 
@@ -409,8 +418,14 @@ tag**: Actions → deploy → Run workflow → "Use workflow from" → Tags →
 `v1.2.3`. The checkout is that tag, so the hooks and `deploy/<env>/` that run
 are the ones in the release.
 
-Create each environment ahead of time (repository Settings → Environments);
-the workflow does not create one.
+Create each environment ahead of time (repository Settings → Environments).
+GitHub itself, not the workflow, resolves the `environment:` key before any
+step runs: dispatching against a name with no matching GitHub Environment
+does not fail — GitHub auto-creates one on the spot, with no protection
+rules and no secrets or variables of its own, and the run proceeds with
+whatever the repository or organization otherwise provides. Create the
+environment beforehand so its protection rules and secrets are actually in
+effect for the first run that uses it.
 
 | Setting | Value |
 |---|---|
