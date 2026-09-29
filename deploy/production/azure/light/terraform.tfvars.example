@@ -1,0 +1,40 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+
+azure_region        = "westeurope"
+resource_group_name = "margince-light"
+name_prefix         = "margince"
+
+# Leave empty to use <label>.<region>.cloudapp.azure.com (TLS at first boot).
+# With your own name: A record to the public_ip output, then
+# `sudo margince-enable-tls` on the VM.
+public_hostname = ""
+acme_email      = "ops@example.com"
+
+# Your office/admin address, for the first password login.
+break_glass_cidrs = ["203.0.113.10/32"]
+
+admin_ssh_public_key = "ssh-rsa AAAA... you@laptop" # ssh-keygen -t rsa -b 4096 (ed25519 also accepted)
+
+margince_git_ref = "main"
+
+workspace_name          = "Example GmbH"
+workspace_base_currency = "EUR"
+workspace_base_language = "de"
+workspace_timezone      = "Europe/Berlin"
+bootstrap_admin_email   = "admin@example.com"
+
+environment_posture = "production"
+license_token       = "<licence token>"
+
+# The Entra security group that already gates Dataverse.
+entra_access_group_object_id = "00000000-0000-0000-0000-000000000000"
+
+# Required: the public IP(s) you run Terraform from. The Key Vault firewall
+# admits only these and the VM.
+operator_ip_allowlist = ["203.0.113.10"]
+
+# Needs `az feature register --namespace Microsoft.Compute --name EncryptionAtHost`.
+encryption_at_host = true
+
+# Daily Azure Backup of the VM, 7-day retention (about EUR 8/month).
+enable_vm_backup = false

@@ -1,0 +1,74 @@
+# No TLS here — CloudFront (cloudfront.tf) is the public-facing TLS
+# terminator; this instance is CloudFront's origin, reached over plain
+# HTTP inside AWS's own backbone. The shared-secret header check below is
+# what stops a request from reaching here any other way (network.tf's
+# origin-facing-prefix-list SG restriction is the first line; this is the
+# second).
+#
+# Folds in two things that used to be separate: the api routing rules that
+# mirror the full stack's ALB listener rules (../standard/alb.tf:
+# aws_lb_listener_rule.api_v1_and_ops, api_webhooks, api_mcp_oauth), and the
+# static-file-serving rules that used to belong to a separate "web"
+# container's own nginx (frontend/nginx.conf) — there is no separate web
+# process anymore, this instance serves the built frontend directly.
+
+server {
+    listen 80;
+    server_name ${domain};
+    root /opt/margince/frontend/dist;
+    index index.html;
+
+    if ($http_x_origin_verify != "${origin_verify_secret}") {
+        return 403;
+    }
+
+    client_max_body_size 32m;
+
+    location = /healthz  { proxy_pass http://${app_private_ip}:8080; }
+    location = /readyz   { proxy_pass http://${app_private_ip}:8080; }
+    location = /metrics  { proxy_pass http://${app_private_ip}:8080; }
+
+    location /v1 { proxy_pass http://${app_private_ip}:8080; }
+
+    location = /webhooks/gmail   { proxy_pass http://${app_private_ip}:8080; }
+    location = /webhooks/graph   { proxy_pass http://${app_private_ip}:8080; }
+    location = /webhooks/hubspot { proxy_pass http://${app_private_ip}:8080; }
+
+    location /oauth/ { proxy_pass http://${app_private_ip}:8080; }
+    location /mcp     { proxy_pass http://${app_private_ip}:8080; }
+    location = /.well-known/oauth-authorization-server { proxy_pass http://${app_private_ip}:8080; }
+    # Prefix, not exact: also covers /.well-known/oauth-protected-resource/mcp
+    location /.well-known/oauth-protected-resource { proxy_pass http://${app_private_ip}:8080; }
+
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # ---- static frontend (was frontend/nginx.conf, baked into a separate
+    # web container's image) ----------------------------------------------
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+    gzip_vary on;
+
+    location /assets/ {
+        try_files $uri =404;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header Referrer-Policy "no-referrer" always;
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        add_header Referrer-Policy "no-referrer" always;
+    }
+    location /mcp-apps/ {
+        try_files $uri =404;
+        add_header Cache-Control "no-cache";
+        add_header Referrer-Policy "no-referrer" always;
+    }
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Referrer-Policy "no-referrer" always;
+    }
+}

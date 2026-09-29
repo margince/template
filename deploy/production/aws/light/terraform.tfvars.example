@@ -1,0 +1,36 @@
+# Copy to terraform.tfvars and fill in the values with no default below.
+
+# ---- Required, no default ----------------------------------------------------
+
+# MARGINCE_PUBLIC_BASE_URL. DNS for this host eventually CNAMEs to
+# cloudfront_domain_name (see README) — ACM's own DNS validation
+# (cloudfront.tf) is a separate, earlier manual step.
+public_base_url = "https://crm.example.com"
+
+# MARGINCE_ADMIN_PASSWORD for the first boot. Rotate/remove per
+# docs/deployment.md once the organization exists.
+admin_bootstrap_password = "change-me-before-first-boot"
+
+# A real release version — a git SHA, MARGINCE_RELEASE_VERSION, anything but
+# "latest". No default on purpose: picking a floating tag is an operator
+# decision this stack should not make silently.
+image_tag = "2026.09.01"
+
+# ---- Optional — shown with their defaults ------------------------------------
+
+# aws_region                    = "eu-central-1"
+# name_prefix                   = "margince-light"
+# environment                   = "production"  # stamped as the Environment tag on every resource
+# vpc_cidr                      = "10.30.0.0/16"
+# az_count                      = 2
+# cpu_architecture               = "arm64"  # or "x86_64" if you're not on Graviton
+# instance_type                  = "t4g.small"  # shared across edge/app/worker
+# root_volume_gb                 = 40           # shared across edge/app/worker
+# db_instance_class               = "db.t4g.micro"
+# db_allocated_storage_gb         = 20
+# db_engine_version               = "16.4"
+# db_backup_retention_days        = 3
+# log_retention_days              = 14
+# license_token                   = ""
+# enable_deep_monitoring          = false  # true adds SNS + a status-check alarm per instance (alarms.tf)
+# enable_waf                      = false  # true attaches a WAFv2 web ACL (AWS managed rule groups) to CloudFront
