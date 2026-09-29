@@ -85,7 +85,8 @@ margince-template/                   (instances use the same structure)
 └── docs/*.md              ○ guides
 
 ○ Template-owned. Instances do not modify these paths.
-● Instance-owned. The template provides instance.yaml and an empty extensions/.
+● Instance-owned. The template provides instance.yaml, an empty extensions/, and
+  deploy/production/ (Section 9.8).
 ◆ Changed only by make update-core REF=<tag>.
 ```
 
@@ -125,6 +126,8 @@ The template's own file:
 name: margince-default
 display_name: Margince Default
 core: v0.0.2
+deploy:
+  production: { adapter: host }
 ```
 
 Scripts read the file through the Go CLI in `scripts/cli`, run with
@@ -479,6 +482,44 @@ URL, the admin email, and how to read the admin password.
 **Desktop and trial bundles** generate `MARGINCE_WEBHOOK_KEY` as they already
 generate the vault and connector keys. `make smoke` sets the three keys, so
 the smoke test also covers the vault.
+
+### 9.8 Default Deployment Environment
+
+The template deploys to one Linux virtual machine (for example AWS EC2) by
+default. It ships `deploy/production/` for the `host` adapter, and its
+`instance.yaml` lists it:
+
+```yaml
+deploy:
+  production: { adapter: host }
+```
+
+`deploy/production/` is instance-owned. It is the output of
+`make deploy-init ENV=production` without `DOMAIN`, `SSH`, or `ADMIN_EMAIL`:
+
+- `host.env` has `HOST_SSH=` and `HOST_DOMAIN=` empty, with comments that say
+  what to enter.
+- `secrets` lists `MARGINCE_LICENSE`.
+- `config/margince.yaml` has the workspace (the instance `display_name`), the
+  first admin with the placeholder email `admin@example.com`, email off, and
+  MCP off.
+
+`make deploy-init` accepts a missing `DOMAIN`, `SSH`, or `ADMIN_EMAIL` and
+writes these placeholders; given values are written as before.
+
+`make new-instance` replaces `deploy/production/` in the new instance with a
+fresh `make deploy-init ENV=production` for that instance (its
+`display_name`), passing `DOMAIN`, `SSH`, and `ADMIN_EMAIL` when they are
+given to `make new-instance`, and writes the `deploy:` entry into the new
+`instance.yaml`.
+
+The `host` adapter's `check` step refuses to deploy, naming the file to edit,
+while `HOST_SSH` or `HOST_DOMAIN` is empty or `bootstrap_admin.email` is still
+`admin@example.com`. `preflight` keeps the license check (Section 9.7).
+
+A client's first deployment is: fill in `deploy/production/host.env` and the
+admin email, then `make host-bootstrap ENV=production` and
+`make deploy ENV=production VERSION=<v>` with `MARGINCE_LICENSE` set.
 
 ## 10. Versioning
 
