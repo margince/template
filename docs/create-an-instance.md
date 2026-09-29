@@ -1,235 +1,221 @@
 # Create an instance
 
-A client instance is a repository created from `margince-template` by
-`make new-instance`. It shares the template's history, so template changes
-merge into it later with `make template-sync`. This page covers creating one,
-what it contains, and how it stays current with the template and with core.
+This guide covers the life of a client instance repository: creating it from
+the template with `make new-instance`, what it contains, receiving template
+changes with `make template-sync`, upgrading core with `make update-core`, and
+adding instance-only `make` targets. It is for the developer who sets up and
+maintains an instance. An instance shares the template's git history, so
+template changes reach it by merge.
 
 ## 1. Prerequisites
 
-Run this from a checkout of `margince-template` with `make install` already
-done: `new-instance.sh` runs `cli check` from `scripts/cli` to validate the
-new instance's `instance.yaml`, which needs a working Go toolchain.
+- A checkout of `margince-template` on which `make install` has run.
+  `make new-instance` validates the new `instance.yaml` with the Go CLI in
+  `scripts/cli` and checks out `core/` from the template's own `core/`.
+- A clean template working tree: `git status --porcelain` prints nothing.
+- The checkout is the template, not an instance: `make new-instance` refuses
+  to run where a `.template-version` file exists.
+- For `PUSH=1`: the GitHub CLI (`gh`), signed in with the right to create
+  repositories in the target owner.
 
-`PUSH=1` additionally needs the GitHub CLI (`gh`), authenticated with rights
-to create repositories in the target organization.
+## 2. Create the instance
 
-The template tree must be clean (`git status --porcelain` empty) and must not
-itself be an instance: `make new-instance` refuses to run inside a checkout
-that already has a `.template-version` file.
+1. Run `make new-instance` in the template:
 
-## 2. Create
+   ```sh
+   make new-instance NAME=acme DISPLAY_NAME="Acme"
+   ```
 
-```sh
-make new-instance NAME=acme DISPLAY_NAME="Acme"
-```
+2. Go to the new directory and install it:
+
+   ```sh
+   cd ../margince-acme
+   make install
+   ```
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `NAME` | yes | The instance's short name. Must match `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters. Used in `instance.yaml`, image names (Section 8), and the default clone directory. |
-| `DISPLAY_NAME` | yes | The instance's user-facing name. One line: a value containing a newline is refused, not silently folded. |
-| `DIR` | no, defaults to `../margince-<NAME>` | Where the new instance is created. Fails if the path already exists. |
-| `DOMAIN` | no | The `production` environment's server domain (`HOST_DOMAIN`). Missing: an empty placeholder in `deploy/production/host.env`, to fill in later. |
-| `SSH` | no | The `production` environment's server (`HOST_SSH`, `user@host`). Missing: an empty placeholder in `deploy/production/host.env`, to fill in later. |
-| `ADMIN_EMAIL` | no | The `production` environment's first admin email. Missing: defaults to `admin@<DOMAIN>` when `DOMAIN` is given, otherwise the placeholder `admin@example.com`, to fill in later. |
-| `PUSH` | no | `PUSH=1` creates a private GitHub repository and pushes the instance to it (`gh repo create <OWNER>/margince-<NAME> --private --source <DIR> --remote origin --push`). Without it, nothing is pushed anywhere; the instance exists locally only. |
-| `OWNER` | yes, with `PUSH=1` | The GitHub organization `PUSH=1` creates the repository in. |
+| `NAME` | yes | The instance's short name. Must match `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 32 characters. Used in `instance.yaml`, the image names, the bundle names, and the default directory. |
+| `DISPLAY_NAME` | yes | The user-facing name. One line; a value with a line break is refused. |
+| `DIR` | no | Where the instance is created. Default: `../margince-<NAME>`, next to the template checkout. Fails if the path exists. |
+| `DOMAIN` | no | `HOST_DOMAIN` of the `production` environment. Default: empty, to fill in later. |
+| `SSH` | no | `HOST_SSH` (`user@host`) of the `production` environment. Default: empty, to fill in later. |
+| `ADMIN_EMAIL` | no | The first admin email of the `production` environment. Default: `admin@<DOMAIN>` when `DOMAIN` is given, otherwise the placeholder `admin@example.com`. |
+| `PUSH` | no | `PUSH=1` runs `gh repo create <OWNER>/margince-<NAME> --private --source <DIR> --remote origin --push`. Without it, nothing is pushed. |
+| `OWNER` | with `PUSH=1` | The GitHub user or organization that owns the new repository. There is no default. |
 
-`new-instance.sh` builds the candidate `instance.yaml` (`name`, `display_name`,
-`core`) and runs it through `cli check` before anything is created; if that
-fails, nothing is created. The clone, the submodule checkout, and the
-default `deploy/production/` scaffold happen after, and the scaffold is
-validated (the same `cli check`) only once it exists, after the clone. If
-that check, or any later step, fails (the clone, the submodule checkout, or
-the commit), the half-created directory is removed rather than left behind
-looking like a
-working instance.
+`make new-instance` does the following:
 
-On success, the new instance has a `template` remote pointing at this
-template (no `origin`, unless `PUSH=1` added one), a single commit on `main`
-adding `instance.yaml`, `.template-version`, `README.md`, and
-`deploy/production/` (the template's default deployment environment, Section
-9 below, regenerated for this instance's own `display_name` and, when given,
-`DOMAIN`/`SSH`/`ADMIN_EMAIL`), and `core/` checked out at the tag the
-template currently pins. The command prints the new directory and the next
-steps:
+1. Checks the variables, the clean working tree, and that `DIR` does not
+   exist.
+2. Prints a notice, and continues, when the template's `HEAD` is not on
+   `origin/main`.
+3. Builds the new `instance.yaml` (`name`, `display_name`, `core`) and
+   validates it with `cli check`. Nothing is created before this step passes.
+4. Clones the template into `DIR`, removes the `origin` remote, and adds a
+   `template` remote with the template's `origin` URL (or its local path when
+   it has no `origin`).
+5. Checks out `core/` at the commit the template pins.
+6. Writes `instance.yaml`, `.template-version` (the template commit), and a
+   new `README.md`.
+7. Replaces `deploy/` with a new `deploy/production/` from
+   `make deploy-init ENV=production ADAPTER=host`, for the instance's own
+   `display_name` and the given `DOMAIN`, `SSH`, and `ADMIN_EMAIL`.
+8. Commits these files as one commit on `main`.
+9. With `PUSH=1`, creates the GitHub repository and pushes to it.
 
+If a step before the commit fails, the new directory is removed. A failed push
+in step 9 leaves the committed instance in place; push it as Section 3
+describes. Without `PUSH=1` the command prints the next steps:
+`cd <dir> && make install && make dev`.
+
+## 3. Push an existing instance to GitHub
+
+Without `PUSH=1`, the instance has no `origin`. Create an empty repository,
+then add it and push:
+
+```sh
+git remote add origin <repository-url>
+git push -u origin main
 ```
-cd <dir> && make install && make dev
-```
 
-## 3. What the instance contains
-
-Every path in the template is either template-owned or instance-owned
-(design Section 6). The template ships the instance-owned paths empty or as
-examples; an instance fills them in without ever touching a template-owned
-path.
-
-`.template-owned` lists the template-owned paths, one git pathspec per line
-— `Makefile`, `scripts/`, `.github/workflows/`, `.githooks/`,
-`.gitleaks.toml`, `.gitignore`, `.template-owned` itself, `AGENTS.md`,
-`CLAUDE.md`, and `docs/*.md`.
-`.template-version` holds the one commit id of the template commit the
-instance last merged. `make check-template` reads `.template-owned` from
-that commit — not from the working tree — and fails if any listed path
-differs from it, including an added or untracked file inside one of those
-directories. Instance-owned paths (`instance.yaml`, `instance.mk`,
-`extensions/`, `config/`, `data/`, `deploy/`, `docs/client/`) are not checked
-and are where the instance's own work goes.
-
-The root `.gitignore` is template-owned. Put an instance's own ignore rules
-in a nested `.gitignore` inside an instance-owned directory (for example
-`extensions/.gitignore` or `data/.gitignore`), or in `.git/info/exclude` for
-rules that apply to one checkout only.
-
-`make check-template` protects against honest drift: an edit made to a
-template-owned path by mistake. It does not prevent a deliberate edit of
-`.template-version`, which changes the commit it compares against.
-Review changes to `.template-version` like any other change.
-
-## 4. Daily work
-
-`make dev` runs the development stack with the instance's units composed.
-`make new-unit NAME=<n>` scaffolds an extension in `extensions/<n>`. `make
-check` runs the full quality gate, including `check-instance` (is
-`instance.yaml` valid) and `check-template` (has the instance drifted from
-the template).
-
-## 5. Receiving template changes
-
-A fresh clone of an instance (for example from GitHub) has no `template`
-remote, because `git clone` creates `origin` only. Add it once per clone:
+A fresh clone of the instance has an `origin` but no `template` remote. Add it
+once per clone before you run `make template-sync`:
 
 ```sh
 git remote add template <template-url>
 ```
 
-Then run:
+## 4. What the instance contains
 
-```sh
-make template-sync
-```
+Every path is either template-owned or instance-owned. `.template-owned` lists
+the template-owned paths, one git pathspec per line: `Makefile`, `scripts/`,
+`.github/workflows/`, `.githooks/`, `.gitleaks.toml`, `.gitignore`,
+`.template-owned`, `AGENTS.md`, `CLAUDE.md`, and `docs/*.md`. Every other path
+is instance-owned. Make changes to template-owned paths in `margince-template`
+and merge them with `make template-sync`.
 
-This fetches the `template` remote, merges its `main` into the instance, and
-records the merged commit in `.template-version` in the merge commit
-(`chore: merge template <short> and record it`). `make check` (through
-`make check-template`) then compares template-owned paths against that new
-commit. If nothing changed, it reports `already at template commit`.
+| Path | Content |
+|---|---|
+| `instance.yaml` | `name`, `display_name`, `core`, an optional `data.dataset` (`<git-url>@<ref>`), and `deploy:`. `make check-instance` refuses unknown keys. |
+| `.template-version` | The one template commit the instance last merged. |
+| `README.md` | The instance's own README, written by `make new-instance`. |
+| `extensions/` | Extension units. A directory here is an enabled unit. See [adding-an-extension.md](adding-an-extension.md). |
+| `config/` | Local configuration created by `make config`. |
+| `data/` | Demo dataset references. |
+| `deploy/<env>/` | One directory per deployment environment. See [deploy.md](deploy.md). |
+| `docs/client/` | Client documentation. |
+| `instance.mk` | Optional instance-only `make` targets (Section 8). |
 
-The sync applies the following rules:
+`make check-template`, which `make check` runs, reads `.template-owned` from
+the commit in `.template-version`, not from the working tree. It fails when a
+listed path differs from that commit, including an added or untracked file
+inside a listed directory. It fetches the commit from `origin` when a shallow
+checkout lacks it. It does not detect a deliberate edit of
+`.template-version`; review changes to that file like any other change.
 
-| Case | Action |
-|------|--------|
-| The template pins a different core commit | The instance keeps its own `core` gitlink and `core/` checkout. The sync prints the template's pin. Run `make update-core REF=<tag>` to follow it. |
+The root `.gitignore` is template-owned. Put instance ignore rules in a
+`.gitignore` inside an instance-owned directory (for example
+`extensions/.gitignore`), or in `.git/info/exclude` for one checkout only.
+
+## 5. Daily work
+
+| Command | Function |
+|---|---|
+| `make dev` | Run the development stack with the instance's units. |
+| `make new-unit NAME=<name>` | Create a unit in `extensions/<name>`. |
+| `make u NAME=<unit>` | Run one unit's tests and the policy gates. |
+| `make check` | Run the full gate, including `check-instance` and `check-template`. |
+
+See [adding-an-extension.md](adding-an-extension.md) for the unit workflow.
+
+## 6. Receive template changes
+
+1. Commit or discard local changes. `make template-sync` refuses a working tree
+   with changes.
+2. Run the sync:
+
+   ```sh
+   make template-sync
+   ```
+
+3. Read the messages it prints, and review each file it names.
+4. Run `make check`.
+
+`make template-sync` fetches `main` from the `template` remote, merges it, and
+writes the merged commit to `.template-version` in the merge commit
+(`chore: merge template <short> and record it`). When there is nothing to
+merge it prints `already at template commit <short>`. `TEMPLATE_REMOTE`
+(default `template`) and `TEMPLATE_BRANCH` (default `main`) select another
+remote or branch.
+
+| Case | Result |
+|---|---|
+| The template pins a different core commit | The instance keeps its own `core` pin. The sync prints the template's pin and the `make update-core REF=<tag>` command that follows it. |
 | Conflict on an instance-owned path (`instance.yaml`, `instance.mk`, `README.md`, `.template-version`, `extensions/`, `config/`, `data/`, `deploy/`, `docs/client/`) | The instance's side is kept. |
-| Conflict on a path listed in the template's `.template-owned` | The template's side is taken. |
-| Conflict on any other path | The sync stops. The merge stays in progress and `.template-version` is not written. Resolve the paths, finish the merge with `git commit`, then run `make template-sync` again. |
-| The template changed `instance.yaml` or `README.md` | The sync prints `git diff <old> <target> -- <file>` so the change can be reviewed and applied by hand. |
+| Conflict on a path in the template's `.template-owned` | The template's side is taken. |
+| Conflict on any other path | The sync stops with the merge in progress and does not write `.template-version`. Resolve the paths, run `git commit`, then run `make template-sync` again. |
+| The merge adds a file under `deploy/` that the instance did not have | The file is removed, and the instance's own `deploy:` block in `instance.yaml` is restored. When it is a `deploy/production/` file, the sync prints the `make deploy-init ENV=production` command to create your own. |
+| The merge changes an existing `deploy/` file without a conflict | The change is kept, and the sync names the file for review. |
+| The template changed `instance.yaml` or `README.md` | The sync prints the `git diff <old> <new> -- <file>` command to review the change and apply it by hand. |
 
-## 6. Upgrading core
+## 7. Upgrade core
 
-```sh
-make update-core REF=v0.0.3
+1. Move `core/` to a core release tag:
+
+   ```sh
+   make update-core REF=v0.0.3
+   ```
+
+2. Run `make check`.
+3. Commit the change on its own:
+
+   ```sh
+   git commit core instance.yaml -m "core: bump to v0.0.3"
+   ```
+
+`REF` must be a core release tag that matches `^v[0-9]+\.[0-9]+\.[0-9]+$`,
+because `instance.yaml` records only release tags. A branch, a commit, or
+another tag is refused. `git -C core tag --list 'v*'` lists the tags. The
+command also refuses to run while `core/` holds work of its own (see
+[contributing-to-core.md](contributing-to-core.md)). After the move it runs
+`make config`, `make config-check`, and `make check-instance`; `make
+config-check` reports configuration keys that the new core added.
+
+## 8. Instance-only make targets
+
+`instance.mk` is optional and instance-owned; the template has none. The
+`Makefile` includes it with `-include instance.mk`. `make check-template` runs
+`scripts/check-instance-mk.sh`, which refuses an `instance.mk` that:
+
+- redefines a target the template defines;
+- assigns a variable whose name does not start with `INSTANCE_` (for example
+  `CORE := elsewhere` or `override VERSION = 1`);
+- prevents `make` from reading the `Makefile`, for example a recipe line
+  without its leading tab.
+
+Example:
+
+```make
+INSTANCE_LAB_DIR := lab
+
+lab-report: ## Print the lab report
+	@cat $(INSTANCE_LAB_DIR)/report.txt
 ```
 
-`REF` must match `^v[0-9]+\.[0-9]+\.[0-9]+$` (`v0.0.3`, not `main`, a bare
-commit, or a non-release tag such as `archive/pr100-salvage`), because
-`instance.yaml` can only record a release tag. The command moves `core/` to
-that tag and rewrites `core:` in `instance.yaml` to match. It also refuses to
-run if `core/` carries work of its own (see `docs/contributing-to-core.md`).
+## 9. Release and deploy the instance
 
-Commit the bump as its own reviewable change:
+Every new instance has the environment `production` in `instance.yaml`
+(`production: { adapter: host }`) and its files in `deploy/production/`. Fill
+in the values that are still placeholders, then follow
+[deploy.md](deploy.md#2-first-deployment-of-the-default-production-environment).
+The images that `make deploy` runs come from a release; see
+[release.md](release.md).
 
-```sh
-git commit core instance.yaml -m "core: bump to <tag>"
-```
+## Related guides
 
-## 7. Instance-only targets
-
-`instance.mk`, if present, is included by the template `Makefile` and holds
-make targets only this instance needs — the template ships none. It may only
-add targets, never redefine one the template already provides:
-`make check-template` runs `scripts/check-instance-mk.sh` first, which
-refuses an `instance.mk` that redefines a template target (make's own
-"overriding recipe"/"overriding commands" warning, turned into a failure) or
-that stops `make` from reading the Makefile at all (for example, a recipe
-line missing its leading tab).
-
-`instance.mk` may assign only variables whose names start with `INSTANCE_`
-(for example `INSTANCE_LAB_DIR := lab`). An assignment to any other variable,
-such as `CORE := elsewhere` or `override VERSION = 1`, would change what the
-template's targets do, so `scripts/check-instance-mk.sh` refuses it and names
-the variable.
-
-## 8. Image names
-
-```sh
-make package
-REGISTRY=myregistry.example.com make package
-```
-
-`make package` builds the `api`, `web`, and `worker` images from core's
-`docker-bake.hcl`, with the instance's units staged in. The image repository
-is the instance's `name` from `instance.yaml`, prefixed with `REGISTRY` when
-it is set:
-
-- `REGISTRY` unset: `<name>/api`, `/web`, `/worker`.
-- `REGISTRY=myregistry.example.com`:
-  `myregistry.example.com/<name>/api`, `/web`, `/worker`.
-
-`REGISTRY` is supplied at build time; it is not stored in `instance.yaml`.
-`make deploy` reads `REGISTRY` from the environment the same way to name the
-images it deploys; in `deploy.yml` it can be a GitHub Environment variable
-(Section 9).
-Each image carries the instance's name and git revision, core's git
-revision and release tag (`com.margince.core.version`, from `core:` in
-`instance.yaml`), and the staged unit set as OCI labels (`docker inspect <repo>/api:<version> --format
-'{{json .Config.Labels}}'`).
-
-## 9. Deploy
-
-Every new instance already has, in `instance.yaml`:
-
-```yaml
-deploy:
-  production: { adapter: host }
-```
-
-and a `deploy/production/` directory (`make new-instance`'s
-`DOMAIN`/`SSH`/`ADMIN_EMAIL`, Section 2 above, or their placeholders otherwise).
-Fill in `deploy/production/host.env` and the admin email in
-`deploy/production/config/margince.yaml`, then `make host-bootstrap
-ENV=production` and `make deploy ENV=production VERSION=<v>` with
-`MARGINCE_LICENSE` set.
-
-For another environment, `make deploy-init ENV=<env> [ADAPTER=host|hook]
-[DOMAIN=<host>] [SSH=user@host] [ADMIN_EMAIL=<email>]`: it scaffolds
-`deploy/<env>/` (for the `host` adapter: `host.env`, `secrets`,
-`config/margince.yaml`) and adds the environment under `deploy:` in
-`instance.yaml` in one step, printing the next commands (setting
-`MARGINCE_LICENSE`, bootstrapping or wiring the target, then `make deploy`).
-`DOMAIN`, `SSH` and `ADMIN_EMAIL` are all optional — a missing one is written
-as a placeholder to fill in later, and `check` (so `make deploy`) refuses to
-run while one is still a placeholder, naming the file to edit. It refuses to
-run over an existing `deploy/<env>/` directory or an existing `deploy.<env>`
-entry, so it is safe to run once per environment.
-
-To add an environment by hand instead, add it under `deploy:` in
-`instance.yaml`:
-
-```yaml
-deploy:
-  staging:
-    adapter: hook
-```
-
-The environment name must match `^[a-z0-9]+(-[a-z0-9]+)*$`. The available
-adapters are `hook` and `host`; any other value is refused with
-`deploy.<env>.adapter: "<value>" is not an adapter (want hook or host)`.
-`make check-instance` fails if an environment has no matching
-`deploy/<env>/` directory.
-
-The full deployment contract — the four steps, the variables every step
-receives, the `hook` adapter with an example, the built-in `host` adapter
-end to end, and running `deploy.yml` in CI — is in
-[deploy.md](deploy.md).
+- [adding-an-extension.md](adding-an-extension.md): create and test a unit.
+- [release.md](release.md): cut a release and name the images.
+- [deploy.md](deploy.md): deploy a release to an environment.
+- [contributing-to-core.md](contributing-to-core.md): change core itself.
+- [troubleshooting.md](troubleshooting.md): known errors.
