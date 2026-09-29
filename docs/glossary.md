@@ -1,177 +1,202 @@
 # Glossary
 
-Words this repository uses in a specific way. Each entry says where the word is
-defined in code, so you can check it.
+The terms that the guides of this repository use, with one definition each.
+The guides use these names and no others for the same concepts. Where a term
+is defined in code, the entry names the file.
 
-## composition / to compose
+## adapter
 
-The composed tree upstream's generator writes from the units it finds. `make
-compose` stages, then calls core's `composition` target, which runs
-`core/backend/tools/gen-composition` over `core/extensions/`. The output is
-`core/build/composition/` (a Go workspace and a generated `Extensions()`
-function) and `core/build/composition-frontend/` (the pnpm workspace for unit
-frontends). See `core/docs/explanation/extensibility.md` and the `compose`
-target in the `Makefile`.
+The script that performs the steps of a deployment for an environment:
+`host` (`scripts/deploy/host.sh`, the built-in adapter for one Linux server
+with Docker Compose) or `hook` (`scripts/deploy/hook.sh`, which runs the
+environment's own hook scripts). `instance.yaml` names the adapter of each
+environment. See [deploy.md](deploy.md).
+
+## composition
+
+The generated tree that combines core with the staged units. `make compose`
+stages the units, runs core's composer (`core/backend/tools/gen-composition`)
+over `core/extensions/`, and writes `core/build/composition/` (the Go workspace
+and the generated `Extensions()` function) and
+`core/build/composition-frontend/` (the pnpm workspace of the unit screens).
+To compose is to run `make compose`.
+
+## core
+
+Margince, the product: the `margince/margince` repository, included in every
+instance as the git submodule `core/`. Never edited in an instance; changes go
+to core through [contributing-to-core.md](contributing-to-core.md).
+
+## core pin
+
+The core release tag that an instance uses: the `core` field of
+`instance.yaml` and the commit that the `core/` submodule records. Only
+`make update-core REF=<tag>` changes it. `make check-instance` checks that
+`core/` is at the tag, and `make core-check-pin` checks that the commit is on
+core's `main`.
 
 ## craft
 
-Upstream's code-craftsmanship linter, `core/cli/craft`. `scripts/lint.sh` runs
-`craft static --strict` over `extensions/`. The tool's own description is at the
-top of `core/cli/craft/main.go`: it reviews code against a rubric. It is one of
-the four legs of `make lint`, next to gofmt, golangci-lint and Biome.
+Core's code-quality linter. `make lint` runs `craft static --strict` over
+`extensions/`, using the binary that `core/scripts/craft-pin.sh` downloads.
+
+## desktop folder
+
+The self-contained Margince folder for macOS or Windows that `make desktop`
+(macOS) or `desktop-windows.yml` (Windows) builds: PostgreSQL, the event bus,
+`api`, `worker`, the web UI, and a launcher, with the instance's units. An
+installed copy, for example at `~/Margince`, is a desktop installation. See
+[desktop-build.md](desktop-build.md).
 
 ## drift
 
-Two related uses. The `drift` make target (delegating to core's
-`backend/Makefile:472`) fails when a generated file no longer matches its
-source: `*_gen.go`, the contracts, and every
-`extensions/*/manifest.generated.json`. `make update-core` also uses the word
-loosely for config drift — the settings your `config/` files are missing after
-an upstream bump, reported by `make config-check`.
+A generated file that no longer matches its generator. `make drift` runs
+core's `drift` target, which includes each unit's `manifest.generated.json`.
+
+## environment
+
+A deployment target of an instance, for example `production`: a key under
+`deploy:` in `instance.yaml` and the directory `deploy/<env>/`. Each
+environment has one adapter. `make deploy-init` creates one. See
+[deploy.md](deploy.md#1-environments).
+
+## extension
+
+Core's name for a unit. Core's documents, and target names such as
+`test-extensions`, use it; the guides of this repository use unit.
 
 ## extension surface
 
-The set of packages under `core/backend/pkg/` a unit is allowed to import. A
-package is in the set only if a source file carries the comment marker
-`//margince:extension-surface`. Today the marked packages are `pkg/extension`,
-`pkg/extension/jurisdiction` and `pkg/extension/crm`. The marker string is read
-by `core/backend/extensions_arch_test.go` (`extensionSurfaceMarker`);
-`TestSurfaceMarkerLivesOnlyUnderPkg` restricts where it may appear, and
-`TestExtensionsImportOnlyTheAllowlistedSurface` admits a unit's import. Both run
-in `make arch`.
+The packages under `core/backend/pkg/` that a unit may import: the packages
+with a source file that carries the comment `//margince:extension-surface`.
+Core's tests `TestSurfaceMarkerLivesOnlyUnderPkg` and
+`TestExtensionsImportOnlyTheAllowlistedSurface` enforce the rule; `make arch`
+runs them.
+
+## full gate
+
+`make check`, and in CI `full-check.yml`, which `release.yml` calls. `make ci`
+adds the database lane and the submodule checks. See
+[release.md](release.md#9-ci-workflows).
 
 ## gate
 
-A make target whose only job is to fail the build on a rule. Examples in this
-repo: `ext-imports` (import allowlist), `arch` (upstream's fitness tests),
-`check-manifests`, `drift`, `check-composition`, `secret-scan`. `make check`
-runs them all; `make u` runs the cheap ones for one unit.
+A `make` target that fails when a rule is broken, for example `ext-imports`,
+`arch`, `check-manifests`, `drift`, `check-composition`, or `secret-scan`.
+`make check` runs all gates; `make u` runs the fast gates for one unit.
 
-## installation
+## instance
 
-This repository: upstream core plus the instance's unit set plus a submodule
-pointer. The word marks the difference between this repo and upstream core,
-which is a dependency here. Inconsistency: an instance repository is typically
-named `margince-<client>-instance`, and a few `Makefile` comments say
-"instance". Use **installation** in prose.
+A client's Margince repository, created from the template with
+`make new-instance`: core as a submodule, the client's units, configuration,
+demo dataset reference, and environments. The template is itself an instance,
+Margince Default. `instance.yaml` describes the instance. See
+[create-an-instance.md](create-an-instance.md).
 
-## jurisdiction gate
+## instance-owned
 
-`core/scripts/check-no-jurisdiction.sh`, reached here as `make -C core
-fitness-jurisdiction` (an alias for `no-jurisdiction`, `core/Makefile:173`) and
-run by `make u`. It greps `backend/internal` — **not** `extensions/` — for
-country-specific regulatory identifiers (`XRechnung`, `ZUGFeRD`, `DATEV`,
-`GoBD`, `eIDAS`, `Impressum`) and for a quoted upper-case ISO-3166 alpha-2 code
-on a line that also mentions country or jurisdiction. Hits under
-`/ports/jurisdiction/`, generated files, tests and comments are excluded. An
-extension is jurisdiction-specific by design, so a unit is never scanned.
+A path that the instance owns and changes freely: every path that
+`.template-owned` does not list, for example `instance.yaml`, `extensions/`,
+`deploy/`, and `README.md`. `make template-sync` keeps the instance's version.
 
 ## lane
 
-A make target you run, as listed by `make help` (which greps targets carrying a
-`## ` comment out of the `Makefile`). Used for both this repo's targets and
-upstream's — hence the `core-root-<lane>` and `core-backend-<lane>` pattern
-rules that run an upstream target after staging.
+A `make` target that a developer runs, as `make help` lists them. The pattern
+rules `core-root-<lane>` and `core-backend-<lane>` stage the units and then run
+a target of core's `Makefile` or `backend/Makefile`.
 
-## module-path trap
+## light gate
 
-A unit's module path and the host's module path use unrelated namespaces. A
-unit is `margince.instance/extensions/<name>` (see any `extensions/*/go.mod`);
-the host it imports is `github.com/margince/margince/backend/...` (see
-`core/backend/go.mod` and the header of `scripts/gowork.sh`). `margince.instance`
-is ours, `github.com/margince/margince` is upstream. A unit's own path is never
-fetched: it is resolved through the composed workspace.
+The gates that `ci.yml` runs on every pull request and push to `main`. See
+[release.md](release.md#9-ci-workflows).
 
-## overlay
+## manifest
 
-`core/config/margince.dev.yaml`, upstream's tracked dev overlay. It is read only
-when `MARGINCE_ENV=dev`, on top of `config/margince.yaml`, later layer winning
-per key. It arms the "Reset data" action. It is tracked upstream and yours is
-not, deliberately — see the file's own header comment.
+`extensions/<unit>/manifest.generated.json`: the record, derived by core's
+composer from the unit's declaration, of what the unit requests (risk tiers,
+secrets, subscriptions, ingress). `make compose` writes it; it is committed;
+`make check-manifests` checks it.
 
-## pass 1 and pass 2
+## Margince Default
 
-The two halves of `make check`, defined in the comment above the `check` target
-in the `Makefile`. Pass 1 runs upstream's own gate on a **pristine, unstaged**
-checkout, because core's `check` includes
-`TestEveryEnabledExtensionIsTracked`, which asserts every unit under
-`extensions/` is tracked by core — false by construction for a staged unit, so
-that lane can never pass with ours present. Pass 2 stages our units and runs the
-gates that can see them (lint, build, unit tests, arch, the screen suites,
-manifests, drift).
+The template used as an instance without units: `name: margince-default` in
+the template's `instance.yaml`.
 
-## posture
+## pass 1, pass 2
 
-A configured stance, in `config/margince.yaml` and the overlay. The file uses it
-for several settings: retention posture at first boot, license posture, AI
-runtime posture (`ai.capture_payloads`, which turns on AI payload capture), and
-capture-pipeline posture. It is not one field — read the comment next to the
-setting you mean.
+The two parts of `make check`. Pass 1 runs core's own `check` with the units
+unstaged, because core's `check` asserts that every unit under
+`core/extensions/` is tracked by core. Pass 2 stages the units and runs the
+gates that check them. See [adding-an-extension.md](adding-an-extension.md#8-what-make-check-runs).
+
+## release
+
+A version of an instance: a git tag in the release version format
+(`vX.Y.Z` or `vX.Y.Z-rc.N`), the images built from it, and the GitHub Release
+with the desktop bundles. `make release` creates the tag; `release.yml`
+builds the release. See [release.md](release.md).
 
 ## risk tier
 
-An entry in a unit's `manifest.generated.json`, under `risk_tiers`. The composer
-derives it statically from the `extension.Extension` literal's AST: one entry
-per governed operation the unit adds (an agent tool, a job), carrying its id,
-operation, scopes, `tier` (for example `auto_execute`) and digests. A unit that
-declares no governed operation has an empty list. See
-`core/docs/explanation/extensibility.md` and
-`core/extensions/openchannel/manifest.generated.json`, upstream's own worked
-example.
-
-## scratch / staged copy
-
-`core/extensions/<unit>/`. It is a copy of `extensions/<unit>/`, written by
-`scripts/stage.sh` and deleted by `make unstage`. Never edit it: staging deletes
-and recopies each unit unconditionally, so the next `make compose` overwrites it
-without warning. `scripts/lib.sh` records which directories this repo copied in
-a marker file inside the submodule's git dir, so unstaging removes ours and
-never an upstream-owned one.
+An entry under `risk_tiers` in a unit's manifest: one governed operation that
+the unit adds, with its scopes and tier (for example `auto_execute`). A unit
+without governed operations has an empty list.
 
 ## seam
 
-A place in core that a unit is written against — a package on the extension
-surface, or an interface it exposes. "A unit needs a seam core does not expose"
-means a package must be added under `core/backend/pkg/extension/` with the
-`//margince:extension-surface` marker, which is a change to core, not to this
-repo. The procedure is `docs/contributing-to-core.md`.
+A place in core that a unit is written against, usually a package on the
+extension surface. A unit that needs a seam that core does not have needs a
+change to core ([contributing-to-core.md](contributing-to-core.md)).
 
 ## slug
 
-Two unrelated meanings.
+1. `DEV_SLUG=<name>`: the name of a separate development stack with its own
+   database and ports (`make dev DEV_SLUG=<name>`).
+2. The part after `/` in a core contribution branch name, `<type>/<slug>`
+   (`make core-branch`).
 
-1. `DEV_SLUG=<name>` names an isolated dev stack: its own database
-   (`margince_dev_<slug>`) and slug-derived ports, and it sweeps nothing else on
-   the machine. See `README.md` "The stack" and `core/Makefile:125`.
-2. The second half of a core contribution branch name, `<type>/<slug>` — the
-   lower-case hyphenated words after `feat`, `fix`, `chore`, `docs`, `refactor`,
-   `test` or `perf`. `make core-branch` refuses any other shape. See
-   `docs/contributing-to-core.md` and `scripts/core-contrib.sh`.
+## staged copy
 
-The two have nothing to do with each other.
+`core/extensions/<unit>/`: the copy of `extensions/<unit>/` that staging
+writes. Never edit it; the next `make stage` replaces it. `make unstage`
+removes the staged copies. `scripts/lib.sh` records the staged units in a
+marker file in the submodule's git directory, so unstaging removes only the
+instance's units.
 
-## staging / to stage
+## staging
 
-Copying what this repository owns into `core/`, so upstream's tooling sees it at
-the paths it reads: `extensions/*` into `core/extensions/` for the composer, and
-this installation's `.env.local` and `config/margince.yaml` to the paths core's
-own Makefile and dev stack read them from. `make stage` runs
-`scripts/stage.sh` and `scripts/config-init.sh stage`, then regenerates
-`go.work` and `tsconfig.json` for editors.
+Copying the instance's units and configuration into `core/`, where core's
+tools read them. `make stage` copies `extensions/*` to `core/extensions/`
+(without `node_modules`), copies `.env.local` and `config/margince.yaml` into
+`core/`, and writes the editor files `go.work` and `tsconfig.json`. Every lane
+that builds or tests the composition stages first. It is a copy, not a
+symbolic link, because core's composer refuses a linked unit.
 
-A copy, never a symlink, and each half has its own reason: `gen-composition`
-refuses a symlinked unit entry, and upstream's gates walk the whole submodule
-tree and refuse the first symlink they meet anywhere in it. Presence under
-`<core-root>/extensions/` is the enablement.
+## template
 
-Every lane in the `Makefile` depends on it, which is what keeps a staged copy
-from drifting from ours. `make unstage` removes our unit copies again.
+This repository, `margince-template`: the source of every instance. It owns
+the `Makefile`, `scripts/`, the workflows, and the guides.
+
+## template-owned
+
+A path that the template owns, listed in `.template-owned`. An instance
+receives changes to it only through `make template-sync`, and
+`make check-template` fails when an instance changes it.
+
+## template sync
+
+`make template-sync`: merging the template's `main` into an instance and
+recording the template commit in `.template-version`. See
+[create-an-instance.md](create-an-instance.md#6-receive-template-changes).
+
+## trial bundle
+
+A desktop folder that runs in production mode with a trial license, built with
+`make trial`. See [trial.md](trial.md).
 
 ## unit
 
-An instance extension module: one directory under `extensions/`, its own Go
-module, exporting `func New() extension.Extension`. Inconsistency: the same
-thing is also called "extension" (upstream's word, and the word in file and
-target names such as `test-extensions`) and "our-unit" (in path placeholders
-like `core/extensions/<our-unit>/`). Use **unit** in prose, and **extension**
-only when quoting upstream's contract.
+An extension of an instance: one directory under `extensions/`, its own Go
+module (`margince.instance/extensions/<name>`), which exports
+`func New() extension.Extension`. The directory's presence enables it. See
+[adding-an-extension.md](adding-an-extension.md).
