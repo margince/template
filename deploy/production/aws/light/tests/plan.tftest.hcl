@@ -218,3 +218,11 @@ run "rejects_bad_alert_email" {
 
   expect_failures = [var.alert_email]
 }
+
+run "removed_waf_variable_is_refused" {
+  command = plan
+  variables {
+    enable_waf = true
+  }
+  expect_failures = [var.enable_waf]
+}

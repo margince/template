@@ -688,3 +688,15 @@ resource "aws_wafv2_web_acl_logging_configuration" "alb" {
     }
   }
 }
+
+# Rule groups and rules cost WAF capacity units (WCU). Up to 1,500 WCU is
+# included in the web ACL price; each further 500 WCU adds a per-request
+# charge (limit 5,000). Estimated from AWS's published costs: about 1,405 WCU
+# by default, about 1,482 with the geo allow-list and Bot Control. AWS
+# reports the real value after apply; this check warns when it passes 1,500.
+check "waf_capacity_within_included" {
+  assert {
+    condition     = aws_wafv2_web_acl.alb.capacity <= 1500
+    error_message = "The WAF web ACL uses ${aws_wafv2_web_acl.alb.capacity} WCU, above the 1,500 included in its price; requests are billed at a higher rate. Drop a rule group (for example AWSManagedRulesLinuxRuleSet, 200 WCU) to get back under."
+  }
+}

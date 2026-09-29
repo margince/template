@@ -15,6 +15,17 @@ mock_provider "aws" {
 
 mock_provider "random" {}
 
+# The web ACL's capacity is known only after apply; pin the estimate so the
+# waf_capacity_within_included check can run at plan time.
+override_resource {
+  target          = aws_wafv2_web_acl.alb
+  override_during = plan
+  values = {
+    capacity = 1405
+    arn      = "arn:aws:wafv2:eu-central-1:123456789012:regional/webacl/margince-waf/00000000-0000-0000-0000-000000000000"
+  }
+}
+
 variables {
   public_base_url          = "https://crm.example.com"
   image_tag                = "v0.1.0"
@@ -289,4 +300,12 @@ run "alarms_off" {
     condition     = length(aws_sns_topic.alerts) == 0 && length(aws_cloudwatch_metric_alarm.alb_elb_5xx) == 0 && length(aws_cloudwatch_metric_alarm.ecs_cpu) == 0
     error_message = "enable_alarms = false removes the topic and alarms."
   }
+}
+
+run "removed_variable_is_refused" {
+  command = plan
+  variables {
+    enable_deep_monitoring = true
+  }
+  expect_failures = [var.enable_deep_monitoring]
 }

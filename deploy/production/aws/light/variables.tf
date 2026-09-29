@@ -260,3 +260,27 @@ variable "auth_rate_limit_per_minute" {
     error_message = "auth_rate_limit_per_minute must be at least 1."
   }
 }
+
+# Removed. Declared only so an old terraform.tfvars entry fails with a clear
+# message; Terraform would otherwise ignore it with a warning.
+variable "enable_waf" {
+  description = "Removed: light has no WAF by design; nginx on edge rate-limits the credential endpoints."
+  type        = any
+  default     = null
+  validation {
+    condition     = var.enable_waf == null
+    error_message = "enable_waf was removed: light has no WAF by design; nginx on edge rate-limits the credential endpoints. Delete it from terraform.tfvars."
+  }
+}
+
+# Removed. Declared only so an old terraform.tfvars entry fails with a clear
+# message; Terraform would otherwise ignore it with a warning.
+variable "enable_deep_monitoring" {
+  description = "Removed: renamed to enable_alarms (default true)."
+  type        = any
+  default     = null
+  validation {
+    condition     = var.enable_deep_monitoring == null
+    error_message = "enable_deep_monitoring was removed: renamed to enable_alarms (default true). Delete it from terraform.tfvars."
+  }
+}

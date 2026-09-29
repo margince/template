@@ -449,8 +449,14 @@ destroys the `aws_secretsmanager_secret` resources (scheduled for deletion
 with the default 30-day recovery window; nothing reuses their names),
 creates the SSM parameters with the same values, and replaces all three
 instances because their user data changed. The WAF web ACL, if you had
-`enable_waf = true`, is destroyed; remove `enable_waf` and
-`enable_deep_monitoring` from your `terraform.tfvars`.
+`enable_waf = true`, is destroyed. An old `enable_waf` or
+`enable_deep_monitoring` entry in `terraform.tfvars` fails the plan with a
+message; delete it (`enable_deep_monitoring` is now `enable_alarms`).
+
+Replacing the app instance loses valkey's data, which lives on its root
+disk: sessions and any outbox events not yet relayed. Apply in a quiet
+window, after the worker has drained the queue. Postgres and S3 data are not
+affected. The site is down while the three instances rebuild from source.
 
 ## Security posture
 

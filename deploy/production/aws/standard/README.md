@@ -253,9 +253,20 @@ WOULD have been blocked:
 # CloudWatch Logs Insights on aws-waf-logs-<name_prefix>. In count mode a
 # would-be block is an ALLOW record whose nonTerminatingMatchingRules names
 # the rule (or rule group); ruleGroupList carries the rule inside the group.
-fields @timestamp, httpRequest.clientIp, httpRequest.uri, nonTerminatingMatchingRules.0.ruleId, ruleGroupList.0.terminatingRule.ruleId
+# 1. Which web ACL rules would have blocked (top-level counted rules: rate
+#    limits, geo, and each managed rule group running in count mode):
+fields @timestamp, httpRequest.clientIp, httpRequest.uri, nonTerminatingMatchingRules.0.ruleId as rule
 | filter ispresent(nonTerminatingMatchingRules.0.ruleId)
-| stats count(*) as hits by nonTerminatingMatchingRules.0.ruleId, ruleGroupList.0.terminatingRule.ruleId, httpRequest.uri
+| stats count(*) as hits by rule, httpRequest.uri
+| sort hits desc
+
+# 2. Which managed rule inside a group matched. Every matching managed rule
+#    adds a label (awswaf:managed:aws:<group>:<rule>), in count and block
+#    mode alike, whatever group it sits in:
+fields @timestamp, httpRequest.uri, @message
+| parse @message /"labels":\[(?<labels>[^\]]*)\]/
+| filter labels like /awswaf:managed:aws/
+| stats count(*) as hits by labels, httpRequest.uri
 | sort hits desc
 ```
 
@@ -271,6 +282,20 @@ filter keeps only BLOCK / COUNT / EXCLUDED_AS_COUNT records and drops plain
 ALLOW traffic, which is most of the volume and already in the ALB access
 logs; in count mode everything is kept, since the would-be blocks are ALLOW
 records with non-terminating matches.
+
+## Upgrading an existing deployment
+
+Moving from the Secrets Manager version of this stack, one `terraform apply`:
+
+| Change | Effect |
+|---|---|
+| Secrets | The `aws_secretsmanager_secret` resources are destroyed (30-day recovery window) and SSM parameters are created with the same values. The api and worker task definitions get a new revision that reads SSM, and ECS rolls the services. |
+| VPC endpoints | The `secretsmanager` interface endpoint is replaced by `ssm`. The endpoint security group is replaced (`create_before_destroy`), so running tasks keep their connections. Plan the apply for a quiet window: tasks started during it may retry their first SSM read. |
+| Variables | `enable_deep_monitoring` is now `enable_alarms` (default `true`). An old entry in `terraform.tfvars` fails the plan with that message; delete it. |
+| WAF | `waf_mode` defaults to `count`: a web ACL that blocked before only counts after the upgrade. Set `waf_mode = "block"` in the same apply to keep blocking, or follow "WAF rollout". |
+
+Check `terraform output waf_capacity` after the apply: up to 1,500 WCU is
+included in the web ACL price.
 
 ## Security posture
 

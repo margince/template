@@ -402,3 +402,15 @@ variable "waf_log_retention_days" {
   type        = number
   default     = 30
 }
+
+# Removed. Declared only so an old terraform.tfvars entry fails with a clear
+# message; Terraform would otherwise ignore it with a warning.
+variable "enable_deep_monitoring" {
+  description = "Removed: renamed to enable_alarms (default true)."
+  type        = any
+  default     = null
+  validation {
+    condition     = var.enable_deep_monitoring == null
+    error_message = "enable_deep_monitoring was removed: renamed to enable_alarms (default true). Delete it from terraform.tfvars."
+  }
+}

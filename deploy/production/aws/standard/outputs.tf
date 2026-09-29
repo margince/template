@@ -108,3 +108,8 @@ output "private_subnet_ids" {
   description = "Private subnets; launch the temporary bootstrap host in one of these."
   value       = aws_subnet.private[*].id
 }
+
+output "waf_capacity" {
+  description = "WAF capacity units the web ACL uses. Up to 1,500 are included in its price."
+  value       = aws_wafv2_web_acl.alb.capacity
+}
