@@ -216,11 +216,7 @@ EOF
 # line is left exactly as it was: no other line is read, reordered or
 # rewritten.
 #
-# The `deploy:` line is matched with a pattern, not string equality, so a
-# trailing comment (`deploy: # environments`) is still recognized as the key
-# rather than read as absent — which would otherwise plant a second,
-# shadowing top-level `deploy:` block.
-DEPLOY_KEY_RE='^deploy:[[:space:]]*(#.*)?$'
+# DEPLOY_KEY_RE (the `deploy:` line pattern) is defined in lib.sh.
 add_deploy_env() {
   local file="$1" tmp
   tmp="$(mktemp)"

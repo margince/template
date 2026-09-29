@@ -73,6 +73,14 @@ instance_validate() {
   cli_run validate -file "${INSTANCE_FILE:-$ROOT/instance.yaml}"
 }
 
+# The `deploy:` top-level key in instance.yaml, matched with a pattern (not
+# string equality) so a trailing comment (`deploy: # environments`) is still
+# recognized as the key rather than read as absent — which would otherwise
+# plant a second, shadowing top-level `deploy:` block. Shared by
+# deploy-init.sh (adding one environment's line) and template-sync.sh
+# (restoring the instance's own deploy: block after a merge).
+DEPLOY_KEY_RE='^deploy:[[:space:]]*(#.*)?$'
+
 # A template or instance release version (design Section 10).
 RELEASE_VERSION_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$'
 is_release_version() { [[ "${1:-}" =~ $RELEASE_VERSION_RE ]]; }

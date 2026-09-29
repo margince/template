@@ -130,6 +130,87 @@ if [ -n "$unresolved" ]; then
   die "template-sync: resolve them, finish the merge with git commit, then run make template-sync again"
 fi
 
+# deploy/ is instance-owned (is_instance_owned above), but that only decides
+# a CONFLICT: a path neither side touched merges in cleanly with no conflict
+# at all, so a merge can add a deploy/<env>/ this instance never had (design
+# Section 9.8 — for example a pre-9.8 instance merging a template that now
+# ships deploy/production/, describing the TEMPLATE's own environment, not
+# this one). Remove every such new path; instance.yaml's matching deploy:
+# entry is restored below. A deploy/ path that already existed here and the
+# merge changed without a conflict is left as the merge produced it — same
+# ownership rule as instance.yaml/README.md below — but flagged for review.
+deploy_paths_now="$(git ls-files -- deploy/)"
+removed_deploy_paths=""
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  git cat-file -e "$pre:$path" 2>/dev/null && continue
+  git rm --quiet --cached -f -- "$path"
+  rm -f -- "$path"
+  echo "template-sync: removed $path (new to this instance; the template added it)"
+  removed_deploy_paths="$removed_deploy_paths
+$path"
+done <<EOF
+$deploy_paths_now
+EOF
+# Directories left empty by the removal above are not tracked by git, but
+# clean up the working tree so it does not look like a half-scaffolded
+# environment.
+find deploy -depth -type d -empty -delete 2>/dev/null || true
+
+if printf '%s\n' "$removed_deploy_paths" | grep -q '^deploy/production/'; then
+  echo "template-sync: the template now ships a default production environment; create yours with make deploy-init ENV=production (DOMAIN=, SSH=, ADMIN_EMAIL=)"
+fi
+
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  git cat-file -e "$pre:$path" 2>/dev/null || continue
+  git diff --quiet "$pre" -- "$path" && continue
+  echo "template-sync: the template changed $path; review with git diff HEAD -- $path"
+done <<EOF
+$deploy_paths_now
+EOF
+
+# instance.yaml: a deploy: entry the merge added for a deploy/<env>/ that was
+# just removed above (never existed before this merge) would now name a
+# directory that does not exist. Restore instance.yaml's OWN pre-merge
+# deploy: block — the same "keep the instance's side" rule take_side already
+# applies to instance-owned paths on conflict, applied here to a
+# non-conflicting addition instead (the simplest correct fix: instance.yaml's
+# deploy: entries are always the instance's own).
+removed_envs="$(printf '%s\n' "$removed_deploy_paths" | sed -n 's#^deploy/\([^/][^/]*\)/.*#\1#p' | sort -u)"
+if [ -n "$removed_envs" ] && [ -f instance.yaml ]; then
+  restore_deploy_block=""
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    grep -qE "^[[:space:]]{2}$e:" instance.yaml && restore_deploy_block=1
+  done <<EOF
+$removed_envs
+EOF
+  if [ -n "$restore_deploy_block" ]; then
+    pre_yaml="$(mktemp)"
+    git show "$pre:instance.yaml" > "$pre_yaml" 2>/dev/null || : > "$pre_yaml"
+    tmp_yaml="$(mktemp)"
+    {
+      # The merged file with its (newly grown) deploy: block cut out.
+      awk -v re="$DEPLOY_KEY_RE" '
+        $0 ~ re { skip=1; next }
+        skip && /^[[:space:]]/ { next }
+        { skip=0; print }
+      ' instance.yaml
+      # This instance's own pre-merge deploy: block, if it had one at all.
+      awk -v re="$DEPLOY_KEY_RE" '
+        $0 ~ re { print; grab=1; next }
+        grab && /^[[:space:]]/ { print; next }
+        { grab=0 }
+      ' "$pre_yaml"
+    } > "$tmp_yaml"
+    cat "$tmp_yaml" > instance.yaml
+    rm -f "$pre_yaml" "$tmp_yaml"
+    git add instance.yaml
+    echo "template-sync: restored instance.yaml's own deploy: entries (the merge added one whose deploy/<env>/ this instance never had)"
+  fi
+fi
+
 # The template's own versions of these files are not merged over the
 # instance's when they conflict; point at what changed so it can be reviewed.
 if git cat-file -e "$old^{commit}" 2>/dev/null; then
