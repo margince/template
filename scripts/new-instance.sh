@@ -119,7 +119,7 @@ EOF
 # just written above, and adds deploy.production to it. DOMAIN, SSH and
 # ADMIN_EMAIL are all optional; deploy-init writes its usual placeholders for
 # whichever ones are missing.
-(cd "$dir" && env ENV=production DOMAIN="$domain" SSH="$ssh" ADMIN_EMAIL="$admin_email" bash scripts/deploy-init.sh) \
+(cd "$dir" && env ENV=production ADAPTER=host DOMAIN="$domain" SSH="$ssh" ADMIN_EMAIL="$admin_email" bash scripts/deploy-init.sh) \
   || die "new-instance: could not scaffold the default deploy/production/ (see above)"
 
 git -C "$dir" add instance.yaml .template-version README.md deploy

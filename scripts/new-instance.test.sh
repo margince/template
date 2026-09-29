@@ -143,6 +143,29 @@ else
 fi
 if [ -z "$(git -C "$DIR9" status --porcelain)" ]; then ok "commits deploy/ along with instance.yaml"; else fail "commits deploy/ along with instance.yaml: $(git -C "$DIR9" status --porcelain)"; fi
 
+# --- an exported/command-line ADAPTER cannot change the default deploy/production adapter ---
+# new-instance.sh's own deploy-init call must pass ADAPTER=host explicitly:
+# scripts/deploy-init.sh defaults ADAPTER to host only when ADAPTER is unset,
+# so an ADAPTER a caller's environment already exports (or passes on the
+# command line here) would otherwise silently scaffold deploy/production/ as
+# the hook adapter instead.
+DIR10="$TMP/margince-adapterhook"
+if out="$(create NAME=adapterhook DISPLAY_NAME=AdapterHook DIR="$DIR10" ADAPTER=hook 2>&1)"; then
+  ok "creates an instance with ADAPTER=hook exported"
+else
+  fail "creates an instance with ADAPTER=hook exported: $out"
+fi
+if [ "$(cli_get "$DIR10" deploy.production.adapter)" = "host" ]; then
+  ok "an exported ADAPTER does not change deploy.production.adapter away from host"
+else
+  fail "an exported ADAPTER does not change deploy.production.adapter away from host: $(cat "$DIR10/instance.yaml")"
+fi
+if [ -f "$DIR10/deploy/production/host.env" ]; then
+  ok "an exported ADAPTER does not change deploy/production/ away from the host adapter's files"
+else
+  fail "an exported ADAPTER does not change deploy/production/ away from the host adapter's files: $(find "$DIR10/deploy" 2>&1)"
+fi
+
 # --- core is dissociated from the template's checkout ---
 # Without --dissociate, core/'s objects depend on the template's own core
 # checkout via objects/info/alternates, so the instance's core/ silently stops
