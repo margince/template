@@ -1,6 +1,6 @@
 # Create an instance
 
-This guide covers the life of a client instance repository: creating it from
+This guide covers the life of your instance repository: creating it from
 the template with `make new-instance`, what it contains, receiving template
 changes with `make template-sync`, upgrading core with `make update-core`, and
 adding instance-only `make` targets. It is for the developer who sets up and

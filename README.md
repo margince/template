@@ -1,8 +1,8 @@
 # margince-template
 
-The template that every Margince client instance is created from. An instance
-is the Margince core product ([`margince/margince`](https://github.com/margince/margince))
-plus a client's extension units, configuration, demo data reference, and
+The template you create your Margince instance from. An instance is the
+Margince core product ([`margince/margince`](https://github.com/margince/margince))
+plus your extension units, configuration, demo data reference, and
 deployment definition. This repository defines the directory structure, the
 `make` targets, the CI workflows, and the deployment adapters that every
 instance uses. Without extensions, the template is itself a working instance,
@@ -55,7 +55,7 @@ with `MARGINCE_ENV=test`. `make local-down` stops the stack;
 `.local/` by hand: the data volumes stay, and the next `make local-up`
 generates database passwords that the old database rejects.
 
-### Create a client instance
+### Create your instance
 
 Run this in a template checkout on which `make install` has run:
 `make new-instance` checks out `core/` from the template's `core/` and
@@ -132,7 +132,7 @@ and infrastructure lanes, and the desktop lanes.
 | Gates | `make ci` | Run `make check` plus the database and submodule lanes. |
 | Gates | `make test-scripts` | Run the tests of the template's scripts and CLI. |
 | Gates | `make test-lifecycle` | Run the whole instance lifecycle in a scratch instance (slow; `KEEP=1` keeps it). |
-| Instance | `make new-instance NAME=<name> DISPLAY_NAME=<text>` | Create a client instance repository from this template. |
+| Instance | `make new-instance NAME=<name> DISPLAY_NAME=<text>` | Create your instance repository from this template. |
 | Instance | `make template-sync` | Merge the template's `main` into an instance and record it in `.template-version`. |
 | Instance | `make check-template` | Verify that template-owned paths match the merged template commit. |
 | Instance | `make check-instance` | Verify that `instance.yaml` is valid and names the tag `core/` is at. |
