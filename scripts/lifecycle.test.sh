@@ -27,7 +27,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # inherits it unchanged, so this script skips itself instead of failing on
 # every instance's CI.
 if [ -e "$ROOT/.template-version" ]; then
-  echo "lifecycle: skipped — this is an instance; the lifecycle test runs in margince-template"
+  echo "lifecycle: skipped — this is an instance; the lifecycle test runs in margince/template"
   exit 0
 fi
 

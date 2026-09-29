@@ -9,7 +9,7 @@ template changes reach it by merge.
 
 ## 1. Prerequisites
 
-- A checkout of `margince-template` on which `make install` has run.
+- A checkout of `margince/template` on which `make install` has run.
   `make new-instance` validates the new `instance.yaml` with the Go CLI in
   `scripts/cli` and checks out `core/` from the template's own `core/`.
 - A clean template working tree: `git status --porcelain` prints nothing.
@@ -92,7 +92,7 @@ Every path is either template-owned or instance-owned. `.template-owned` lists
 the template-owned paths, one git pathspec per line: `Makefile`, `scripts/`,
 `.github/workflows/`, `.githooks/`, `.gitleaks.toml`, `.gitignore`,
 `.template-owned`, `AGENTS.md`, `CLAUDE.md`, and `docs/*.md`. Every other path
-is instance-owned. Make changes to template-owned paths in `margince-template`
+is instance-owned. Make changes to template-owned paths in `margince/template`
 and merge them with `make template-sync`.
 
 | Path | Content |

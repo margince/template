@@ -326,7 +326,7 @@ check-template: ## Template-owned paths match the template commit this instance 
 	@bash scripts/check-instance-mk.sh
 	@bash scripts/check-template.sh
 
-template-sync: ## Merge margince-template's main into this instance and record it in .template-version
+template-sync: ## Merge margince/template's main into this instance and record it in .template-version
 	@bash scripts/template-sync.sh
 
 test-cli: ## The template CLI's own tests

@@ -180,7 +180,7 @@ symbolic link, because core's composer refuses a linked unit.
 
 ## template
 
-This repository, `margince-template`: the source of every instance. It owns
+This repository, `margince/template`: the source of every instance. It owns
 the `Makefile`, `scripts/`, the workflows, and the guides.
 
 ## template-owned

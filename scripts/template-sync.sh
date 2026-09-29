@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# template-sync.sh — merge margince-template into this instance and record it.
+# template-sync.sh — merge margince/template into this instance and record it.
 #
 # Template changes reach an instance by merge (design Section 4). After the
 # merge, .template-version names the merged template commit, which is what

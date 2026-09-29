@@ -33,7 +33,7 @@ domain="${DOMAIN:-}"
 ssh="${SSH:-}"
 admin_email="${ADMIN_EMAIL:-}"
 
-[ ! -f .template-version ] || die "new-instance: this is an instance; run make new-instance in margince-template"
+[ ! -f .template-version ] || die "new-instance: this is an instance; run make new-instance in margince/template"
 [ -n "$name" ] || die "new-instance: pass NAME=<name>, e.g. make new-instance NAME=acme DISPLAY_NAME=Acme"
 [ -n "$display" ] || die "new-instance: pass DISPLAY_NAME=<text>, e.g. DISPLAY_NAME=\"Acme\""
 # Checked before anything is created: everything here is validated up front,
@@ -107,7 +107,7 @@ printf '%s\n' "$template_sha" > "$dir/.template-version"
 cat > "$dir/README.md" <<EOF
 # $display
 
-The $display instance of Margince, created from margince-template at
+The $display instance of Margince, created from margince/template at
 commit ${template_sha:0:12}.
 
 Start with \`make install\`, then \`make dev\`. Guides are in docs/README.md.
@@ -123,7 +123,7 @@ EOF
   || die "new-instance: could not scaffold the default deploy/production/ (see above)"
 
 git -C "$dir" add instance.yaml .template-version README.md deploy
-git -C "$dir" commit --quiet -m "chore: create instance $name from margince-template ${template_sha:0:12}"
+git -C "$dir" commit --quiet -m "chore: create instance $name from margince/template ${template_sha:0:12}"
 success=1
 echo "new-instance: created $dir (core $core_tag)"
 

@@ -3,7 +3,7 @@
 #
 # .template-version names the template commit this instance last merged. Every
 # path listed in .template-owned must be identical to that commit: no edits, no
-# added files. A tooling change is made in margince-template and merged back, so
+# added files. A tooling change is made in margince/template and merged back, so
 # every instance gets it (design Section 6.1). The list is read from the
 # template commit, so an instance cannot remove a path from it.
 #
@@ -55,7 +55,7 @@ if [ -n "$changed$added" ]; then
     if [ -n "$changed" ]; then printf '%s\n' "$changed"; fi
     if [ -n "$added" ]; then printf '%s\n' "$added"; fi
   } | sort -u | sed 's/^/  /' >&2
-  echo "Make the change in margince-template, then run make template-sync here." >&2
+  echo "Make the change in margince/template, then run make template-sync here." >&2
   exit 1
 fi
 echo "check-template: template-owned paths match template commit ${want:0:12}"

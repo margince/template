@@ -4,7 +4,7 @@ Rules for AI agents and human contributors who change this repository.
 
 ## Context
 
-- This repository is `margince-template`, the template that every Margince
+- This repository is `margince/template`, the template that every Margince
   client instance is created from. Without extensions it is itself an
   instance, Margince Default. Read [README.md](README.md) first.
 - The design is

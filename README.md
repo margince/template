@@ -1,4 +1,4 @@
-# margince-template
+# margince/template
 
 The template you create your Margince instance from. An instance is the
 Margince core product ([`margince/margince`](https://github.com/margince/margince))
