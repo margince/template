@@ -1,292 +1,253 @@
-# Cutting a release
+# Release
 
-Two lanes, and which one runs is decided by what you did, not by a flag.
+This guide covers releases of an instance: the version format, cutting a
+release with `make release`, what `release.yml` builds, tests, and publishes,
+the repository settings it reads, the image names, and building and testing
+the images locally with `make package` and `make smoke`. It is for the
+developer who ships an instance. It is the one guide for releases and images;
+deployment of a release is in [deploy.md](deploy.md).
 
-| You did | What runs | How long |
-|---|---|---|
-| Opened a pull request, or merged to `main` | `ci.yml` — the light gate, and only that | minutes |
-| Pushed a **`v*` tag** | `release.yml` — the full gate, the images and their smoke test, both desktop bundles, then it publishes the release | ~20 minutes |
+## 1. Prerequisites
 
-## The light gate
+- A checkout on which `make install` has run.
+- The instance repository on GitHub, with `origin` pointing at it and GitHub
+  Actions enabled.
+- The commit to release is on `origin/main`, and the working tree is clean.
+- Optional: the repository settings in Section 5, to push the images and to
+  seed the desktop bundles.
 
-`ci.yml` proves the composition: it regenerates the composed tree and requires
-the regeneration be byte-identical, builds it, runs every unit's own suite, the
-arch fitness tests, the import allowlist, the design-system gates over our units'
-screens, lint, drift, the staging script tests, and the two assertions about
-`core/` being pinned and pristine.
+## 2. Version format
 
-What it does NOT run: the screen suites, the composed typecheck, and the two
-lanes that need a real Postgres. Those cost infrastructure, and both release
-lanes run them. **A green pull request means the composition is sound, not that
-the tree is releasable.** `make ci` locally is still the full thing.
-
-The full gate lives in `full-check.yml` and is called by both release lanes, so
-there is one definition rather than two that drift.
-
-## Version pattern and ordering
-
-A release version is a git tag, an image tag, and the desktop bundle name, all
-at once:
+A release version is the git tag, the image tag, and the desktop bundle name:
 
 ```
 ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$
 ```
 
-Matches `v1.2.0`, `v0.1.0`, `v10.0.12`, `v1.3.0-rc.1`. Does not match `1.2.0`,
-`v1.2`, `v1.2.0-rc.0`, `v1.2.0-rc1`, or `v1.2.0-beta.1`.
+| Matches | Does not match |
+|---|---|
+| `v0.1.0`, `v1.2.0`, `v10.0.12`, `v1.3.0-rc.1` | `1.2.0`, `v1.2`, `v1.2.0-rc.0`, `v1.2.0-rc1`, `v1.2.0-beta.1` |
 
-Ordering follows semantic versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`. The
-`-rc.N` numbers compare numerically, not as text: `-rc.10` is newer than
-`-rc.2`. `make release` refuses a version that is not newer than every
-existing release tag.
+Versions are ordered by semantic versioning: `vX.Y.Z-rc.N` is older than
+`vX.Y.Z`, and the `N` values compare as numbers (`-rc.10` is newer than
+`-rc.2`). A version with `-rc.N` is published as a GitHub pre-release; a
+version without it is published as a normal release.
 
-A plain `v0.3.0` publishes as a normal release. A suffixed `v0.3.0-rc.1`
-publishes as a **pre-release**, so a build meant for testing does not become
-the download the release page offers by default. One tag grammar, two
-shelves.
+## 3. Cut a release
 
-## `make release`
+1. Merge the work to `main` and update your checkout.
+2. Run `make release` with the new version:
 
-```sh
-make release VERSION=v0.3.0
-```
+   ```sh
+   make release VERSION=v0.3.0
+   ```
 
-This runs `scripts/release.sh`, which checks every precondition below, in
-order, **before any tag exists**. The first one that fails exits 1 and leaves
-no tag, locally or on the remote:
+3. Follow the `release` workflow run in the repository's Actions tab.
 
-1. `VERSION` matches the pattern above.
+`make release` runs `scripts/release.sh`. It checks these preconditions in
+order, and the first one that fails exits 1 without creating a tag:
+
+1. `VERSION` matches the version format.
 2. The working tree is clean, untracked files included.
-3. `HEAD` is an ancestor of `origin/main` (after `git fetch --tags`).
-4. The tag does not already exist, locally or on `origin`.
-5. `VERSION` is newer than every existing release tag (core's own `v0.0.x`
-   tags are ignored).
+3. `HEAD` is an ancestor of `origin/main`, after `git fetch --tags`.
+4. The tag exists neither locally nor on `origin`.
+5. `VERSION` is newer than every existing release tag.
 6. `make check` passes.
 
-It then creates an annotated tag and pushes it. If the push fails, the local
-tag is deleted, so a failed `make release` never leaves a dangling tag.
+It then creates an annotated tag and pushes it. When the push fails, it
+deletes the local tag.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `RELEASE_REMOTE` | `origin` | The remote to fetch from and push the tag to. |
-| `RELEASE_BRANCH` | `main` | The branch `HEAD` must be an ancestor of. |
-| `RELEASE_CHECK_TARGET` | `check` | The make target run as the last precondition. |
+| `RELEASE_BRANCH` | `main` | The branch that `HEAD` must be an ancestor of. |
+| `RELEASE_CHECK_TARGET` | `check` | The `make` target run as the last precondition. |
 
-That is the whole gesture. `release.yml` builds the tag once it is pushed.
+## 4. What `release.yml` does
 
-## Setting this up on GitHub
+`release.yml` runs when a tag that starts with `v` is pushed:
 
-Nothing above needs any repository setting: with none set, `release.yml`
-still builds and smoke-tests the images (just does not push them) and builds
-both desktop bundles without demo data. Someone with repository admin rights
-can additionally set, all optional:
-
-| To get | Set |
-|---|---|
-| Pushed images | Repository variable `REGISTRY`, secrets `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` (see the table below). |
-| More than `linux/amd64` pushed | Repository variable `PLATFORMS`. |
-| A seeded demo dataset in the desktop bundles | Repository variable `DATASET_REPOSITORY` and secret `DATASET_DEPLOY_KEY` (see "What a bundle says about itself" below). |
-
-## What `release.yml` does
-
-`release.yml` runs on a pushed tag that matches the release pattern:
-
-1. **Version check.** The tag matches the pattern above and is on `main`
-   (`git merge-base --is-ancestor HEAD origin/main`). A `-rc.N` tag is marked
-   as a pre-release from here on.
-2. **Full gate.** `full-check.yml`, the same gate `make ci` runs locally.
+1. **Version check.** The tag matches the version format and its commit is on
+   `main`. A tag with `-rc.N` is marked as a pre-release.
+2. **Full gate.** `full-check.yml`, the gate that `make ci` runs locally.
 3. **Images.** `make package VERSION=<v>` builds `api`, `web`, and `worker`
-   for `linux/amd64` (the runner's own platform), loaded into the local
-   Docker image store.
-4. **Smoke test.** `make smoke VERSION=<v>` (see below). Only the
-   `linux/amd64` build is smoke-tested — it is the one loaded locally. If
-   `PLATFORMS` names other platforms, they are pushed in the next step without
-   a smoke test of their own; they share the `linux/amd64` layers through the
-   build cache, but a foreign-platform runtime bug is not caught here.
-5. **Push**, only when the repository variable `REGISTRY` is set. Logs in to
-   the registry host with the secrets `REGISTRY_USERNAME` and
-   `REGISTRY_PASSWORD` (password on standard input, never on a command line or
-   in a log), removes the login on every exit, and pushes the images with tag
-   `<v>` for every platform in `PLATFORMS`. The pushed image digests are
-   written to an artifact (`margince-images-<v>`), not a job output — a job
-   output is dropped by GitHub when it contains a secret's value, and an image
-   name can contain the registry user name.
-6. **Desktop bundles.** macOS (Apple silicon and Intel) and Windows, as today.
-7. **GitHub Release.** Created after every job above passes, with both zips
-   already attached. A `-rc.N` version is published as a pre-release. The
-   notes list the core version, the instance commit, and the pushed image
-   digests (or `images were not pushed: REGISTRY is not set`), read from the
-   image-list artifact.
+   for `linux/amd64` into the runner's local image store.
+4. **Smoke test.** `make smoke VERSION=<v>` (Section 7.2).
+5. **Push.** Only when the repository variable `REGISTRY` is set: logs in to
+   the registry host, the part of `REGISTRY` before the first `/`, with
+   `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` (password on standard input),
+   pushes the images with the tag `<v>` for every platform in `PLATFORMS`, and
+   logs out. The list of pushed images with their digests goes to the build
+   artifact `margince-images-<v>`.
+6. **Desktop bundles.** `desktop-macos.yml` for Apple silicon and for Intel,
+   and `desktop-windows.yml` (Section 8).
+7. **GitHub Release.** Created after every job above passes, with the three
+   zip files attached: `margince-macos-apple-silicon-<v>.zip`,
+   `margince-macos-intel-<v>.zip`, and `margince-windows-<v>.zip`. The notes
+   list the core version, the instance commit, and the pushed image digests,
+   or `images were not pushed: REGISTRY is not set`.
 
-| Setting | Kind | Default | Effect |
-|---|---|---|---|
-| `REGISTRY` | repository variable | unset | The image name prefix, for example `docker.io/acme` or `myregistry.example.com/acme`. **Must start with the registry host** — `release.yml` logs in to `${REGISTRY%%/*}` (everything before the first `/`), so a value such as `acme/margince-default` with no host is not a usable registry prefix for this login. Unset: the images are built and smoke-tested, not pushed. |
-| `PLATFORMS` | repository variable | `linux/amd64` | Comma-separated platforms of the *pushed* images, for example `linux/amd64,linux/arm64`. Only `linux/amd64` is smoke-tested (step 4 above), regardless of this list. |
-| `REGISTRY_USERNAME` | secret | — | User name for `docker login` to the `REGISTRY` host. |
-| `REGISTRY_PASSWORD` | secret | — | Password or token for `docker login`, piped to standard input. Never printed or logged. |
+Only the `linux/amd64` images are smoke-tested. Other platforms in
+`PLATFORMS` are pushed without their own smoke test.
 
-**An unverified release cannot exist on this lane**, because CI is the only
-thing that creates one, and it creates it after the gate and the smoke test.
-If the run fails, no release appears. Delete the tag and tag again once the
-tree is fixed:
+A failed run publishes no release. Fix the cause, then delete the tag and cut
+the release again:
 
 ```sh
 git push --delete origin v0.3.0 && git tag -d v0.3.0
+make release VERSION=v0.3.0
 ```
 
-Re-running a failed run after the release was already created is safe: the
-publish step replaces the assets on the existing release rather than failing.
+A run started again after the release exists replaces the release's zip files
+and notes instead of failing.
 
-### Why CI can create this one
+## 5. Repository settings
 
-A release created by CI's own token does not fire the `release` event, so
-publishing from inside the lane cannot retrigger anything — this lane
-included. The trigger is the tag push and nothing else: there is exactly one
-way a release comes into existence here, and it runs after the gate.
+`release.yml` works without any repository setting: it builds and
+smoke-tests the images without pushing them, and builds the desktop bundles
+without demo data. Someone with admin rights on the repository can set:
 
-## `make smoke` locally
+| Setting | Kind | Default | Effect |
+|---|---|---|---|
+| `REGISTRY` | variable | unset | The image name prefix, for example `docker.io/acme` or `registry.example.com/acme`. It must start with the registry host. Unset: the images are not pushed. |
+| `REGISTRY_USERNAME` | secret | none | The user name for the registry login. |
+| `REGISTRY_PASSWORD` | secret | none | The password or token for the registry login. Never printed. |
+| `PLATFORMS` | variable | `linux/amd64` | Comma-separated platforms of the pushed images, for example `linux/amd64,linux/arm64`. |
+| `DATASET_REPOSITORY` | variable | unset | The demo dataset repository that the desktop workflows check out and seed. |
+| `DATASET_DEPLOY_KEY` | secret | unset | An SSH key with read access to `DATASET_REPOSITORY`. Without it or the variable, the bundles ship without demo data. |
+
+Use the same `REGISTRY` value when you deploy, so that `make deploy` names the
+same images ([deploy.md](deploy.md#53-credentials)).
+
+## 6. Image names and labels
+
+The image repository is the instance's `name` from `instance.yaml`, with
+`REGISTRY` in front of it when `REGISTRY` is set:
+
+| `REGISTRY` | Images |
+|---|---|
+| unset | `<name>/api`, `<name>/web`, `<name>/worker` |
+| `registry.example.com/acme` | `registry.example.com/acme/<name>/api`, `/web`, `/worker` |
+
+`REGISTRY` is read from the environment of `make package`, `make smoke`,
+`make local-up`, and `make deploy`; it is not stored in `instance.yaml`.
+
+Every image carries these OCI labels:
+
+| Label | Value |
+|---|---|
+| `com.margince.instance.name` | `name` from `instance.yaml`. |
+| `com.margince.instance.revision` | The instance commit. |
+| `com.margince.core.revision` | The `core/` commit. |
+| `com.margince.core.version` | `core` from `instance.yaml`. |
+| `com.margince.instance.units` | The units in `extensions/`. |
+
+```sh
+docker inspect <repo>/api:<v> --format '{{json .Config.Labels}}'
+```
+
+## 7. Build and test the images locally
+
+### 7.1 `make package`
 
 ```sh
 make package VERSION=v0.3.0
-make smoke VERSION=v0.3.0
 ```
 
-`make smoke` runs the same check `release.yml` runs, against images already
-built by `make package` and present in the local Docker image store. It:
-
-1. Starts a private Docker network, PostgreSQL (`pgvector/pgvector:pg16`), and
-   Redis (`redis:7`) on it, with random, per-run passwords that never appear
-   on a command line.
-2. Runs core's database bootstrap (`core/scripts/deploy/db-bootstrap.sql`)
-   once, as the superuser.
-3. Starts `api` and waits until it answers `/readyz`.
-4. Starts `worker` and `web`. `web` must answer `/`; `worker` must still be
-   running after `SMOKE_SETTLE` seconds.
-5. Removes every container and the network, on success and on failure. On
-   failure it prints the last 100 log lines of each Margince container first.
+`make package` stages the units and builds the images with core's
+`Dockerfile` and `docker-bake.hcl`. By default it loads them into the local
+Docker image store.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SMOKE_TIMEOUT` | `180` | Seconds to wait for PostgreSQL, `api /readyz`, and `web /`, each. |
-| `SMOKE_SETTLE` | `10` | Seconds the worker must stay running after start before the test passes it. |
-| `REGISTRY` | unset | Registry prefix of the image names to smoke-test (Section 8 of [create-an-instance.md](create-an-instance.md)). |
+| `VERSION` | the tag at `HEAD`, else the short commit | The image tag. `make smoke`, `make local-up`, and `make deploy` need a release version. |
+| `ROLE` | all three | `api`, `web`, or `worker`, to build one image. |
+| `REGISTRY` | unset | The registry prefix (Section 6). |
+| `REPO` | `<REGISTRY>/<name>` | Overrides the whole image repository. |
+| `PLATFORMS` | empty (the native platform) | Comma-separated platforms, read by core's bake file. A local load holds one platform. |
+| `PUSH` | unset | `PUSH=1` pushes the images for every platform in `PLATFORMS` instead of loading them. Requires `REGISTRY`. |
+| `ALLOW_DIRTY` | unset | `ALLOW_DIRTY=1` builds from a working tree with uncommitted changes. |
 
-No test here needs a license: the smoke test runs `api` with
-`MARGINCE_ENV=test`, which does not require one.
+### 7.2 `make smoke`
 
-## What a bundle says about itself
-
-A zip name does not survive being unzipped, so every folder carries its own
-record. `make desktop` writes both files through `scripts/build-info.sh`:
-
-```
-margince/
-├── BUILD-INFO.txt          a person, asked to paste it into a bug report
-└── runtime/
-    └── build-info.json     a program
+```sh
+make smoke VERSION=v0.3.0
 ```
 
-```
-Margince v0.3.0
+`make smoke` runs the same check as `release.yml`, on images that
+`make package` has loaded:
 
-  built     2026-08-25T14:02Z
-  platform  darwin/arm64
-  repo      b287031
-  core      45fc738
-  dataset   0861f93
+1. Creates a private Docker network with PostgreSQL
+   (`pgvector/pgvector:pg16`) and Redis (`redis:7`), with random passwords
+   and keys that never appear on a command line.
+2. Runs `core/scripts/deploy/db-bootstrap.sql` once as the superuser.
+3. Starts `api` and waits until `/readyz` answers.
+4. Starts `worker` and `web`. `web` must answer `/`, and `worker` must still
+   run after `SMOKE_SETTLE` seconds.
+5. Removes every container and the network, on success and on failure. On
+   failure it first prints the last 100 log lines of each Margince container.
 
-  units
-    (one line per unit, name and version)
-```
+| Variable | Default | Meaning |
+|---|---|---|
+| `SMOKE_TIMEOUT` | 180 | Seconds to wait for PostgreSQL, for `api /readyz`, and for `web /`, each. |
+| `SMOKE_SETTLE` | 10 | Seconds the worker must keep running. |
+| `REGISTRY` | unset | The registry prefix of the image names (Section 6). |
 
-`repo` is this installation's commit, `core` the upstream it carries, `dataset`
-the demo database it was seeded from, and the unit list is read from each
-`extensions/*/manifest.generated.json` — so a bundle answers "which build, which
-upstream, which units, which demo data" without a rebuild.
+The smoke test runs `api` with `MARGINCE_ENV=test`, so it needs no license.
+To run the images as a full local stack, use `make local-up VERSION=<v>` (see
+the [README](../README.md#run-margince-default-on-your-computer)).
 
-`dataset` earns its place for a reason the other two do not need: **the demo
-database is deliberately not pinned.** Both desktop lanes check out the demo
-dataset repository (`vars.DATASET_REPOSITORY`) with no `ref`, so every build
-takes whatever its default branch was at that moment — a bundle ships the
-freshest demo rather than a historical one. When `vars.DATASET_REPOSITORY` and
-`secrets.DATASET_DEPLOY_KEY` are not set, the lane seeds nothing and the
-bundle ships empty, keeping its demo loader. That is the intended behaviour,
-and it is also why recording the commit is the only thing that can ever say
-which data a given bundle holds. It has one consequence worth knowing:
-re-running a release lane on an existing tag replaces the assets, so **the
-same tag can ship different demo data**. The `dataset` line is what makes that
-visible instead of silent.
+## 8. Desktop bundles
 
-It has three possible values, and the last two are not the same fact:
+`desktop-macos.yml` and `desktop-windows.yml` are reusable workflows that
+`release.yml` calls. They are copies of core's workflows, because a workflow
+cannot use a file inside a submodule; update them from `core/.github/workflows/`
+when core's versions change. They do not run on pull requests. To test one
+without a release, start it by hand:
 
-| value | meaning |
-|---|---|
-| a sha | seeded from that commit of the demo database |
-| `none` | the folder ships no demo data, and keeps its demo loader |
-| `unknown` | it ships demo data whose commit nobody recorded |
-
-`unknown` should prompt a question. It means a seeded bundle was built by
-something that did not pass `MARGINCE_BUILD_DATASET_SHA` — a lane that has
-drifted from this contract — and reporting that as `none` would hide it.
-
-The version comes from `VERSION=`, which a release lane sets to its tag. Left
-unset — a developer's own `make desktop` — it falls back to `git describe`
-against `v*` tags, then to `dev-<sha>`, and a build from an uncommitted tree is
-marked `-dirty`. A tag that is not a `v*` version is deliberately not matched: it
-names no version, and a build must not quote one as if it did.
-
-The **commits** are measured by each lane and passed in, not read off the tree
-when the folder is stamped. For `dataset` there is no alternative: by the time
-the kit re-stamps a seeded folder the rows are inside a Postgres cluster, where
-no commit is recoverable, so the lane reads it at checkout or the bundle can
-never say. For the other two it is a correctness fix. A build can dirty its own tree:
-`build-windows.ps1` regenerates the manifests of core's own units as a side
-effect, which marks `core/` dirty and — because git reads a modified submodule
-as a change to the parent's gitlink — this repository with it. Read at stamping
-time, every Windows bundle said `-dirty` on both commits about sources nobody
-had touched. A marker that fires on every build is one nobody reads.
-
-`build-info.json` lives in `runtime/` and `BUILD-INFO.txt` beside `README.md`,
-both of which an update replaces. A build-info file that survived an update
-would name the version the user no longer runs.
-
-Nothing inside the *binaries* carries the version: core's `desktop/build/` sets
-no ldflags and the launcher has no version variable, so `margince --version`
-does not exist. Changing that is a core contribution — see
-[contributing-to-core.md](contributing-to-core.md).
-
-## The desktop lanes on their own
-
-`desktop-macos.yml` and `desktop-windows.yml` are reusable workflows, copied
-from `core/.github/workflows/` because GitHub cannot `uses:` a file inside a
-submodule. When core's versions change, re-derive ours from them rather than
-patching blind. Both release lanes call them, so a shipped bundle is built by the
-lane that has been exercised all along.
-
-They do NOT run on pull requests. A pull request runs exactly what a merge to
-main runs — the light gate — and nothing else. These lanes bill at ten times
-(macOS) and twice (Windows) a Linux minute, roughly 109 Linux-equivalent minutes
-per run against ~4 for the light gate, and the bundles are a release concern
-rather than a merge concern.
-
-To prove a lane without cutting a release, dispatch it:
-
-```
+```sh
 gh workflow run desktop-windows.yml --ref main
 ```
 
-A dispatched build names itself after the commit, because no lane gave it a
-version.
+A build started this way is named after its commit. Locally, `make desktop`
+builds the macOS folder; there is no local Windows build. See
+[desktop-build.md](desktop-build.md) for building, installing, and running a
+folder.
 
-The trade is deliberate: a broken bundle surfaces when a release is cut, not on
-the pull request that broke it. Cutting one is a deliberate act somebody is
-already watching, which is the right place to absorb that.
+Each folder carries `BUILD-INFO.txt` and `runtime/build-info.json`, which name
+the version, the platform, the instance and core commits, the units, and the
+demo dataset commit. The release workflows pass the version and the commits
+in. The `dataset` line has one of three values:
 
-Locally, `make desktop` builds the macOS folder. There is no local Windows lane:
-pgvector needs nmake against MSVC and the event bus needs MSYS2, so
-`make desktop-win-kit DIR=` only stamps the demo-data loader into a folder built
-on a Windows host. CI is that host.
+| Value | Meaning |
+|---|---|
+| a commit | The folder was seeded from that commit of the demo dataset. |
+| `none` | The folder ships no demo data and keeps its demo loader. |
+| `unknown` | The folder ships demo data whose commit was not recorded. |
 
-See [desktop-build.md](desktop-build.md) for what to do with a built folder,
-[license.md](license.md) for the license a production deployment needs, and
-[deploy.md](deploy.md) for deploying a released image to a server.
+The desktop workflows check out the dataset's default branch, not a pinned
+commit. A second run of a release on the same tag can therefore ship
+different demo data; the `dataset` line shows which.
+
+## 9. CI workflows
+
+| Workflow | Runs on | Content |
+|---|---|---|
+| `ci.yml` | pull requests, pushes to `main` | The light gate: `check-instance`, `check-template`, `check-composition`, `build`, `test-extensions`, `arch`, `ext-imports`, `fe-ds-gates`, `lint`, `drift`, `check-docs`, `test-scripts`, `core-check-pin`, the clean-submodule check, `secret-scan`, and `test-secret-scan`. |
+| `lifecycle.yml` | pull requests, pushes to `main`, by hand | `make test-lifecycle`. In an instance every step after the first check is skipped. |
+| `release.yml` | pushed `v*` tags | Section 4. |
+| `full-check.yml` | called by `release.yml` | The light gate plus `fe-test-ext`, `fe-typecheck-composed`, `check-ext-migrations`, and `test-integration-ext`. |
+| `desktop-macos.yml`, `desktop-windows.yml` | called by `release.yml`, by hand | Section 8. |
+| `deploy.yml` | by hand | [deploy.md](deploy.md#6-deploy-from-github-actions). |
+
+A green pull request means that the composition builds and passes the light
+gate, not that the tree can be released. `make ci` runs the full gate
+locally.
+
+## Related guides
+
+- [deploy.md](deploy.md): deploy a released version.
+- [license.md](license.md): the license a production deployment needs.
+- [trial.md](trial.md): a trial desktop bundle.
+- [desktop-build.md](desktop-build.md): the desktop folder.
+- [troubleshooting.md](troubleshooting.md): release and packaging errors.
