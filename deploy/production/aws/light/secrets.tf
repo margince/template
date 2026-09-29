@@ -38,7 +38,7 @@ locals {
   # No ElastiCache — valkey runs natively on the app instance itself
   # (ec2.tf). Its private IP, not a managed endpoint, is what worker (a
   # separate instance) and api both use to reach it.
-  redis_host = aws_instance.app.private_ip
+  redis_host = local.app_private_ip
 }
 
 resource "aws_secretsmanager_secret" "owner_dsn" {

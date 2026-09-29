@@ -5,13 +5,17 @@
 # SECRET_KEY.
 #
 # This bucket also holds the one config object the full stack instead
-# mounts via EFS: ${var.name_prefix}/margince.yaml — see ec2.tf's user-data,
+# mounts via EFS: config/margince.yaml — see ec2.tf's user-data,
 # which fetches it at boot. No EFS in this stack: one instance has local
 # disk, and EFS's entire value (shared mount across many tasks) buys
 # nothing when there is only ever one.
 
+data "aws_caller_identity" "current" {}
+
+# S3 bucket names are global across all AWS accounts; the account id keeps
+# the name unique for every adopter of this template.
 resource "aws_s3_bucket" "blobstore" {
-  bucket = "${var.name_prefix}-blobstore"
+  bucket = "${var.name_prefix}-blobstore-${data.aws_caller_identity.current.account_id}"
   tags   = { Name = "${var.name_prefix}-blobstore", Component = "storage" }
 
   lifecycle {

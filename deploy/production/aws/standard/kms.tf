@@ -12,13 +12,46 @@
 # compromised execution role could already reach through the secrets it
 # holds. Split later if a real separation-of-duty requirement asks for it.
 #
-# No custom key policy: the default AWS applies (full access to the account
-# root) delegates entirely to IAM, which is what lets the targeted grants
-# below — and nothing else — actually use the key.
+# Key policy: the first statement is the default AWS applies (full access to
+# the account root), which delegates to IAM so the targeted grants in iam.tf
+# can use the key. Any account principal with kms:* on * in IAM can use it
+# too; restrict those IAM policies if that matters to you. The second
+# statement lets CloudWatch alarms publish to the CMK-encrypted SNS topic
+# (alarms.tf). CloudWatch is a service principal, not an IAM identity, so an
+# IAM grant cannot give it the key and without this statement every alarm
+# notification is dropped.
+data "aws_iam_policy_document" "kms_data" {
+  statement {
+    sid       = "EnableIAMUserPermissions"
+    actions   = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  statement {
+    sid       = "AllowCloudWatchAlarmsToSNS"
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+}
+
 resource "aws_kms_key" "data" {
   description             = "${var.name_prefix} — CMK for RDS/ElastiCache/S3/EFS/Secrets Manager/ECR at rest"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  policy                  = data.aws_iam_policy_document.kms_data.json
   tags                    = { Name = "${var.name_prefix}-data", Component = "security" }
 
   lifecycle {

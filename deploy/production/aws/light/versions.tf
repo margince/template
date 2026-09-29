@@ -1,28 +1,13 @@
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.10.0"
 
-  # No backend block by default: state defaults to local, which writes every
-  # generated credential from secrets.tf (RDS/Redis/keyvault/webhook/admin/
-  # blobstore) into a plaintext file on the machine that runs `terraform
-  # apply`. That is only acceptable for a one-off `terraform plan` against this
-  # reference stack. Before running `terraform apply` for any real deployment,
-  # uncomment and fill in the backend block below with a protected S3 bucket
-  # that only authorized deployment identities can reach, and verify that
-  # `terraform init -backend-config=...` (or the filled-in block) points at it.
-  #
-  # backend "s3" {
-  #   bucket       = "your-terraform-state-bucket"
-  #   key          = "margince/light/terraform.tfstate"
-  #   region       = "eu-central-1"
-  #   encrypt      = true
-  #   use_lockfile = true # S3's own native locking (Terraform >= 1.10); use
-  #                       # a DynamoDB dynamodb_table instead on an older CLI
-  # }
-  #
-  # No bucket name is filled in above on purpose — an operator's state bucket
-  # is theirs to own and scope access to, the same reasoning
-  # docs/deployment.md gives for keeping concrete deployment specifics out of
-  # this repo.
+  # Remote state is required: state holds every generated credential from
+  # secrets.tf in plain text, so it must live in a protected S3 bucket that
+  # only deployment identities can reach, never on a laptop. The values come
+  # from backend.hcl (copy backend.hcl.example; git-ignored):
+  #   terraform init -backend-config=backend.hcl
+  # use_lockfile (S3 native locking) is why the CLI floor is 1.10.
+  backend "s3" {}
 
   required_providers {
     aws = {

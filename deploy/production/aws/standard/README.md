@@ -19,9 +19,10 @@ see `docs/diagrams/README.md`.*
 ## 1. Provision
 
 ```bash
-cd standard
+cd deploy/production/aws/standard
+cp backend.hcl.example backend.hcl             # your protected state bucket
 cp terraform.tfvars.example terraform.tfvars   # fill in acm_certificate_arn, public_base_url, admin_bootstrap_password, image_tag
-terraform init
+terraform init -backend-config=backend.hcl
 terraform plan
 
 # Everything EXCEPT the 3 ECS services first — they reference image_tag,
@@ -33,11 +34,17 @@ terraform plan
 terraform apply \
   -target=aws_ecr_repository.api -target=aws_ecr_repository.worker -target=aws_ecr_repository.web \
   -target=aws_db_instance.this -target=aws_elasticache_replication_group.this \
-  -target=aws_s3_bucket.blobstore -target=aws_efs_file_system.config
+  -target=aws_s3_bucket.blobstore -target=aws_efs_file_system.config \
+  -target=aws_efs_mount_target.config -target=aws_efs_access_point.config \
+  -target=aws_secretsmanager_secret_version.owner_dsn -target=aws_secretsmanager_secret_version.app_dsn \
+  -target=aws_security_group.ops -target=aws_iam_instance_profile.ops \
+  -target=aws_iam_role_policy.ops_efs -target=aws_iam_role_policy_attachment.ops_ssm
 ```
 
 This creates the VPC, KMS key, RDS instance, ElastiCache replication group,
-S3 bucket, EFS filesystem, Secrets Manager secrets, and the 3 ECR repos. Do
+S3 bucket, EFS filesystem and access point, the two DSN secrets that step 2
+reads, the bootstrap host's security group and instance profile (`ops.tf`),
+and the 3 ECR repos. The final untargeted apply creates the other secrets. Do
 steps 2–4 next — bootstrap the database, push the images, mount
 `margince.yaml` — then run a final untargeted `terraform apply` to create
 the ALB and the 3 ECS services, which by then have an image to pull and a
@@ -46,9 +53,34 @@ database to migrate against.
 ## 2. Bootstrap the database (once)
 
 RDS's master user is `dbadmin` (see `rds.tf` for why it is not named
-`margince_owner`). From a host with network access to the RDS instance's
-private endpoint (a bastion, a Cloud9/SSM-connected instance, or a one-off ECS
-task in the same VPC — the instance has no public IP):
+`margince_owner`). The RDS instance has no public IP, and its security group
+admits only ECS tasks and the bootstrap host (`ops.tf`). Launch that host
+once, for steps 2 and 4, and terminate it afterwards:
+
+```bash
+OPS_ID="$(aws ec2 run-instances \
+  --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+  --instance-type t3.micro \
+  --subnet-id "$(terraform output -json private_subnet_ids | jq -r '.[0]')" \
+  --security-group-ids "$(terraform output -raw ops_security_group_id)" \
+  --iam-instance-profile Name="$(terraform output -raw ops_instance_profile_name)" \
+  --metadata-options HttpTokens=required \
+  --query 'Instances[0].InstanceId' --output text)"
+aws ec2 wait instance-status-ok --instance-ids "$OPS_ID"
+```
+
+Forward local port 5432 to RDS through the host (Session Manager, no SSH),
+and leave this running in a second terminal:
+
+```bash
+aws ssm start-session --target "$OPS_ID" \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters "host=$(terraform output -raw rds_endpoint),portNumber=5432,localPortNumber=5432"
+```
+
+Then, on your machine (it has the Terraform state), run the bootstrap SQL.
+`hostaddr=127.0.0.1` sends the connection through the tunnel while
+`sslmode=verify-full` still checks the certificate against the RDS host name:
 
 ```bash
 curl -o /tmp/rds-ca-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
@@ -57,7 +89,7 @@ OWNER_PW="$(aws secretsmanager get-secret-value --secret-id "$(terraform output 
 APP_PW="$(aws secretsmanager get-secret-value --secret-id "$(terraform output -json secret_arns | jq -r .app_dsn)" --query SecretString --output text | sed -E 's#.*:([^:@]+)@.*#\1#')"
 MASTER_PW="$(terraform state show random_password.rds_master | grep 'result ' | awk '{print $3}' | tr -d '"')"
 
-psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432/margince?sslmode=verify-full&sslrootcert=/tmp/rds-ca-bundle.pem" \
+psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432/margince?hostaddr=127.0.0.1&sslmode=verify-full&sslrootcert=/tmp/rds-ca-bundle.pem" \
   -v owner_pw="$OWNER_PW" -v app_pw="$APP_PW" \
   -f "$MARGINCE_REPO/scripts/deploy/db-bootstrap.sql"
 ```
@@ -96,22 +128,35 @@ design, not a bug.
 ## 4. Mount `margince.yaml` onto EFS (once)
 
 Terraform provisions the EFS filesystem and access point; it does not write
-into it. From any instance in the VPC with the `amazon-efs-utils` package (a
-temporary EC2 instance in a public subnet is the simplest path):
+into it. On the bootstrap host from step 2 (`aws ssm start-session --target
+"$OPS_ID"`). The file-system policy allows only IAM-authorised mounts, so
+`iam` is required; the host's instance profile grants mount and write. Copy
+`margince.yaml` and the RDS CA bundle to the host first (for example through
+S3, or paste them), then:
 
 ```bash
-sudo mount -t efs -o tls,accesspoint="$(terraform output -raw efs_config_access_point_id)" \
-  "$(terraform output -raw efs_file_system_id)":/ /mnt/margince-config
-sudo cp "$MARGINCE_REPO/config/margince.example.yaml" /mnt/margince-config/margince.yaml
+sudo dnf install -y amazon-efs-utils
+sudo mkdir -p /mnt/margince-config
+sudo mount -t efs -o tls,iam,accesspoint=<efs_config_access_point_id> \
+  <efs_file_system_id>:/ /mnt/margince-config
+# The two ids are `terraform output -raw efs_config_access_point_id` and
+# `terraform output -raw efs_file_system_id` on your machine.
+sudo cp ./margince.yaml /mnt/margince-config/margince.yaml   # from margince.example.yaml in the Margince repository
 # edit /mnt/margince-config/margince.yaml — set password_file to
 # secrets/admin-password (the api's working dir is /app) per the Margince repository's docs/deployment.md
 
 # The api and worker DSNs (secrets.tf) name this file at
 # /app/config/rds-ca-bundle.pem — the same mount, so it goes on beside
 # margince.yaml rather than needing a mount of its own.
-sudo cp /tmp/rds-ca-bundle.pem /mnt/margince-config/rds-ca-bundle.pem
+sudo cp ./rds-ca-bundle.pem /mnt/margince-config/rds-ca-bundle.pem
 
 sudo umount /mnt/margince-config
+```
+
+Terminate the bootstrap host on your machine when steps 2 and 4 are done:
+
+```bash
+aws ec2 terminate-instances --instance-ids "$OPS_ID"
 ```
 
 ## 5. DNS + first boot
@@ -381,13 +426,11 @@ second bucket standing up to hold nothing but a different prefix.
   and maintaining that Lambda (or a scheduled key-rotation script) is real
   software this reference stack doesn't ship — a `status: needs-decision`
   item for whoever owns this fork, not an oversight.
-- **Remote state.** Everything above is defense in depth for the resources
-  Terraform manages — none of it helps if the state file managing them (with
-  every `random_password` result in plaintext) is still sitting on a laptop.
-  `versions.tf`'s commented `backend "s3"` block is the one item on this list
-  that is an operator's own bucket/region to fill in, not something this
-  stack can default for them — but it is the single highest-priority thing to
-  do before calling this "production," ahead of everything else in this file.
+- **Remote state.** State holds every `random_password` result in plain
+  text. `versions.tf` requires the S3 backend (`backend.hcl`), so the stack
+  does not run on local state. Restrict the state bucket to deployment
+  identities; that bucket is the operator's own and this stack cannot create
+  it for them.
 - **3-AZ spread.** `az_count` defaults to 2, matching RDS Multi-AZ's own
   standby model (one standby, not two) and ElastiCache's `num_cache_clusters
   = 2` — raising it spreads ECS tasks across a third AZ (surviving a full-AZ

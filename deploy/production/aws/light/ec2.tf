@@ -21,9 +21,15 @@ locals {
   # the wrong name.
   domain = regex("^https?://([^/:]+)", var.public_base_url)[0]
 
+  # The app's private IP is fixed, not assigned by AWS. edge's nginx conf and
+  # worker's MARGINCE_REDIS are built from it, and both instances have
+  # user_data_replace_on_change, so an AWS-assigned IP would turn every app
+  # replacement into a replacement of all three instances.
+  app_private_ip = cidrhost(aws_subnet.public.cidr_block, 10)
+
   nginx_conf = templatefile("${path.module}/templates/nginx.conf.tftpl", {
     domain               = local.domain
-    app_private_ip       = aws_instance.app.private_ip
+    app_private_ip       = local.app_private_ip
     origin_verify_secret = random_password.origin_verify.result
   })
 
@@ -114,6 +120,13 @@ resource "aws_instance" "edge" {
   user_data                   = local.edge_user_data
   user_data_replace_on_change = true
 
+  # The AMI comes from the "latest" SSM parameter, which AWS updates every few
+  # weeks. Without this, the next unrelated apply after an update destroys and
+  # rebuilds the instance. Taint the instance to move it to a newer AMI.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = { Name = "${var.name_prefix}-edge", Component = "compute" }
 }
 
@@ -135,8 +148,17 @@ resource "aws_instance" "app" {
     encrypted   = true
   }
 
+  private_ip = local.app_private_ip
+
   user_data                   = local.app_user_data
   user_data_replace_on_change = true
+
+  # The AMI comes from the "latest" SSM parameter, which AWS updates every few
+  # weeks. Without this, the next unrelated apply after an update destroys and
+  # rebuilds the instance. Taint the instance to move it to a newer AMI.
+  lifecycle {
+    ignore_changes = [ami]
+  }
 
   tags = { Name = "${var.name_prefix}-app", Component = "compute" }
 }
@@ -162,5 +184,21 @@ resource "aws_instance" "worker" {
   user_data                   = local.worker_user_data
   user_data_replace_on_change = true
 
+  # The AMI comes from the "latest" SSM parameter, which AWS updates every few
+  # weeks. Without this, the next unrelated apply after an update destroys and
+  # rebuilds the instance. Taint the instance to move it to a newer AMI.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = { Name = "${var.name_prefix}-worker", Component = "compute" }
+}
+
+# A fixed public IP for edge. CloudFront's origin is this address's DNS name
+# (cloudfront.tf), so a stop/start or a replacement of edge does not leave
+# CloudFront pointing at an address the instance no longer has.
+resource "aws_eip" "edge" {
+  domain   = "vpc"
+  instance = aws_instance.edge.id
+  tags     = { Name = "${var.name_prefix}-edge", Component = "network" }
 }

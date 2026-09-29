@@ -233,7 +233,7 @@ resource "aws_lb_listener_rule" "api_v1_and_ops" {
 
   condition {
     path_pattern {
-      values = ["/v1*", "/healthz", "/readyz", "/metrics"]
+      values = ["/v1*", "/healthz", "/readyz"]
     }
   }
 
@@ -308,6 +308,16 @@ resource "aws_wafv2_web_acl" "alb" {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
         vendor_name = "AWS"
+
+        # SizeRestrictions_BODY blocks every request body over 8 KB, which
+        # rejects attachment uploads, MCP payloads and webhook batches. Count
+        # it instead; the ALB and the api still bound body size.
+        rule_action_override {
+          name = "SizeRestrictions_BODY"
+          action_to_use {
+            count {}
+          }
+        }
       }
     }
     visibility_config {

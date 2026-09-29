@@ -275,11 +275,13 @@ piece a given instance is building, so there's no reason to split it.
 
 ```bash
 export MARGINCE_REPO=~/src/margince           # Margince source checkout at the commit to deploy
-cd light
+export TF_VAR_margince_source_dir="$MARGINCE_REPO"
+cd deploy/production/aws/light
+cp backend.hcl.example backend.hcl             # your protected state bucket
 cp terraform.tfvars.example terraform.tfvars   # fill in public_base_url, admin_bootstrap_password, image_tag
-# margince_source_dir defaults to ../../margince (the Margince repo next to
-# this one); set it in terraform.tfvars if your checkout lives elsewhere.
-terraform init
+# Without TF_VAR_margince_source_dir, margince_source_dir defaults to a
+# margince checkout next to this repository's checkout.
+terraform init -backend-config=backend.hcl
 ```
 
 ## 2. Request the ACM certificate (targeted apply)
@@ -390,9 +392,10 @@ tradeoff as before: one instance per role, no peer to shift traffic to.
 - **CloudFront + shared-secret header + prefix-list SG restriction** is
   what replaces "the instance's own Elastic IP is the internet-facing
   thing" — nothing external ever reaches an instance's raw IP directly.
-- **Secrets never touch Terraform state in plaintext on an instance** —
-  fetched at boot via each instance's own scoped `secretsmanager:GetSecretValue`
-  grant into `/.env` (mode 600).
+- **Secrets are not in user data** — each instance fetches them at boot via
+  its own scoped `secretsmanager:GetSecretValue` grant into `/.env` (mode
+  600). They are in Terraform state in plain text, which is why the S3
+  backend is required (`versions.tf`).
 - **valkey's AUTH token** (`secrets.tf`'s `redis_password` secret) protects
   the one real network hop this design has that a single-box design
   wouldn't — worker reaching app's valkey over the VPC, not loopback.

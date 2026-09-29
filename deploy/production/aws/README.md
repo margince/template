@@ -24,18 +24,19 @@ Architecture diagrams are in [`docs/diagrams/`](docs/diagrams/).
 
 ```bash
 export MARGINCE_REPO=~/src/margince
-cd light            # or: cd standard
+cd deploy/production/aws/light      # or: deploy/production/aws/standard
+cp backend.hcl.example backend.hcl
 cp terraform.tfvars.example terraform.tfvars
-terraform init
+terraform init -backend-config=backend.hcl
 ```
 
 Then follow the flavour's README: each lists the one-time steps Terraform
 does not do (certificate validation, database roles, `margince.yaml`,
 images).
 
-**State**: local state is the default. Configure the commented `backend "s3"`
-block in `versions.tf` before any apply you intend to keep: state holds every
-generated credential.
+**State**: both flavours require the S3 backend (`backend.hcl`, Terraform
+1.10+ for S3 native locking). State holds every generated credential, so the
+bucket must be restricted to deployment identities.
 
 ## Scope
 

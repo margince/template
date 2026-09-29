@@ -23,8 +23,9 @@ requirements and the one-time steps that Terraform does not do.
 
 ```bash
 cd deploy/production/azure/light      # or azure/standard, aws/light, aws/standard
+cp backend.hcl.example backend.hcl    # remote state: it holds every generated secret
 cp terraform.tfvars.example terraform.tfvars
-terraform init
+terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
@@ -41,7 +42,7 @@ Copy a flavour into an instance by hand to use it there.
 cd deploy/production/azure/light      # or any other flavour
 terraform init -backend=false
 terraform validate
-terraform test                         # Azure flavours: offline plan checks
+terraform test                         # offline plan checks, mocked providers
 ```
 
 Filled-in `*.tfvars` and `backend.hcl` files, provider lock files, and local

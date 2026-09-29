@@ -186,9 +186,9 @@ variable "db_allocated_storage_gb" {
 }
 
 variable "db_engine_version" {
-  description = "Postgres major/minor version. Must be a version RDS lists pgvector support for."
+  description = "Postgres major version (\"16\"). Major only: RDS applies minor upgrades itself (auto_minor_version_upgrade), and a pinned minor makes every later plan try to downgrade. Must be a major RDS lists pgvector support for."
   type        = string
-  default     = "16.4"
+  default     = "16"
 }
 
 variable "db_multi_az" {

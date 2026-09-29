@@ -104,6 +104,7 @@ Environment=MARGINCE_REDIS=${redis_host}:6379
 Environment=MARGINCE_REDIS_TLS=false
 Environment=MARGINCE_PUBLIC_BASE_URL=${public_base_url}
 Environment=MARGINCE_BLOBSTORE_ENDPOINT=s3.${aws_region}.amazonaws.com
+Environment=MARGINCE_BLOBSTORE_BUCKET=${blobstore_bucket}
 Environment=MARGINCE_BLOBSTORE_REGION=${aws_region}
 Environment=MARGINCE_BLOBSTORE_USE_SSL=true
 Environment=MARGINCE_LOG_FORMAT=json

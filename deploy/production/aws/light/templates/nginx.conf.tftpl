@@ -26,7 +26,8 @@ server {
 
     location = /healthz  { proxy_pass http://${app_private_ip}:8080; }
     location = /readyz   { proxy_pass http://${app_private_ip}:8080; }
-    location = /metrics  { proxy_pass http://${app_private_ip}:8080; }
+    # Prometheus metrics stay inside the VPC; CloudFront must not expose them.
+    location = /metrics  { return 404; }
 
     location /v1 { proxy_pass http://${app_private_ip}:8080; }
 

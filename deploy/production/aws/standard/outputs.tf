@@ -70,3 +70,18 @@ output "secret_arns" {
     blobstore_secret_key = aws_secretsmanager_secret.blobstore_secret_key.arn
   }
 }
+
+output "ops_security_group_id" {
+  description = "Security group for the temporary bootstrap host (README steps 2 and 4)."
+  value       = aws_security_group.ops.id
+}
+
+output "ops_instance_profile_name" {
+  description = "Instance profile for the temporary bootstrap host: SSM Session Manager and EFS config mount/write."
+  value       = aws_iam_instance_profile.ops.name
+}
+
+output "private_subnet_ids" {
+  description = "Private subnets; launch the temporary bootstrap host in one of these."
+  value       = aws_subnet.private[*].id
+}

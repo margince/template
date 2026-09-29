@@ -101,7 +101,7 @@ resource "aws_security_group" "edge" {
   tags        = { Name = "${var.name_prefix}-edge", Component = "network" }
 
   ingress {
-    description     = "HTTP from CloudFront's origin-facing range only (cloudfront.tf terminates the public-facing TLS)"
+    description     = "HTTP from CloudFront origin-facing range only (cloudfront.tf terminates the public-facing TLS)"
     from_port       = 80
     to_port         = 80
     protocol        = "tcp"
@@ -123,7 +123,7 @@ resource "aws_security_group" "edge" {
 
 resource "aws_security_group" "app" {
   name_prefix = "${var.name_prefix}-app-"
-  description = "api + valkey. Ingress on 8080 from edge only, on 6379 from worker only — never the internet."
+  description = "api + valkey. Ingress on 8080 from edge only, on 6379 from worker only; never the internet."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-app", Component = "network" }
 
@@ -168,7 +168,7 @@ resource "aws_security_group" "app" {
 
 resource "aws_security_group" "worker" {
   name_prefix = "${var.name_prefix}-worker-"
-  description = "worker. No ingress from anywhere — nothing calls it; it only ever connects out."
+  description = "worker. No ingress from anywhere; nothing calls it; it only ever connects out."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-worker", Component = "network" }
 
@@ -209,7 +209,7 @@ resource "aws_security_group" "worker" {
 
 resource "aws_security_group" "db" {
   name_prefix = "${var.name_prefix}-db-"
-  description = "RDS Postgres — ingress from app and worker on 5432 only, no egress (RDS never originates outbound traffic)."
+  description = "RDS Postgres; ingress from app and worker on 5432 only, no egress (RDS never originates outbound traffic)."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-db", Component = "database" }
 

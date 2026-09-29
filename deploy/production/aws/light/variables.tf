@@ -160,9 +160,9 @@ variable "db_allocated_storage_gb" {
 }
 
 variable "db_engine_version" {
-  description = "Postgres major/minor version. Must be a version RDS lists pgvector support for."
+  description = "Postgres major version (\"16\"). Major only: RDS applies minor upgrades itself (auto_minor_version_upgrade), and a pinned minor makes every later plan try to downgrade. Must be a major RDS lists pgvector support for."
   type        = string
-  default     = "16.4"
+  default     = "16"
 }
 
 variable "db_backup_retention_days" {
@@ -224,10 +224,11 @@ variable "margince_source_dir" {
     Path to a checkout of the Margince source repository, at the commit to
     deploy. build.tf archives it (minus its .dockerignore exclusions) and
     uploads it to S3; each instance builds its own piece from that archive.
-    The default assumes the Margince repository sits next to this one.
+    The default assumes the Margince repository sits next to this repository's
+    checkout (five levels up from deploy/production/aws/light).
   EOT
   type        = string
-  default     = "../../margince"
+  default     = "../../../../../margince"
   validation {
     condition     = fileexists("${var.margince_source_dir}/Dockerfile")
     error_message = "margince_source_dir must point at a Margince source checkout (no Dockerfile found there)."

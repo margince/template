@@ -98,12 +98,17 @@ resource "aws_cloudfront_distribution" "this" {
 
   origin {
     origin_id   = "edge"
-    domain_name = aws_instance.edge.public_ip
+    domain_name = aws_eip.edge.public_dns # CloudFront accepts only a DNS name here, not an IP
 
     custom_origin_config {
-      http_port              = 80
-      https_port             = 443
-      origin_protocol_policy = "http-only" # plain HTTP inside AWS's own backbone to the origin — TLS is terminated HERE, at CloudFront
+      http_port  = 80
+      https_port = 443
+      # TLS ends at CloudFront; the CloudFront-to-edge hop is plain HTTP and
+      # not encrypted. HTTPS here needs a publicly trusted certificate on
+      # edge, and a CloudFront VPC origin needs a NAT for edge's first-boot
+      # build; this POC stack has neither. Accepted tradeoff; use the
+      # standard stack for data that needs encryption on every hop.
+      origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
 

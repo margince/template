@@ -1,0 +1,9 @@
+# Copy to backend.hcl (git-ignored) and run:
+#   terraform init -backend-config=backend.hcl
+# The bucket is yours to create and restrict: versioning on, public access
+# blocked, SSE-KMS, and access for deployment identities only.
+bucket       = "<your-terraform-state-bucket>"
+key          = "margince/aws-light/terraform.tfstate"
+region       = "eu-central-1"
+encrypt      = true
+use_lockfile = true
