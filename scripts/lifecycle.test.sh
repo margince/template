@@ -99,11 +99,11 @@ if make -s release VERSION=v0.1.0 RELEASE_CHECK_TARGET=check-instance; then
 fi
 
 step "deploy through the hook adapter"
-mkdir -p deploy/staging/hooks
-cat >> instance.yaml <<'EOF'
-deploy:
-  staging: { adapter: hook }
-EOF
+# instance.yaml already has a top-level deploy: block (deploy/production, from
+# make new-instance); deploy-init appends staging under that same block
+# instead of writing a second one, which would fail cli check (a duplicate
+# top-level key).
+make -s deploy-init ENV=staging ADAPTER=hook
 cat > deploy/staging/hooks/apply.sh <<'EOF'
 #!/usr/bin/env bash
 printf 'apply %s %s\n' "$DEPLOY_VERSION" "$IMAGE_API" >> "$DEPLOY_DIR/../deploy.log"
@@ -133,9 +133,19 @@ if make -s deploy ENV=staging VERSION=v0.1.1; then fail "a failed verify was rep
 grep -qx 'rollback v0.1.1 verify' deploy/deploy.log || fail "rollback did not run: $(cat deploy/deploy.log)"
 
 step "deploy through the host adapter"
-make -s deploy-init ENV=prod ADAPTER=host DOMAIN=demo.example.test SSH=test@server
-git add instance.yaml deploy/prod
-git commit -q -m "feat: host deployment"
+# The instance already has deploy/production (make new-instance's default,
+# spec Section 9.8), still holding its placeholders: check refuses it.
+if out="$(make -s deploy ENV=production VERSION=v0.1.0 2>&1)"; then
+  fail "deploy ENV=production succeeded before deploy/production/host.env was filled in: $out"
+fi
+printf '%s\n' "$out" | grep -q 'deploy/production/host.env' ||
+  fail "the check refusal did not name deploy/production/host.env: $out"
+
+sed -i.bak 's/^HOST_SSH=.*/HOST_SSH=test@server/' deploy/production/host.env && rm -f deploy/production/host.env.bak
+sed -i.bak 's/^HOST_DOMAIN=.*/HOST_DOMAIN=demo.example.test/' deploy/production/host.env && rm -f deploy/production/host.env.bak
+sed -i.bak 's/email: "admin@example.com"/email: "admin@acme.example.test"/' deploy/production/config/margince.yaml && rm -f deploy/production/config/margince.yaml.bak
+git add deploy/production
+git commit -q -m "feat: fill in host deployment"
 make -s check-instance
 
 # Stubs for ssh, scp, docker, curl and timeout: scripts/deploy/host/test-stubs
@@ -147,7 +157,7 @@ STUB_SERVER_ROOT="$WORK/host-stub-server"
 mkdir -p "$STUB_STATE" "$STUB_SERVER_ROOT"
 export STUB_STATE STUB_SERVER_ROOT
 export PATH="$DIR/scripts/deploy/host/test-stubs:$PATH"
-MARGINCE_LICENSE=test HOST_KNOWN_HOSTS='server ssh-ed25519 AAAA' make -s deploy ENV=prod VERSION=v0.1.0
+MARGINCE_LICENSE=test HOST_KNOWN_HOSTS='server ssh-ed25519 AAAA' make -s deploy ENV=production VERSION=v0.1.0
 SRV_HD="$STUB_SERVER_ROOT/opt/margince/lifecycle-demo"
 [ -d "$SRV_HD/releases/v0.1.0" ] || fail "the scratch server does not have releases/v0.1.0"
 [ "$(readlink "$SRV_HD/current")" = "releases/v0.1.0" ] || fail "current does not point to releases/v0.1.0: '$(readlink "$SRV_HD/current" 2>/dev/null)'"

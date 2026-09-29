@@ -77,7 +77,7 @@ if [ "$(git -C "$DIR" rev-parse --abbrev-ref HEAD)" = "main" ]; then ok "the ins
 if [ "$(git -C "$DIR" remote get-url template)" = "$TMP/template-origin.git" ]; then ok "the template remote is the template's origin"; else fail "the template remote is the template's origin"; fi
 if git -C "$DIR" remote get-url origin >/dev/null 2>&1; then fail "has no origin before a push"; else ok "has no origin before a push"; fi
 if [ "$(tr -d '[:space:]' < "$DIR/.template-version")" = "$TPL_SHA" ]; then ok "records the template commit"; else fail "records the template commit"; fi
-keys="$(grep -oE '^[a-zA-Z_]+:' "$DIR/instance.yaml" | tr -d ':' | sort -u | tr '\n' ' ')"
+keys="$(grep -oE '^[a-zA-Z_]+:' "$DIR/instance.yaml" | tr -d ':' | sort | tr '\n' ' ')"
 if [ "$keys" = "core deploy display_name name " ] && [ "$(cli_get "$DIR" core)" = "v0.0.2" ] && [ "$(cli_get "$DIR" display_name)" = "Acme" ]; then
   ok "writes instance.yaml with exactly the keys name, display_name, core, deploy"
 else
