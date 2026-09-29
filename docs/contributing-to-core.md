@@ -1,170 +1,221 @@
-# Contributing a change to core
+# Contributing to core
 
-Normally, changes flow one way: from upstream into this repository. `core/` is
-upstream Margince as a git submodule, `make update-core REF=<tag>` moves it to
-a core release tag, and CI checks that no build modified any tracked file
-inside `core/`.
+This guide covers sending a change from an instance to core
+(`margince/margince`): when a change belongs in core, and the `core-*`
+targets that create a contribution branch in the `core/` submodule, test it
+against the instance's units, and open a pull request. It is for the
+developer who finds that a unit needs something core does not provide.
+Moving the instance to a new core release is in
+[create-an-instance.md](create-an-instance.md#7-upgrade-core).
 
-Sometimes you need to send a change the other way. A unit is written against an
-*extension seam* — a package under `core/backend/pkg/` that units are allowed to
-import. The person who finds a seam missing is the person writing the unit: you,
-here, downstream. The make targets on this page let you change core from here
-without losing the change or breaking the submodule pointer.
+## 1. When a change belongs in core
 
-## The invariant still holds
-
-`core/` is read-only **as a dependency**. Nothing you do here changes that:
-
-- A contribution branch is the one exception, and it is created by
-  `make core-branch` — never by editing a staged copy, and never under
-  `core/extensions/<our-unit>/`.
-- The branch is **never committed in this repository**. While it is checked out,
-  `git status` here reports `core` as modified. That is the submodule pointer
-  moving. Committing it records a pointer to a commit other people cannot fetch,
-  and `make core-check-pin` refuses it — in the pre-push hook and in CI.
-- **To clear it, run `make core-restore`.** It puts `core/` back on the commit
-  this repository pins, and keeps your branch.
-
-  Do not use `git checkout core`. It does nothing here: the "modified" state
-  comes from the submodule's `HEAD` differing from the index, and
-  `git checkout <path>` does not enter the submodule. If you have
-  `submodule.recurse=true` set, it does something worse — it detaches `core/`
-  off your contribution branch without a word.
-
-`make core-status` answers "what is core right now" at any point: branch or
-detached, the pinned sha, how far from `origin/main`, and whether tracked files
-are modified.
-
-## The loop
-
-```sh
-make core-branch NAME=feat/ext-seam-foo   # branch off origin/main
-$EDITOR core/backend/pkg/extension/...    # change the seam
-
-MARGINCE_ALLOW_DIRTY_CORE=1 \
-  make u NAME=acme-sync                   # prove it against a real unit
-
-git -C core commit -s                     # sign off — upstream blocks without it
-make core-check                           # upstream's own merge gate
-make core-pr                              # push and open the PR
-make core-restore                         # put core/ back — your branch is kept
-```
-
-The last line matters. `make core-pr` opens the pull request; it does not put
-`core/` back. Until you run `make core-restore`, `core/` is still on your branch
-and this repo still reports the pointer as moved.
-
-**`MARGINCE_ALLOW_DIRTY_CORE=1` is required on that middle step, not optional.**
-Staging refuses to run when `core/` has modified tracked files. It deletes and
-recopies each staged unit, so an edit made inside one would be lost without
-warning. Editing a seam modifies tracked files by design, so the refusal fires
-on legitimate work.
-
-The variable is safe here because the two paths do not overlap: your edits are
-under `core/backend/`, and staging only writes under
-`core/extensions/<our-unit>/`.
-
-The same override applies to `make check`, `make build` and every other composed
-gate — they all run `stage` first. **Prefix it on each command. Do not `export`
-it**, or the guard stays off for the rest of your session, including for the
-lanes that would have caught a real mistake.
-
-**`make core-branch` branches off `origin/main`, not off the commit this repo
-pins.** Upstream's main is usually ahead of the pin, sometimes by a lot — run
-`make core-status` to see by how much. So `make u` in that loop composes our
-units against a core this installation has never been built against. If it fails
-in a way that has nothing to do with your seam, that is the likely reason.
-
-`make u` in the middle is why you contribute from here. The composed
-installation is a real consumer of the seam you are changing, so a
-seam that does not serve a real unit fails in seconds, on your machine, before
-review.
-
-Branch names follow upstream's own shape, `<type>/<slug>` — `feat`, `fix`,
-`chore`, `docs`, `refactor`, `test` or `perf`, then lower-case words joined by
-single hyphens. `make core-branch` refuses anything else, because a rename after
-the pull request is open costs a force-push and a stale review link.
-
-## Worked example: adding an extension seam
-
-A unit may import only packages under `core/backend/pkg/` that carry the
-`//margince:extension-surface` marker. Today that is `pkg/extension`,
-`pkg/extension/jurisdiction` and `pkg/extension/crm`. Anything else fails
-upstream's arch test, which is the correct outcome: the surface is deliberately
-minimal, and widening it is a decision upstream makes, not one a downstream unit
-takes by importing.
-
-So "my unit needs something core does not expose" is a *core* change:
-
-1. `make core-branch NAME=feat/ext-seam-<thing>`
-2. Add the package under `core/backend/pkg/extension/<thing>/`, carrying the
-   marker. `TestSurfaceMarkerLivesOnlyUnderPkg` enforces where the marker may
-   live; `TestExtensionsImportOnlyTheAllowlistedSurface` is what then admits a
-   unit's import of it. Both run in `make arch` here and in core's own gate.
-3. Use it from a real unit in `extensions/` and run `make u NAME=<unit>`. If the
-   seam cannot be used comfortably by an actual consumer, that is the design
-   review, and it costs nothing here.
-4. `git -C core commit -s`, then `make core-check`, then `make core-pr`.
-
-`core/docs/how-to/add-an-extension.md` and
-`core/docs/explanation/extensibility.md` remain the authority on what the
-contract means. This page is only about the mechanics of getting a change there
-from here.
-
-## What upstream requires
-
-Read `core/CONTRIBUTING.md`; it is short and it is the authority. The three
-things that block a merge or a review:
-
-- **DCO sign-off on every commit.** `git commit -s`. The check is required and
-  a commit without the trailer blocks the merge. `make core-pr` refuses to push
-  an unsigned branch rather than let CI tell you afterwards — fix a whole branch
-  with `git -C core rebase --signoff origin/main`.
-- **Proportionate AI disclosure** in the pull request description: *Assisted*
-  (you wrote or directed it with AI help — the default) or *Generated* (AI
-  produced substantial portions you reviewed and own).
-- **Human accountability.** You must be able to explain every line you submit.
-  "The model wrote it" is not an answer to a review question.
-
-## Where the change goes
-
-`make core-pr` decides where to push by probing, not by configuration:
-
-- Write access to `origin` (`margince/margince`) — it pushes there. That
-  is how the team already works; `origin` carries `chore/craft-strict` and
-  siblings.
-- No write access — it requires a `fork` remote on `core/` and pushes there:
-
-  ```sh
-  gh repo fork margince/margince --remote=false --clone=false
-  git -C core remote add fork git@github.com:<you>/margince.git
-  ```
-
-## After the pull request
-
-```sh
-make core-restore     # core/ back on the commit this repo pins
-```
-
-Your branch is kept; `git -C core checkout <branch>` returns to it for review
-fixes. Once the change lands upstream, this installation picks it up the same way
-it picks up every other upstream change:
-
-```sh
-make update-core REF=<tag>
-make check
-git commit core instance.yaml -m "core: bump to <tag>"
-```
-
-## Troubleshooting
-
-| Symptom | What it is |
+| The change | Where it goes |
 |---|---|
-| `git status` here shows `core` modified | The pointer moved because a branch is checked out. Expected. Clear it with `make core-restore`. `git checkout core` does **not** work — see above. |
-| I already committed the moved pointer | `git checkout HEAD~1 -- core` if it is the last commit, then `make core-restore`. On a pushed branch, add a commit restoring the pinned sha. `make core-check-pin` tells you when it is right again. |
-| `core-check-pin` refuses | `core/` is pinned to a commit upstream has not merged. The message names the fix; usually `make core-restore` then commit the pointer. |
-| `update-core` refuses | It is protecting a branch, uncommitted work, or detached commits, or `REF` names something other than a core release tag. `make core-status` says which of the first three applies; `git -C core tag --list 'v*'` lists the release tags. |
-| `core-pr` refuses on sign-off | `git -C core rebase --signoff origin/main`. |
-| `core-pr` says no remote accepts a push | Add a `fork` remote, as above. |
-| `make u` refuses: "core has modified tracked files" | Expected while a seam edit is open. Prefix the command with `MARGINCE_ALLOW_DIRTY_CORE=1`, as the loop above shows. |
-| Lost track of what `core/` is | `make core-status`. |
+| A unit's own behavior, tables, screen, or tests | The unit, in `extensions/<name>/` ([adding-an-extension.md](adding-an-extension.md)). |
+| A core package that a unit needs to import but that has no `//margince:extension-surface` marker | Core. Units may import only marked packages under `core/backend/pkg/`; the `arch` gate refuses other imports. |
+| A change to an existing extension seam (a type, a field, or an interface in a marked package) | Core. |
+| A fix to a core bug, a core `make` lane, core's composer, or the desktop build in `core/desktop/` | Core. |
+| A lifecycle script, workflow, or `make` target of this repository | The template ([create-an-instance.md](create-an-instance.md#6-receive-template-changes)). |
+
+Never edit `core/` to change the instance. The instance pins a core release
+tag, and `make update-core REF=<tag>` is the only way the pin moves.
+
+## 2. Prerequisites
+
+- An instance checkout on which `make install` has run.
+- Write access to `margince/margince`, or a fork of it (Section 6).
+- The GitHub CLI (`gh`), to open the pull request. Without it, `make core-pr`
+  pushes the branch and prints where to open the pull request by hand.
+- `core/CONTRIBUTING.md` read. It is core's authority on contributions.
+
+## 3. The contribution loop
+
+1. Start a branch in `core/`:
+
+   ```sh
+   make core-branch NAME=<type>/<slug>
+   ```
+
+2. Edit the files under `core/`.
+3. Test the change against a real unit:
+
+   ```sh
+   MARGINCE_ALLOW_DIRTY_CORE=1 make u NAME=<unit>
+   ```
+
+4. Commit in `core/` with a sign-off:
+
+   ```sh
+   git -C core commit -s
+   ```
+
+5. Run core's own merge gate:
+
+   ```sh
+   make core-check
+   ```
+
+6. Push the branch and open the pull request:
+
+   ```sh
+   make core-pr
+   ```
+
+7. Put `core/` back on the pinned commit:
+
+   ```sh
+   make core-restore
+   ```
+
+`make core-pr` does not restore `core/`. Until you run `make core-restore`,
+`git status` in the instance shows `core` as modified.
+
+### 3.1 `make core-branch`
+
+`NAME` must match `<type>/<slug>`: the type is `feat`, `fix`, `chore`,
+`docs`, `refactor`, `test`, or `perf`, and the slug is lower-case letters and
+digits in words joined by single hyphens, for example `feat/ext-seam-contacts`.
+
+`make core-branch`:
+
+1. Refuses when `core/` is on a branch, has modified tracked files, or is a
+   detached `HEAD` with commits that `origin/main` does not have, or when
+   `origin/main` does not resolve.
+2. Runs `git -C core fetch origin main`.
+3. Creates the branch from `origin/main` and checks it out.
+
+The branch starts from `origin/main`, not from the pinned release tag. Core's
+`main` is usually ahead of the pin, so `make u` then composes the units with
+a newer core than the instance builds with. A failure unrelated to your change
+can come from that difference. `make core-status` shows how far `core/` is
+from `origin/main`.
+
+### 3.2 `MARGINCE_ALLOW_DIRTY_CORE=1`
+
+`make stage` refuses to run when `core/` has modified tracked files, because
+staging replaces files in `core/extensions/`. A change to core modifies tracked
+files, so every lane that stages (`make u`, `make compose`, `make build`,
+`make check`) needs `MARGINCE_ALLOW_DIRTY_CORE=1` while the change is not
+committed.
+
+- Set it on each command, as in step 3. Do not `export` it: the check stays off
+  for every later command in that shell.
+- Do not edit files under `core/extensions/<unit>/` for one of the instance's
+  units. Staging replaces them.
+
+`make core-check` runs `make unstage` and then core's `check`; it does not
+stage, so it does not need the variable.
+
+### 3.3 `make core-pr`
+
+`make core-pr`:
+
+1. Refuses when `core/` is not on a branch or has uncommitted changes.
+2. Runs `git -C core fetch origin main`, and refuses when the branch has no
+   commits that `origin/main` does not have.
+3. Refuses when a commit in `origin/main..HEAD` has no `Signed-off-by: <name>
+   <email>` trailer, and prints the fix:
+
+   ```sh
+   git -C core rebase --signoff origin/main
+   ```
+
+4. Chooses the push remote: `origin` when a dry-run push to it succeeds,
+   else `fork` when a dry-run push to it succeeds. Refuses when neither accepts
+   a push (Section 6).
+5. Pushes the branch with `git push -u <remote> <branch>`.
+6. Prints the AI disclosure that core asks for, then runs `gh pr create` with
+   base `main` on `margince/margince`. For a push to `fork`, the head is
+   `<fork-owner>:<branch>`.
+
+## 4. Core's requirements
+
+`core/CONTRIBUTING.md` is the authority. These three block a review or a merge:
+
+| Requirement | What to do |
+|---|---|
+| DCO sign-off on every commit | `git -C core commit -s`. `make core-pr` checks it before the push. |
+| AI disclosure in the pull request description | State **Assisted** (you wrote or directed it with AI help, the default) or **Generated** (AI produced substantial portions that you reviewed and own). |
+| Human accountability | You can explain every line you submit. |
+
+## 5. After the pull request
+
+1. Run `make core-restore`. It checks out the pinned commit in `core/` as a
+   detached `HEAD`, and keeps your branch.
+2. For review changes, check the branch out again and repeat steps 2 to 7 of
+   Section 3:
+
+   ```sh
+   git -C core checkout <type>/<slug>
+   ```
+
+3. When core publishes a release tag that contains the change, move the
+   instance to it with `make update-core REF=<tag>`
+   ([create-an-instance.md](create-an-instance.md#7-upgrade-core)).
+
+`make core-restore` refuses while `core/` has modified tracked files. Commit
+them on the branch, or discard them, first.
+
+## 6. Push access
+
+`make core-pr` needs a remote in `core/` that accepts a push:
+
+| Access | Setup |
+|---|---|
+| Write access to `margince/margince` | None. The branch goes to `origin`. |
+| No write access | Create a fork and add it as the remote `fork`. |
+
+```sh
+gh repo fork margince/margince --remote=false --clone=false
+git -C core remote add fork git@github.com:<you>/margince.git
+```
+
+## 7. The core pointer
+
+While a contribution branch is checked out, `git status` in the instance shows
+`core` as modified: the submodule's `HEAD` is not the commit the instance
+records. Do not commit it. The instance may pin only a commit that is on
+core's `origin/main`, and a pin to a contribution branch breaks for everyone
+when that branch is squashed or deleted.
+
+- `make core-restore` clears the change. `git checkout core` does not: it does
+  not enter the submodule, and with `submodule.recurse=true` it detaches `core/`
+  from your branch.
+- `make core-check-pin` fails when the recorded commit is not on
+  `origin/main`. The pre-push hook and `make ci` run it, and so does CI.
+
+To undo a committed pointer change:
+
+```sh
+git checkout <good-commit> -- core
+git commit -m "core: restore the pinned commit"
+make core-restore
+```
+
+`<good-commit>` is the last commit with the correct pointer, for example
+`HEAD~1` when the pointer change is in the last commit. `make core-restore`
+reads the pointer from `HEAD`, so run it after the commit.
+
+## 8. Commands
+
+| Command | Effect |
+|---|---|
+| `make core-status` | Shows the branch or detached commit of `core/`, the pinned commit and whether `HEAD` matches it, the distance from `origin/main`, and modified tracked files. Changes nothing. |
+| `make core-branch NAME=<type>/<slug>` | Creates a contribution branch from `origin/main` (Section 3.1). |
+| `make core-check` | Runs `make unstage`, then core's `check`. |
+| `make core-pr` | Checks the sign-off, pushes the branch, and opens the pull request (Section 3.3). |
+| `make core-restore` | Checks out the pinned commit in `core/`; keeps the branch. |
+| `make core-check-pin` | Fails when the pinned commit is not on `origin/main`. Prints `SKIPPED` and exits 0 when it cannot find out (no network, or a shallow clone). |
+| `make core-root-<lane>`, `make core-backend-<lane>` | Stage the units, then run a core target from `core/Makefile` or `core/backend/Makefile`. |
+
+`UPSTREAM_REMOTE` (default `origin`) and `UPSTREAM_BRANCH` (default `main`)
+change the remote and branch that these targets compare with and branch from.
+
+## Related guides
+
+- [adding-an-extension.md](adding-an-extension.md): the units that use a seam.
+- [create-an-instance.md](create-an-instance.md#7-upgrade-core): upgrade core.
+- [troubleshooting.md](troubleshooting.md#9-the-core-submodule): core
+  submodule errors.
+- `core/CONTRIBUTING.md`: core's contribution rules.
