@@ -36,8 +36,24 @@ make local-admin-password
 Delete `.local/` only with `make local-down WIPE=1`; deleting it by hand
 leaves the data volumes, and the next `local-up` generates new database
 passwords that the old database rejects.
-See [docs/deploy.md](docs/deploy.md) for a real deployment with `make
-deploy-init` and the `host` adapter.
+
+Deploy a new instance to one Linux virtual machine (for example AWS EC2):
+every instance created with `make new-instance` already has a default
+`production` environment (`deploy/production/`, the built-in `host` adapter).
+Fill in three values, then bootstrap and deploy:
+
+```sh
+make new-instance NAME=acme DISPLAY_NAME="Acme"
+cd ../margince-acme
+# fill in deploy/production/host.env (HOST_SSH, HOST_DOMAIN) and the admin
+# email in deploy/production/config/margince.yaml
+make host-bootstrap ENV=production
+MARGINCE_LICENSE=<license> make deploy ENV=production VERSION=<v>
+```
+
+See [docs/deploy.md](docs/deploy.md) for the full `host` adapter walkthrough
+and [docs/create-an-instance.md](docs/create-an-instance.md) for creating the
+instance.
 
 ## How instances use this template
 

@@ -25,6 +25,7 @@
 | [Lifecycle CI (T10 part 1)](superpowers/plans/2026-09-25-lifecycle-ci.md) | `make test-lifecycle` and `lifecycle.yml`. |
 | [Public template (T13, T16, T7, T15, T8, T10 part 2, T12)](superpowers/plans/2026-09-28-public-template.md) | Making the template public-ready and completing release, licensing, trial, the `host` adapter, the lifecycle test, and these guides. |
 | [Default setup (T17)](superpowers/plans/2026-09-29-default-setup.md) | Generated instance keys and admin password, persistent file storage, the license check, `make deploy-init`, `make local-up`/`local-down`/`local-admin-password`, and the webhook key in the desktop kit and `make smoke`. |
+| [Default VM deployment (T18)](superpowers/plans/2026-09-29-default-vm.md) | The template ships a default `production` environment (`deploy/production/`, the `host` adapter) so every new instance can deploy after filling in three values. |
 
 ## Guides
 

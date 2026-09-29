@@ -28,6 +28,7 @@ All template issues are in `margince-template`.
 | T8 | #8 | Laptop trial | `make trial`, `data.dataset`. | `trial.test.sh` passes; the bundle starts in production mode. | T16 | Done |
 | T12 | #12 | Guides | Release, deploy, license, trial. | `make check-docs` passes. | T7, T8, T15, T16 | Done |
 | T17 | — | Default setup | Generated instance keys and admin password (`host` adapter), persistent file storage, the license check, `make deploy-init`, `make local-up`/`local-down`/`local-admin-password`, the desktop kit's and `make smoke`'s webhook key. Design: [2026-09-24-client-instance-template-design.md](../specs/2026-09-24-client-instance-template-design.md#97-default-setup). Plan: [2026-09-29-default-setup.md](2026-09-29-default-setup.md). | `test-lifecycle` asserts `instance.env` after a host deploy; `test-scripts`, `test-cli`, `check-docs`, `check-public` pass. | T15 | Done |
+| T18 | — | Default VM deployment | The template ships a default `production` environment (`deploy/production/`, the `host` adapter) so every new instance can deploy after filling in three values: `deploy-init` accepts a missing `DOMAIN`/`SSH`/`ADMIN_EMAIL` and writes placeholders; `check` refuses them, naming the file to edit; `make new-instance` regenerates `deploy/production/` per instance. Design: [2026-09-24-client-instance-template-design.md](../specs/2026-09-24-client-instance-template-design.md#98-default-deployment-environment). Plan: [2026-09-29-default-vm.md](2026-09-29-default-vm.md). | `test-lifecycle` asserts `make deploy ENV=production` fails at `check` before the placeholders are filled, then deploys through the stubs once they are; `test-scripts`, `test-cli`, `check-instance`, `check-docs`, `check-public` pass. | T17 | Done |
 
 ## Outside the template
 
@@ -46,6 +47,7 @@ T16 → T8
 T7 + T15 → T10 part 2
 all → T12
 T15 → T17
+T17 → T18
 ```
 
 Tracking issue: #14.
