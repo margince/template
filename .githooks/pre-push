@@ -17,6 +17,12 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
+# git writes the refs being pushed to the hook's standard input. Read them all
+# first: git fails with SIGPIPE (exit 141) when it writes to a hook that has not
+# read them, and the test suites below must not read that input either.
+cat >/dev/null
+exec </dev/null
+
 # git sets GIT_DIR (and in a linked worktree also GIT_WORK_TREE and
 # GIT_INDEX_FILE) for a hook. Inherited, they make every nested `git` act on
 # THIS repository: the script suites' throwaway `git init` and `git -C <dir>`

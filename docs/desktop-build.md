@@ -26,7 +26,7 @@ A trial bundle, a desktop folder with a trial license, is in
 ## 2. Quick start
 
 ```sh
-make desktop
+make desktop DATASET=<dataset-checkout>
 make desktop-install
 make desktop-run          # leave it running
 make desktop-seed DATASET=<dataset-checkout>   # in a second terminal
