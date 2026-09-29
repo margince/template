@@ -217,13 +217,8 @@ folder.
 Each folder carries `BUILD-INFO.txt` and `runtime/build-info.json`, which name
 the version, the platform, the instance and core commits, the units, and the
 demo dataset commit. The release workflows pass the version and the commits
-in. The `dataset` line has one of three values:
-
-| Value | Meaning |
-|---|---|
-| a commit | The folder was seeded from that commit of the demo dataset. |
-| `none` | The folder ships no demo data and keeps its demo loader. |
-| `unknown` | The folder ships demo data whose commit was not recorded. |
+in. The fields and their values are in
+[desktop-build.md](desktop-build.md#8-build-information).
 
 The desktop workflows check out the dataset's default branch, not a pinned
 commit. A second run of a release on the same tag can therefore ship
