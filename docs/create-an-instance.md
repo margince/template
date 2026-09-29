@@ -1,19 +1,26 @@
-# Create an instance
+# Create your instance
 
 This guide covers the life of your instance repository: creating it from
 the template with `make new-instance`, what it contains, receiving template
 changes with `make template-sync`, upgrading core with `make update-core`, and
 adding instance-only `make` targets. It is for the developer who sets up and
-maintains an instance. An instance shares the template's git history, so
+maintains your instance. Your instance shares the template's git history, so
 template changes reach it by merge.
+
+A clone, fork, or copy of `margince/template` is not your instance. It is
+still the template, and its `instance.yaml` names the default instance
+`margince-default`. Your instance is the new repository that
+`make new-instance` creates. If you already have a copy, follow
+[Section 2.1](#21-start-from-your-own-copy-of-the-template).
 
 ## 1. Prerequisites
 
-- A checkout of `margince/template` on which `make install` has run.
+- A checkout of `margince/template` (a clone of the template, or of your
+  own copy of it) on which `make install` has run.
   `make new-instance` validates the new `instance.yaml` with the Go CLI in
   `scripts/cli` and checks out `core/` from the template's own `core/`.
 - A clean template working tree: `git status --porcelain` prints nothing.
-- The checkout is the template, not an instance: `make new-instance` refuses
+- The checkout is the template, not your instance: `make new-instance` refuses
   to run where a `.template-version` file exists.
 - For `PUSH=1`: the GitHub CLI (`gh`), signed in with the right to create
   repositories in the target owner.
@@ -68,6 +75,41 @@ If a step before the commit fails, the new directory is removed. A failed push
 in step 9 leaves the committed instance in place; push it as Section 3
 describes. Without `PUSH=1` the command prints the next steps:
 `cd <dir> && make install && make dev`.
+
+### 2.1 Start from your own copy of the template
+
+Use these steps when you already copied `margince/template` into a repository
+of your own, for example a private repository. The copy is the template, not
+your instance: `make template-sync` refuses to run in it, because it has no
+`.template-version`.
+
+1. In a checkout of your copy, run `make install`.
+2. Create the instance next to it:
+
+   ```sh
+   make new-instance NAME=<name> DISPLAY_NAME=<text>
+   ```
+
+3. Go to the new directory:
+
+   ```sh
+   cd ../margince-<name>
+   ```
+
+4. Point the `template` remote at the official template. `make new-instance`
+   set it to the `origin` of your copy:
+
+   ```sh
+   git remote set-url template https://github.com/margince/template.git
+   ```
+
+5. Push the instance to your repository. Its history differs from the copy's
+   history, so push to a new, empty repository, or replace the copy's `main`
+   with `git push --force`.
+
+A repository created with the GitHub "Use this template" button does not share
+the template's git history, and `make template-sync` cannot merge into it.
+Start from a clone or an import of `margince/template` instead.
 
 ## 3. Push an existing instance to GitHub
 

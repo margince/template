@@ -1,6 +1,6 @@
 # margince/template
 
-The template you create your Margince instance from. An instance is the
+The template you create your Margince instance from. Your instance is the
 Margince core product ([`margince/margince`](https://github.com/margince/margince))
 plus your extension units, configuration, demo data reference, and
 deployment definition. This repository defines the directory structure, the
@@ -57,6 +57,9 @@ generates database passwords that the old database rejects.
 
 ### Create your instance
 
+A clone, fork, or copy of this repository is the template, not your instance.
+`make new-instance` creates your instance as a new repository.
+
 Run this in a template checkout on which `make install` has run:
 `make new-instance` checks out `core/` from the template's `core/` and
 validates `instance.yaml` with Go.
@@ -71,7 +74,7 @@ make dev
 `PUSH=1 OWNER=<github-owner>` also creates a private GitHub repository and
 pushes the instance. See [docs/create-an-instance.md](docs/create-an-instance.md).
 
-### Deploy an instance to a Linux server
+### Deploy your instance to a Linux server
 
 Every new instance has a `production` environment in `deploy/production/` that
 uses the built-in `host` adapter. Before you start, you need:
@@ -133,7 +136,7 @@ and infrastructure lanes, and the desktop lanes.
 | Gates | `make test-scripts` | Run the tests of the template's scripts and CLI. |
 | Gates | `make test-lifecycle` | Run the whole instance lifecycle in a scratch instance (slow; `KEEP=1` keeps it). |
 | Instance | `make new-instance NAME=<name> DISPLAY_NAME=<text>` | Create your instance repository from this template. |
-| Instance | `make template-sync` | Merge the template's `main` into an instance and record it in `.template-version`. |
+| Instance | `make template-sync` | Merge the template's `main` into your instance and record it in `.template-version`. |
 | Instance | `make check-template` | Verify that template-owned paths match the merged template commit. |
 | Instance | `make check-instance` | Verify that `instance.yaml` is valid and names the tag `core/` is at. |
 | Instance | `make update-core REF=<tag>` | Move `core/` to a core release tag and record it in `instance.yaml`. |
@@ -177,7 +180,7 @@ and infrastructure lanes, and the desktop lanes.
 | `docs/client/` | instance | Client documentation. Not in the template. |
 
 `.template-owned` is the authoritative list; a path that it does not list is
-instance-owned. `make check-template` fails in an instance when a
+instance-owned. `make check-template` fails in your instance when a
 template-owned path differs from the merged template commit. See
 [docs/create-an-instance.md](docs/create-an-instance.md#4-what-the-instance-contains).
 
@@ -195,7 +198,7 @@ template-owned path differs from the merged template commit. See
 | Guide | Purpose |
 |---|---|
 | [Documentation index](docs/README.md) | Every guide, the design, and the plans. |
-| [Create an instance](docs/create-an-instance.md) | Create an instance and keep it current with the template and with core. |
+| [Create your instance](docs/create-an-instance.md) | Create your instance and keep it current with the template and with core. |
 | [Adding an extension](docs/adding-an-extension.md) | Create and test a unit. |
 | [Release](docs/release.md) | Cut a release, build and test the images. |
 | [Deploy](docs/deploy.md) | Deploy a release with the `host` or `hook` adapter. |

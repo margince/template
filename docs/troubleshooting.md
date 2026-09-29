@@ -1,7 +1,7 @@
 # Troubleshooting
 
 This guide lists known error messages of the instance lifecycle, with their
-cause and fix, by area. It is for every developer who works in an instance.
+cause and fix, by area. It is for every developer who works in your instance.
 Each entry starts with the message as the code prints it; `<...>` marks a part
 that changes. The guide that owns each topic has the full procedure; this
 guide links to it.
@@ -236,7 +236,7 @@ in Section 9.
 
 ### `check-template: template-owned paths differ from template commit <commit>:`
 
-**Cause:** In an instance, a template-owned path was changed. The message lists
+**Cause:** In your instance, a template-owned path was changed. The message lists
 the paths.
 
 **Fix:** Revert the paths in the instance. Make the change in the template and
@@ -595,7 +595,7 @@ is missing, or `core/` is a shallow clone.
 
 ### `error: update-core: '<ref>' must be a release tag like v0.0.2`
 
-**Cause:** `REF` is not a core release tag (`vX.Y.Z`). An instance pins core
+**Cause:** `REF` is not a core release tag (`vX.Y.Z`). Your instance pins core
 releases only. `update-core: '<ref>' is not a core release tag.` means that no
 such tag exists in `core/`.
 

@@ -1,8 +1,8 @@
 # Adding an extension
 
-This guide covers the extension units of an instance: creating a unit with
+This guide covers the extension units of your instance: creating a unit with
 `make new-unit`, its files, composing it into core, testing it, and the gates
-that check it. It is for the developer who writes a unit in an instance. The
+that check it. It is for the developer who writes a unit in your instance. The
 extension contract itself (what a unit may declare and what each capability
 means) is core's, in
 [core/docs/how-to/add-an-extension.md](../core/docs/how-to/add-an-extension.md)
@@ -12,7 +12,7 @@ This guide covers only what differs because the instance builds on top of the
 
 ## 1. Prerequisites
 
-- An instance checkout on which `make install` has run
+- A checkout of your instance on which `make install` has run
   ([create-an-instance.md](create-an-instance.md)).
 - Docker running, for the gates that need a database
   (`make check-ext-migrations`, `make test-integration-ext`).
@@ -73,7 +73,7 @@ untracked manifest.
 
 The instance's `.gitignore` does not ignore `extensions/`. Core's guide asks for
 a `.gitignore` exception per unit; that rule applies to units inside core, not
-to an instance.
+to your instance.
 
 ## 4. Unit layout
 

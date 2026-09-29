@@ -1,6 +1,6 @@
 # Desktop build
 
-This guide covers the desktop folder of an instance: a self-contained Margince
+This guide covers the desktop folder of your instance: a self-contained Margince
 (PostgreSQL, the event bus, `api`, `worker`, the web UI, and a launcher) with
 the instance's units, which runs without Docker. It covers building the macOS
 folder with `make desktop`, installing, configuring, running, and seeding it,
@@ -18,7 +18,7 @@ A trial bundle, a desktop folder with a trial license, is in
   the Mac that builds it. There is no local Windows build (Section 10).
 - The Xcode Command Line Tools (`xcode-select --install`), because the first
   build compiles PostgreSQL and the event bus.
-- An instance checkout on which `make install` has run.
+- A checkout of your instance on which `make install` has run.
 - `curl`, used by the desktop targets to probe the running app.
 - Optional: a local checkout of the demo dataset, to include the demo loader
   (Section 3.2).

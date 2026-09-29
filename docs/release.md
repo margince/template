@@ -1,10 +1,10 @@
 # Release
 
-This guide covers releases of an instance: the version format, cutting a
+This guide covers releases of your instance: the version format, cutting a
 release with `make release`, what `release.yml` builds, tests, and publishes,
 the repository settings it reads, the image names, and building and testing
 the images locally with `make package` and `make smoke`. It is for the
-developer who ships an instance. It is the one guide for releases and images;
+developer who ships your instance. It is the one guide for releases and images;
 deployment of a release is in [deploy.md](deploy.md).
 
 ## 1. Prerequisites
@@ -230,7 +230,7 @@ different demo data; the `dataset` line shows which.
 | Workflow | Runs on | Content |
 |---|---|---|
 | `ci.yml` | pull requests, pushes to `main` | The light gate: `check-instance`, `check-template`, `check-composition`, `check-manifests`, `build`, `test-extensions`, `arch`, `ext-imports`, `fe-ds-gates`, `lint`, `drift`, `check-docs`, `test-scripts`, `core-check-pin`, the clean-submodule check, `secret-scan`, and `test-secret-scan`. |
-| `lifecycle.yml` | pull requests, pushes to `main`, by hand | `make test-lifecycle`. In an instance every step after the first check is skipped. |
+| `lifecycle.yml` | pull requests, pushes to `main`, by hand | `make test-lifecycle`. In your instance every step after the first check is skipped. |
 | `release.yml` | pushed `v*` tags | Section 4. |
 | `full-check.yml` | called by `release.yml` | The light gate plus `fe-test-ext`, `fe-typecheck-composed`, `check-ext-migrations`, and `test-integration-ext`. |
 | `desktop-macos.yml`, `desktop-windows.yml` | called by `release.yml`, by hand | Section 8. |

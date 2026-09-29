@@ -1,6 +1,6 @@
 # Deploy
 
-This guide covers deploying a release of an instance to an environment with
+This guide covers deploying a release of your instance to an environment with
 `make deploy ENV=<env> VERSION=<v>`: declaring environments, the first
 deployment of the default `production` environment, the deployment contract,
 the `hook` adapter, the built-in `host` adapter for one Linux server, and the
@@ -26,7 +26,7 @@ deploy:
 | Directory | `deploy/<env>/` must exist. `make check-instance` and `make deploy` fail without it. |
 | Content | `deploy/<env>/` holds configuration and the names of secrets, never secret values. |
 
-Every instance created with `make new-instance` has the environment
+Your instance, created with `make new-instance`, has the environment
 `production` with the `host` adapter (Section 2).
 
 ### 1.1 Create an environment with `make deploy-init`

@@ -1,6 +1,6 @@
 # Contributing to core
 
-This guide covers sending a change from an instance to core
+This guide covers sending a change from your instance to core
 (`margince/margince`): when a change belongs in core, and the `core-*`
 targets that create a contribution branch in the `core/` submodule, test it
 against the instance's units, and open a pull request. It is for the
@@ -23,7 +23,7 @@ tag, and `make update-core REF=<tag>` is the only way the pin moves.
 
 ## 2. Prerequisites
 
-- An instance checkout on which `make install` has run.
+- A checkout of your instance on which `make install` has run.
 - Write access to `margince/margince`, or a fork of it (Section 6).
 - The GitHub CLI (`gh`), to open the pull request. Without it, `make core-pr`
   pushes the branch and prints where to open the pull request by hand.

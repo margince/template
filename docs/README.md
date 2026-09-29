@@ -9,7 +9,7 @@ link to it.
 
 | Guide | Purpose |
 |---|---|
-| [Create an instance](create-an-instance.md) | Create your instance, receive template changes, upgrade core, and add instance-only `make` targets. |
+| [Create your instance](create-an-instance.md) | Create your instance, receive template changes, upgrade core, and add instance-only `make` targets. |
 | [Adding an extension](adding-an-extension.md) | Create, compose, and test a unit in `extensions/`. |
 
 ## Day to day
