@@ -1,41 +1,69 @@
 # Agent Instructions
 
-This file applies to AI agents and human contributors working in this
-repository.
+Rules for AI agents and human contributors who change this repository.
 
 ## Context
 
-- This repository is the template for Margince client instances. Read
-  `README.md` first.
-- The design is in `docs/superpowers/specs/2026-09-24-client-instance-template-design.md`.
-  Do not implement anything that contradicts it. Propose a spec change instead.
-- The template works as Margince Default (no extensions). `make new-instance`
-  creates a client instance, `make template-sync` keeps it in step, `make
-  release` cuts a release, `make trial` builds a laptop trial bundle, and
-  `make deploy` deploys it (`hook` or the built-in `host` adapter).
-  `make test-lifecycle` (CI: `lifecycle.yml`) runs that whole lifecycle. See
-  docs/superpowers/plans/2026-09-24-issue-breakdown.md for issue status and
-  docs/README.md for every guide.
+- This repository is `margince-template`, the template that every Margince
+  client instance is created from. Without extensions it is itself an
+  instance, Margince Default. Read [README.md](README.md) first.
+- The design is
+  [docs/superpowers/specs/2026-09-24-client-instance-template-design.md](docs/superpowers/specs/2026-09-24-client-instance-template-design.md).
+  Do not implement anything that contradicts it; propose a change to the spec
+  instead. `docs/superpowers/` is design history: do not rewrite it.
+- The guides are listed in [docs/README.md](docs/README.md).
 
 ## Rules
 
-- **Path ownership.** Each path is template-owned or instance-owned (design
-  Section 6). This repository contains template-owned files and empty or
-  example versions of instance-owned files. Never add client-specific code or
-  values.
-- **Core.** `core/` is a submodule pinned to a core tag. Never edit files in
-  `core/`. Changes to how Margince is compiled belong in `margince/margince`.
-- **Reuse.** Tooling is copied from the template's tooling source repository
-  (design Section 7). Reuse an existing script before writing a new one.
-- **Secrets.** Never commit licenses, tokens, or credentials. Licenses are
-  provided through `MARGINCE_LICENSE` or the environment secret store.
+- **Path ownership.** `.template-owned` lists the template-owned paths; every
+  other path is instance-owned (design Section 6). This repository holds the
+  template-owned files and the empty or default versions of instance-owned
+  files (`instance.yaml`, `extensions/`, `deploy/production/`). Never add
+  client-specific code or values.
+- **Core.** `core/` is a submodule pinned to a core release tag. Never edit
+  files in `core/`. Only `make update-core REF=<tag>` moves the pin. A change
+  to core goes to `margince/margince`
+  ([docs/contributing-to-core.md](docs/contributing-to-core.md)).
+- **Reuse.** Use the existing functions in `scripts/lib.sh` (for example
+  `instance_get`, `image_repo`, `is_release_version`) and the Go CLI in
+  `scripts/cli` for `instance.yaml`. Extend an existing script before you add
+  a new one. Cover new behavior in the script's `*.test.sh`, and add a new
+  test file to the `test-scripts` target in the `Makefile`.
+- **Secrets.** Never commit a license, token, key, or password. Scripts read
+  them from the environment, never print them, and never pass them on a
+  command line. `deploy/<env>/secrets` holds names only.
+- **Public-only rule.** The template is public. No file outside
+  `docs/superpowers/` and `scripts/check-public.patterns` may name a private
+  repository, host, organization, or service (design Section 7).
+  `make check-public` enforces this.
 
 ## Writing style
 
-Write documentation in technical standard English: short declarative
-sentences, standard terms, numbered sections, and tables for decisions and
-responsibilities. Do not use idioms or rhetorical phrasing.
+- Write in technical standard English: short declarative sentences, present
+  tense, active voice, and the terms of [docs/glossary.md](docs/glossary.md).
+- Use numbered sections in long guides, tables for options and decisions, and
+  one action per numbered step. Put placeholders in `<angle-brackets>`.
+- Do not use idioms, rhetorical phrasing, or incident stories. Design
+  rationale belongs in the spec.
+- Every command, target, variable, and default in a document must match the
+  code. Each topic has one guide; other documents link to it.
+- `make check-docs` treats every `make <word>` in `README.md`, `CLAUDE.md`, and
+  `docs/*.md` as a target name, so write it only for real targets.
 
 ## Commits
 
-Use Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`).
+- Use Conventional Commits: `feat:`, `fix:`, `docs:`, `chore:`, `test:`,
+  `refactor:`.
+- One logical change per commit.
+- Commits to `core/` need a DCO sign-off (`git commit -s`); `make core-pr`
+  checks it.
+
+## Tests to run
+
+| Change | Run |
+|---|---|
+| Any change | `make test-scripts` (the pre-push hook runs it with `make core-check-pin`). |
+| Documentation | `make check-docs` and `make check-public`, and check every relative link and anchor. |
+| Scripts, `Makefile`, workflows | `make test-scripts`, then `make check`. |
+| The instance lifecycle (`new-instance`, `template-sync`, `release`, `deploy`) | `make test-lifecycle`. |
+| Before a release | `make ci`. |
