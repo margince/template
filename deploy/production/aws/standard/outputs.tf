@@ -43,8 +43,8 @@ output "kms_key_arn" {
 }
 
 output "alerts_topic_arn" {
-  description = "Subscribe your own alert destination — alarms.tf's own comment has the aws sns subscribe command. Empty when var.enable_deep_monitoring is false: there is no topic to subscribe to."
-  value       = var.enable_deep_monitoring ? aws_sns_topic.alerts[0].arn : ""
+  description = "SNS topic every alarm in alarms.tf pages. Subscribe your own destination if alert_email is not enough. Empty when enable_alarms is false."
+  value       = var.enable_alarms ? aws_sns_topic.alerts[0].arn : ""
 }
 
 output "waf_web_acl_arn" {
@@ -55,20 +55,43 @@ output "alb_access_log_bucket" {
   value = aws_s3_bucket.alb_logs.bucket
 }
 
-output "secret_arns" {
-  description = "Secrets Manager ARNs (not values) for every credential this stack seals."
+output "ssm_parameter_names" {
+  description = "SSM Parameter Store names (not values) of every SecureString this stack writes. Read one with: aws ssm get-parameter --with-decryption --name <name> --query Parameter.Value --output text. license is empty when no license_token is set."
   value = {
-    owner_dsn            = aws_secretsmanager_secret.owner_dsn.arn
-    app_dsn              = aws_secretsmanager_secret.app_dsn.arn
-    redis_password       = aws_secretsmanager_secret.redis_password.arn
-    keyvault_root_key    = aws_secretsmanager_secret.keyvault_root_key.arn
-    webhook_key          = aws_secretsmanager_secret.webhook_key.arn
-    connector_state_key  = aws_secretsmanager_secret.connector_state_key.arn
-    admin_password       = aws_secretsmanager_secret.admin_password.arn
-    license              = aws_secretsmanager_secret.license.arn
-    blobstore_access_key = aws_secretsmanager_secret.blobstore_access_key.arn
-    blobstore_secret_key = aws_secretsmanager_secret.blobstore_secret_key.arn
+    owner_dsn            = aws_ssm_parameter.owner_dsn.name
+    app_dsn              = aws_ssm_parameter.app_dsn.name
+    redis_password       = aws_ssm_parameter.redis_password.name
+    keyvault_root_key    = aws_ssm_parameter.keyvault_root_key.name
+    webhook_key          = aws_ssm_parameter.webhook_key.name
+    connector_state_key  = aws_ssm_parameter.connector_state_key.name
+    admin_password       = aws_ssm_parameter.admin_password.name
+    blobstore_access_key = aws_ssm_parameter.blobstore_access_key.name
+    blobstore_secret_key = aws_ssm_parameter.blobstore_secret_key.name
+    rds_master_password  = aws_ssm_parameter.rds_master_password.name
+    license              = local.has_license ? aws_ssm_parameter.license[0].name : ""
   }
+}
+
+output "ssm_parameter_arns" {
+  description = "SSM Parameter Store ARNs for the same parameters as ssm_parameter_names."
+  value = {
+    owner_dsn            = aws_ssm_parameter.owner_dsn.arn
+    app_dsn              = aws_ssm_parameter.app_dsn.arn
+    redis_password       = aws_ssm_parameter.redis_password.arn
+    keyvault_root_key    = aws_ssm_parameter.keyvault_root_key.arn
+    webhook_key          = aws_ssm_parameter.webhook_key.arn
+    connector_state_key  = aws_ssm_parameter.connector_state_key.arn
+    admin_password       = aws_ssm_parameter.admin_password.arn
+    blobstore_access_key = aws_ssm_parameter.blobstore_access_key.arn
+    blobstore_secret_key = aws_ssm_parameter.blobstore_secret_key.arn
+    rds_master_password  = aws_ssm_parameter.rds_master_password.arn
+    license              = local.has_license ? aws_ssm_parameter.license[0].arn : ""
+  }
+}
+
+output "waf_log_group_name" {
+  description = "CloudWatch Logs group WAF writes to (CMK-encrypted)."
+  value       = aws_cloudwatch_log_group.waf.name
 }
 
 output "ops_security_group_id" {

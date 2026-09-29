@@ -123,10 +123,14 @@ variable "admin_bootstrap_password" {
   description = <<-EOT
     MARGINCE_ADMIN_PASSWORD for the first boot against an empty database.
     Rotate/remove per the Margince repository's docs/deployment.md once the organization exists —
-    this variable only seeds the initial secret version.
+    this variable only seeds the initial SSM parameter value.
   EOT
   type        = string
   sensitive   = true
+  validation {
+    condition     = length(var.admin_bootstrap_password) > 0
+    error_message = "admin_bootstrap_password must not be empty (SSM Parameter Store rejects empty values)."
+  }
 }
 
 variable "license_token" {
@@ -192,32 +196,44 @@ variable "log_retention_days" {
   default = 14
 }
 
-variable "enable_deep_monitoring" {
+variable "enable_alarms" {
   description = <<-EOT
-    Toggles alarms.tf's SNS topic and the three instances' StatusCheckFailed
-    alarms. Off by default — an operator who has not yet decided where
-    alerts should go gets no half-wired SNS topic with nothing subscribed to
-    it, same reasoning as the full stack's own toggle.
+    Creates alarms.tf's SNS topic and CloudWatch alarms: per instance
+    (edge/app/worker) system status check with EC2 auto-recover, instance
+    status check, sustained CPU; RDS free storage, CPU and connections. On
+    by default: every role is a single instance with no peer, so these are
+    the only signal that something is down. Standard-resolution alarms on
+    free basic metrics, roughly $0.10/alarm/month.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
-# ---- Edge / CloudFront --------------------------------------------------------
-
-variable "enable_waf" {
+variable "alert_email" {
   description = <<-EOT
-    Attaches a WAFv2 web ACL (AWS managed rule groups only) to the
-    CloudFront distribution (cloudfront.tf). Off by default — same
-    half-wired-by-default reasoning as enable_deep_monitoring: this stack
-    picks a sensible baseline (managed rule groups, no custom rules) but not
-    whether you want WAF's own cost/false-positive tradeoff at all. The
-    CloudFront-in-front-of-the-origin-SG restriction (network.tf) is the
-    floor this stack keeps either way; WAF is the opt-in extra.
+    Optional email address subscribed to the alerts SNS topic. Empty (the
+    default) creates no subscription. AWS emails a confirmation link that
+    must be clicked before any alert is delivered.
   EOT
-  type        = bool
-  default     = false
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.alert_email == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alert_email))
+    error_message = "alert_email must be empty or a single email address."
+  }
 }
+
+variable "db_max_connections_alarm_threshold" {
+  description = <<-EOT
+    DatabaseConnections above this for 15 minutes alarms. db.t4g.micro's
+    default max_connections is roughly 80-110 (derived from instance
+    memory); raise this with a larger db_instance_class.
+  EOT
+  type        = number
+  default     = 70
+}
+
+# ---- Source -----------------------------------------------------------------
 
 variable "margince_source_dir" {
   description = <<-EOT
@@ -232,5 +248,15 @@ variable "margince_source_dir" {
   validation {
     condition     = fileexists("${var.margince_source_dir}/Dockerfile")
     error_message = "margince_source_dir must point at a Margince source checkout (no Dockerfile found there)."
+  }
+}
+
+variable "auth_rate_limit_per_minute" {
+  description = "Requests per minute per client address nginx allows on login, password reset, OAuth token and setup paths (burst of the same size). Same rule set as the Azure light stack."
+  type        = number
+  default     = 30
+  validation {
+    condition     = var.auth_rate_limit_per_minute >= 1
+    error_message = "auth_rate_limit_per_minute must be at least 1."
   }
 }

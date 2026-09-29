@@ -12,11 +12,36 @@
 # container's own nginx (frontend/nginx.conf) — there is no separate web
 # process anymore, this instance serves the built frontend directly.
 
+# ---- Request filtering (this stack has no WAF, by design for cost) --------
+# Per-client-IP rate limits. This file is included inside nginx's http {}
+# block (/etc/nginx/conf.d/), so the zones are declared here.
+#
+# Every request arrives from CloudFront, so the client address is taken
+# from X-Forwarded-For: with real_ip_recursive off nginx uses the LAST
+# entry, the viewer IP CloudFront itself appended, which a client cannot
+# forge (any X-Forwarded-For it sends ends up in front of that entry).
+# Trusting every source is safe only because network.tf's SG admits
+# CloudFront's origin-facing range alone and the header check below
+# rejects anything that did not come through this distribution.
+# Same rule set as the Azure light stack: only the credential endpoints are
+# limited, per client address, auth_rate_limit_per_minute with a burst of the
+# same size. Microsoft sign-in (/v1/auth/oidc/*) is not limited: Entra
+# protects its own side, and staff behind one office address would otherwise
+# share one bucket.
+limit_req_zone $binary_remote_addr zone=auth:10m rate=${auth_rate}r/m;
+limit_req_status 429;
+limit_req_log_level warn;
+
 server {
     listen 80;
     server_name ${domain};
     root /opt/margince/frontend/dist;
     index index.html;
+
+    set_real_ip_from 0.0.0.0/0;
+    set_real_ip_from ::/0;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive off;
 
     if ($http_x_origin_verify != "${origin_verify_secret}") {
         return 403;
@@ -29,12 +54,28 @@ server {
     # Prometheus metrics stay inside the VPC; CloudFront must not expose them.
     location = /metrics  { return 404; }
 
+    location = /v1/auth/login {
+        limit_req zone=auth burst=${auth_rate} nodelay;
+        proxy_pass http://${app_private_ip}:8080;
+    }
+    location ~ ^/v1/auth/(forgot-password|reset-password) {
+        limit_req zone=auth burst=${auth_rate} nodelay;
+        proxy_pass http://${app_private_ip}:8080;
+    }
     location /v1 { proxy_pass http://${app_private_ip}:8080; }
+    location /setup/ {
+        limit_req zone=auth burst=${auth_rate} nodelay;
+        proxy_pass http://${app_private_ip}:8080;
+    }
 
     location = /webhooks/gmail   { proxy_pass http://${app_private_ip}:8080; }
     location = /webhooks/graph   { proxy_pass http://${app_private_ip}:8080; }
     location = /webhooks/hubspot { proxy_pass http://${app_private_ip}:8080; }
 
+    location = /oauth/token {
+        limit_req zone=auth burst=${auth_rate} nodelay;
+        proxy_pass http://${app_private_ip}:8080;
+    }
     location /oauth/ { proxy_pass http://${app_private_ip}:8080; }
     location /mcp     { proxy_pass http://${app_private_ip}:8080; }
     location = /.well-known/oauth-authorization-server { proxy_pass http://${app_private_ip}:8080; }

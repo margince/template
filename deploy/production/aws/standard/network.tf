@@ -47,7 +47,7 @@ data "aws_iam_policy_document" "vpc_flow_logs_assume" {
 
 resource "aws_iam_role" "vpc_flow_logs" {
   name               = "${var.name_prefix}-vpc-flow-logs"
-  description        = "Assumed by vpc-flow-logs.amazonaws.com to deliver this VPC's flow log records to CloudWatch Logs."
+  description        = "Assumed by vpc-flow-logs.amazonaws.com to deliver the VPC flow log records to CloudWatch Logs."
   assume_role_policy = data.aws_iam_policy_document.vpc_flow_logs_assume.json
   tags               = { Name = "${var.name_prefix}-vpc-flow-logs", Component = "security" }
 }
@@ -117,7 +117,7 @@ resource "aws_eip" "nat" {
 }
 
 # One NAT gateway per AZ: private-subnet tasks (ECS pulling images, RDS/Redis
-# reached only from here) need egress for the ECR/Secrets Manager API calls
+# reached only from here) need egress for the ECR/SSM API calls
 # ECS makes on their behalf, and a single shared NAT would make every AZ
 # depend on one that isn't its own.
 resource "aws_nat_gateway" "this" {

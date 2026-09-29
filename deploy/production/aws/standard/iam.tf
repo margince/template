@@ -47,13 +47,13 @@ data "aws_iam_policy_document" "ecs_assume" {
   }
 }
 
-# ---- Execution role: pulls images, reads secrets on the task's behalf --------
+# ---- Execution role: pulls images, reads SSM parameters on the task's behalf -
 # Shared by api and worker only — see execution_web below for why web gets
 # its own, narrower role instead of this one.
 
 resource "aws_iam_role" "execution" {
   name               = "${var.name_prefix}-ecs-execution"
-  description        = "ECS execution role for api/worker; pulls their ECR images, reads their Secrets Manager secrets, writes their CloudWatch Logs."
+  description        = "ECS execution role for api and worker; pulls their ECR images, reads their SSM SecureString parameters, writes their CloudWatch Logs."
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
   tags               = { Name = "${var.name_prefix}-ecs-execution", Component = "security" }
 }
@@ -67,21 +67,14 @@ resource "aws_iam_role" "execution" {
 # policy would have granted is granted here instead, scoped to exactly this
 # stack's own repos and log groups.
 data "aws_iam_policy_document" "execution_extra" {
+  # ssm:GetParameters (plural) is the action ECS calls to resolve a task
+  # definition's "secrets" entries from Parameter Store. Scoped to exactly the
+  # parameters api/worker receive (secrets.tf's local.task_ssm_parameters);
+  # the operator-only rds-master-password parameter is deliberately absent.
   statement {
-    sid     = "ReadOwnSecrets"
-    actions = ["secretsmanager:GetSecretValue"]
-    resources = [
-      aws_secretsmanager_secret.owner_dsn.arn,
-      aws_secretsmanager_secret.app_dsn.arn,
-      aws_secretsmanager_secret.redis_password.arn,
-      aws_secretsmanager_secret.keyvault_root_key.arn,
-      aws_secretsmanager_secret.webhook_key.arn,
-      aws_secretsmanager_secret.connector_state_key.arn,
-      aws_secretsmanager_secret.admin_password.arn,
-      aws_secretsmanager_secret.license.arn,
-      aws_secretsmanager_secret.blobstore_access_key.arn,
-      aws_secretsmanager_secret.blobstore_secret_key.arn,
-    ]
+    sid       = "ReadOwnParameters"
+    actions   = ["ssm:GetParameters"]
+    resources = sort(values(local.task_ssm_parameters))
   }
 
   statement {
@@ -114,12 +107,12 @@ data "aws_iam_policy_document" "execution_extra" {
     ]
   }
 
-  # Every secret this role reads and every image it pulls is sealed under
-  # the stack's CMK (kms.tf) rather than an AWS-managed key — SSE at rest is
-  # a promise the caller must be able to keep, and this is the permission
-  # that lets it. DescribeKey is what Secrets Manager and ECR call
-  # internally to validate the key before Decrypt; without it both fail
-  # closed on a permissions error that names the key, not the secret.
+  # Every SecureString parameter this role reads and every image it pulls is
+  # sealed under the stack's CMK (kms.tf) rather than an AWS-managed key.
+  # SSM decrypts a SecureString with the CALLER's KMS permissions (it calls
+  # kms:Decrypt on the execution role's behalf), so without this grant
+  # GetParameters fails with an AccessDenied that names the key, not the
+  # parameter. DescribeKey is what ECR calls to validate the key.
   statement {
     sid       = "UseDataKey"
     actions   = ["kms:Decrypt", "kms:DescribeKey"]
@@ -134,7 +127,7 @@ resource "aws_iam_role_policy" "execution_extra" {
 }
 
 # ---- Web's own execution role: no secrets, on purpose -----------------------
-# aws_iam_role.execution above can read every secret this stack creates, and
+# aws_iam_role.execution above can read every task parameter this stack creates, and
 # the web (SPA/nginx) task uses none of them — no DSN, no keyvault key,
 # nothing. Sharing one execution role across all three task defs would give
 # an execution role compromised via web (or a misconfigured task definition
@@ -151,7 +144,7 @@ resource "aws_iam_role_policy" "execution_extra" {
 
 resource "aws_iam_role" "execution_web" {
   name               = "${var.name_prefix}-ecs-execution-web"
-  description        = "ECS execution role for web; pulls its ECR image and writes its CloudWatch Logs only, no Secrets Manager access."
+  description        = "ECS execution role for web; pulls its ECR image and writes its CloudWatch Logs only, no SSM parameter access."
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
   tags               = { Name = "${var.name_prefix}-ecs-execution-web", Component = "security" }
 }
@@ -211,14 +204,14 @@ resource "aws_iam_role_policy" "execution_web_extra" {
 
 resource "aws_iam_role" "task_api" {
   name               = "${var.name_prefix}-ecs-task-api"
-  description        = "Task role for api's own container; grants elasticfilesystem:ClientMount on the config volume, nothing else."
+  description        = "Task role for the api container; grants elasticfilesystem:ClientMount on the config volume, nothing else."
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
   tags               = { Name = "${var.name_prefix}-ecs-task-api", Component = "security" }
 }
 
 resource "aws_iam_role" "task_worker" {
   name               = "${var.name_prefix}-ecs-task-worker"
-  description        = "Task role for worker's own container; grants elasticfilesystem:ClientMount on the config volume, nothing else."
+  description        = "Task role for the worker container; grants elasticfilesystem:ClientMount on the config volume, nothing else."
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
   tags               = { Name = "${var.name_prefix}-ecs-task-worker", Component = "security" }
 }
@@ -228,7 +221,7 @@ resource "aws_iam_role" "task_worker" {
 # "add something eventually".
 resource "aws_iam_role" "task_web" {
   name               = "${var.name_prefix}-ecs-task-web"
-  description        = "Task role for web's own container; deliberately empty, web calls no AWS API on its own behalf."
+  description        = "Task role for the web container; deliberately empty, web calls no AWS API on its own behalf."
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
   tags               = { Name = "${var.name_prefix}-ecs-task-web", Component = "security" }
 }

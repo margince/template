@@ -111,7 +111,7 @@ resource "aws_security_group" "edge" {
   # api egress to app is a SEPARATE aws_security_group_rule below, same
   # cross-reference-cycle reasoning as app/worker's valkey rule.
   egress {
-    description = "HTTPS for its own from-source build (S3, Secrets Manager, Go/npm registries) and SSM"
+    description = "HTTPS for its own from-source build (S3, Go/npm registries) and SSM"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -137,7 +137,7 @@ resource "aws_security_group" "app" {
   # Postgres egress to RDS is a SEPARATE aws_security_group_rule below —
   # same mutual-reference cycle as the pairs already externalized above.
   egress {
-    description = "HTTPS to third-party APIs, S3, Secrets Manager, Go module proxy"
+    description = "HTTPS to third-party APIs, S3, SSM Parameter Store, Go module proxy"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -178,7 +178,7 @@ resource "aws_security_group" "worker" {
   # Postgres egress to RDS is a SEPARATE aws_security_group_rule below —
   # same mutual-reference cycle as the pairs already externalized above.
   egress {
-    description = "HTTPS to third-party APIs, S3, Secrets Manager, Go module proxy"
+    description = "HTTPS to third-party APIs, S3, SSM Parameter Store, Go module proxy"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"

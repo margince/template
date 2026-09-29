@@ -245,7 +245,7 @@ variable "public_base_url" {
 # ---- Secrets and application config -----------------------------------------
 
 variable "license_token" {
-  description = "MARGINCE_LICENSE. Empty runs unlicensed, which a production role refuses to boot on."
+  description = "MARGINCE_LICENSE. Empty runs unlicensed (no SSM parameter is created and the variable is left unset in the task), which a production role refuses to boot on."
   type        = string
   default     = ""
   sensitive   = true
@@ -255,26 +255,150 @@ variable "admin_bootstrap_password" {
   description = <<-EOT
     MARGINCE_ADMIN_PASSWORD for the first boot against an empty database.
     Rotate/remove per the Margince repository's docs/deployment.md once the organization exists —
-    this variable only seeds the initial secret version.
+    this variable only seeds the initial SSM parameter value (secrets.tf
+    ignores later changes so an operator overwrite survives apply).
   EOT
   type        = string
   sensitive   = true
+  validation {
+    condition     = length(var.admin_bootstrap_password) > 0
+    error_message = "admin_bootstrap_password must not be empty; SSM cannot store an empty value."
+  }
 }
 
 # ---- Observability -----------------------------------------------------------
 
-variable "enable_deep_monitoring" {
+variable "enable_alarms" {
   description = <<-EOT
-    Toggles alarms.tf's SNS topic and CPU-credit-balance alarms (RDS +
-    every ElastiCache node). CloudWatch Logs (iam.tf, network.tf's flow
-    logs) and the metrics/log EXPORTS themselves (rds.tf's
-    enabled_cloudwatch_logs_exports, elasticache.tf's slow-log group) stay
-    on regardless — those are baseline "what happened" observability every
-    deployment needs to debug itself, not the alerting layer this toggles.
-    Off by default: an operator who has not yet decided where alerts should
-    go (email/Slack/PagerDuty — alarms.tf's own comment has the subscribe
-    command) gets no half-wired SNS topic with nothing subscribed to it.
+    Toggles alarms.tf: the CMK-encrypted SNS topic and the baseline alarm
+    set (ALB 5xx / unhealthy targets / p95 latency, ECS CPU and memory, RDS
+    storage / CPU / connections, ElastiCache memory / CPU, WAF blocked
+    requests, and CPU-credit balance on burstable instance classes). On by
+    default: a production stack with no alerting fails silently. Set
+    alert_email, or subscribe your own endpoint to the alerts_topic_arn
+    output, or alarms fire into a topic nobody reads.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "alert_email" {
+  description = "Email address subscribed to the alerts SNS topic. Empty creates no subscription. AWS sends a confirmation mail; alarms are not delivered until it is confirmed."
+  type        = string
+  default     = ""
+}
+
+variable "alarm_alb_5xx_threshold" {
+  description = "ALB alarm: sum of HTTPCode_ELB_5XX_Count (and, separately, HTTPCode_Target_5XX_Count) per 5 minutes above which the alarm fires."
+  type        = number
+  default     = 25
+}
+
+variable "alarm_alb_p95_latency_seconds" {
+  description = "ALB alarm: TargetResponseTime p95 in seconds, sustained for 15 minutes."
+  type        = number
+  default     = 2
+}
+
+variable "alarm_rds_max_connections" {
+  description = <<-EOT
+    RDS alarm: DatabaseConnections above this fires. The default is roughly
+    80 percent of the max_connections Postgres derives for db.t4g.medium
+    (LEAST(DBInstanceClassMemory/9531392, 5000), about 400). Raise it with
+    db_instance_class.
+  EOT
+  type        = number
+  default     = 320
+}
+
+variable "alarm_waf_blocked_requests_threshold" {
+  description = "WAF alarm: BlockedRequests (all rules) per 5 minutes above which the alarm fires. Only meaningful once waf_mode = \"block\"; in count mode nothing is blocked."
+  type        = number
+  default     = 500
+}
+
+# ---- WAF --------------------------------------------------------------------
+
+variable "waf_mode" {
+  description = <<-EOT
+    "count" or "block". In count mode every managed rule group and custom
+    rule only counts matches (visible in the WAF log group and sampled
+    requests) and nothing is blocked. Start in count, watch the logs for
+    about a week for false positives on real traffic, add overrides where
+    needed, then switch to "block". See README "WAF rollout".
+  EOT
+  type        = string
+  default     = "count"
+  validation {
+    condition     = contains(["count", "block"], var.waf_mode)
+    error_message = "waf_mode must be \"count\" or \"block\"."
+  }
+}
+
+variable "waf_rate_limit_per_ip" {
+  description = "Global per-IP request limit per 5-minute window, across all paths except the provider webhook paths."
+  type        = number
+  default     = 2000
+  validation {
+    condition     = var.waf_rate_limit_per_ip >= 10
+    error_message = "WAF rate-based rules accept a limit of 10 or more."
+  }
+}
+
+variable "waf_auth_rate_limit_per_ip" {
+  description = "Per-IP request limit per 5-minute window on waf_auth_paths only (login, password reset, OAuth token and client registration)."
+  type        = number
+  default     = 100
+  validation {
+    condition     = var.waf_auth_rate_limit_per_ip >= 10
+    error_message = "WAF rate-based rules accept a limit of 10 or more."
+  }
+}
+
+variable "waf_auth_paths" {
+  description = <<-EOT
+    Exact URI paths the stricter auth rate limit applies to. Defaults are
+    the api's credential-accepting endpoints (identity module middleware):
+    password login, forgot/reset password, OAuth token and dynamic client
+    registration. An optional trailing slash is matched too.
+  EOT
+  type        = list(string)
+  default = [
+    "/v1/auth/login",
+    "/v1/auth/forgot-password",
+    "/v1/auth/reset-password",
+    "/oauth/token",
+    "/oauth/register",
+  ]
+  validation {
+    condition     = length(var.waf_auth_paths) > 0 && alltrue([for p in var.waf_auth_paths : startswith(p, "/")])
+    error_message = "waf_auth_paths needs at least one path, each starting with /."
+  }
+}
+
+variable "waf_allowed_country_codes" {
+  description = <<-EOT
+    ISO 3166-1 alpha-2 country codes allowed to reach the ALB (for example
+    ["DE", "AT", "CH"]). Empty (default) disables geo filtering. The
+    provider webhook paths are always exempt, since Google, Microsoft and
+    HubSpot deliver from wherever their infrastructure runs.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_waf_bot_control" {
+  description = <<-EOT
+    Adds the AWSManagedRulesBotControlRuleSet (COMMON inspection level).
+    Extra cost on top of the web ACL: a monthly subscription fee plus a
+    per-million-requests charge (see AWS WAF pricing). Off by default.
   EOT
   type        = bool
   default     = false
+}
+
+variable "waf_log_retention_days" {
+  description = "Retention for the aws-waf-logs-<name_prefix> CloudWatch log group."
+  type        = number
+  default     = 30
 }

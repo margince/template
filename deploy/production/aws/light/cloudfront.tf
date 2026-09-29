@@ -3,11 +3,17 @@
 # origin-facing prefix list. This trades one more managed service for not
 # handing the raw internet a direct line to an EC2 instance; it costs far
 # less than the full stack's ALB (pay-per-request, no hourly charge) and
-# gets TLS/caching/optional-WAF for free.
+# gets TLS/caching for free.
+#
+# No WAF, by design for cost (a web ACL is ~$5/month + $1/rule + per-request
+# fees, a large share of this stack's bill). Request filtering is nginx's
+# job on edge (templates/nginx.conf.tftpl): per-client-IP rate limits plus
+# the X-Origin-Verify header check, behind the CloudFront-only SG
+# (network.tf). Use ../standard/ if you need a managed WAF.
 #
 # ACM certs for a CloudFront custom-domain alias MUST be requested in
 # us-east-1 regardless of where the rest of this stack lives (versions.tf's
-# aws.us_east_1 provider alias) — same for the WAFv2 web ACL below.
+# aws.us_east_1 provider alias).
 #
 # This stack has no Route53 integration (DNS is an external, manual step —
 # see the README), so ACM's DNS validation is ALSO a manual step: run the
@@ -29,72 +35,10 @@ resource "aws_acm_certificate_validation" "this" {
   certificate_arn = aws_acm_certificate.this.arn
 }
 
-# Managed rule groups only — no custom rules to tune, same reasoning as the
-# rest of this stack's toggles: a sensible baseline, not a decision this
-# stack makes silently on cost/false-positive tradeoffs var.enable_waf itself
-# already gates.
-resource "aws_wafv2_web_acl" "this" {
-  count    = var.enable_waf ? 1 : 0
-  provider = aws.us_east_1
-  name     = "${var.name_prefix}-waf"
-  scope    = "CLOUDFRONT"
-
-  default_action {
-    allow {}
-  }
-
-  rule {
-    name     = "AWSManagedRulesCommonRuleSet"
-    priority = 0
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesCommonRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "${var.name_prefix}-common"
-      sampled_requests_enabled   = true
-    }
-  }
-
-  rule {
-    name     = "AWSManagedRulesKnownBadInputsRuleSet"
-    priority = 1
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesKnownBadInputsRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "${var.name_prefix}-known-bad-inputs"
-      sampled_requests_enabled   = true
-    }
-  }
-
-  visibility_config {
-    cloudwatch_metrics_enabled = true
-    metric_name                = "${var.name_prefix}-waf"
-    sampled_requests_enabled   = true
-  }
-
-  tags = { Name = "${var.name_prefix}-waf", Component = "network" }
-}
-
 resource "aws_cloudfront_distribution" "this" {
   enabled     = true
   aliases     = [local.domain]
   price_class = "PriceClass_100" # North America + Europe only — cheapest tier, matching this stack's cost floor elsewhere
-  web_acl_id  = var.enable_waf ? aws_wafv2_web_acl.this[0].arn : null
 
   origin {
     origin_id   = "edge"

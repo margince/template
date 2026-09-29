@@ -133,18 +133,12 @@ resource "aws_ecs_cluster" "this" {
 locals {
   blobstore_endpoint = "s3.${var.aws_region}.amazonaws.com"
 
-  # Secrets Manager "secrets" entries every role-carrying task shares.
+  # SSM Parameter Store "secrets" entries every role-carrying task shares
+  # (secrets.tf's local.task_ssm_parameters). valueFrom is the full parameter
+  # ARN; ECS resolves and decrypts it with the execution role at task start.
   shared_secrets = [
-    { name = "MARGINCE_OWNER_DSN", valueFrom = aws_secretsmanager_secret.owner_dsn.arn },
-    { name = "MARGINCE_DSN", valueFrom = aws_secretsmanager_secret.app_dsn.arn },
-    { name = "MARGINCE_REDIS_PASSWORD", valueFrom = aws_secretsmanager_secret.redis_password.arn },
-    { name = "MARGINCE_KEYVAULT_ROOT_KEY", valueFrom = aws_secretsmanager_secret.keyvault_root_key.arn },
-    { name = "MARGINCE_WEBHOOK_KEY", valueFrom = aws_secretsmanager_secret.webhook_key.arn },
-    { name = "MARGINCE_CONNECTOR_STATE_KEY", valueFrom = aws_secretsmanager_secret.connector_state_key.arn },
-    { name = "MARGINCE_ADMIN_PASSWORD", valueFrom = aws_secretsmanager_secret.admin_password.arn },
-    { name = "MARGINCE_LICENSE", valueFrom = aws_secretsmanager_secret.license.arn },
-    { name = "MARGINCE_BLOBSTORE_ACCESS_KEY", valueFrom = aws_secretsmanager_secret.blobstore_access_key.arn },
-    { name = "MARGINCE_BLOBSTORE_SECRET_KEY", valueFrom = aws_secretsmanager_secret.blobstore_secret_key.arn },
+    for name in sort(keys(local.task_ssm_parameters)) :
+    { name = name, valueFrom = local.task_ssm_parameters[name] }
   ]
 
   shared_env = [

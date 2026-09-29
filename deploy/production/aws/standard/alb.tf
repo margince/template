@@ -251,7 +251,7 @@ resource "aws_lb_listener_rule" "api_webhooks" {
 
   condition {
     path_pattern {
-      values = ["/webhooks/gmail", "/webhooks/graph", "/webhooks/hubspot"]
+      values = local.webhook_paths
     }
   }
 
@@ -283,160 +283,196 @@ resource "aws_lb_listener_rule" "api_mcp_oauth" {
 }
 
 # ---- WAF: the ALB is this stack's one public entry point --------------------
-# AWS Managed Rules cover the exploit classes generic to any HTTP service
-# (injection, known-bad payloads, known-malicious source IPs); the rate-based
-# rule is this stack's own bound on request volume per client, independent of
-# whatever limiting the api itself does at the application layer. Every rule
-# runs in blocking mode (COUNT would log without protecting anything) — this
-# is a stack that has no other layer in front of it to catch what these miss.
+# Rollout: var.waf_mode = "count" (default) turns every managed rule group
+# into override_action count{} and every custom rule into action count{}, so
+# nothing is blocked and every would-be block shows up in the WAF log group
+# and in sampled requests. After about a week of real traffic, add
+# rule_action_override entries for whatever false positives turned up, then
+# set waf_mode = "block" (override_action none{}, action block{}). README
+# "WAF rollout" has the queries to run.
+#
+# Priority order (lower runs first):
+#    0  GeoAllowList            only when waf_allowed_country_codes is set
+#   10  AmazonIpReputationList  known-malicious sources, before anything else
+#   20  RateLimitAuthPaths      stricter per-IP bound on credential endpoints
+#   30  RateLimitPerIP          global per-IP bound, webhooks excluded
+#   40  AnonymousIpList         ALWAYS count-only: VPN/Tor/hosting-provider
+#                               labels for the logs, real users use VPNs
+#   50  CommonRuleSet           SizeRestrictions_BODY always count
+#   60  KnownBadInputsRuleSet
+#   70  SQLiRuleSet
+#   80  LinuxRuleSet            the api/worker images are Linux (LFI etc.)
+#   90  BotControlRuleSet       only when enable_waf_bot_control
+#
+# WCU budget: about 1400 without Bot Control, about 1450 with it; the
+# included allowance is 1500 WCU per web ACL (verify against current AWS WAF
+# pricing before adding more rule groups).
+
+locals {
+  # Exactly the paths the api_webhooks listener rule forwards. Provider
+  # webhook traffic (Google, Microsoft Graph, HubSpot) is HMAC-verified by
+  # the api and arrives in bursts from shared provider IPs, so it is exempt
+  # from the per-IP global rate limit and from the geo allow-list.
+  webhook_paths = ["/webhooks/gmail", "/webhooks/graph", "/webhooks/hubspot"]
+
+  waf_block = var.waf_mode == "block"
+
+  # Regex-escape each path, then anchor. One regex_match_statement costs far
+  # fewer WCUs than an or_statement of byte matches, each with its own
+  # text transformation.
+  waf_webhook_regex = "^(${join("|", [for p in local.webhook_paths : replace(p, "/[.+*?^$(){}|\\[\\]\\\\]/", "\\$0")])})$"
+  waf_auth_regex    = "^(${join("|", [for p in var.waf_auth_paths : replace(p, "/[.+*?^$(){}|\\[\\]\\\\]/", "\\$0")])})/?$"
+
+  waf_managed_rule_groups = [
+    { name = "AWSManagedRulesAmazonIpReputationList", priority = 10, metric = "ip-reputation", count_only = false, count_rules = [] },
+    { name = "AWSManagedRulesAnonymousIpList", priority = 40, metric = "anonymous-ip", count_only = true, count_rules = [] },
+    # SizeRestrictions_BODY blocks every request body over 8 KB, which
+    # rejects attachment uploads, MCP payloads and webhook batches. Count it
+    # in both modes; the ALB and the api still bound body size.
+    { name = "AWSManagedRulesCommonRuleSet", priority = 50, metric = "common-rule-set", count_only = false, count_rules = ["SizeRestrictions_BODY"] },
+    { name = "AWSManagedRulesKnownBadInputsRuleSet", priority = 60, metric = "known-bad-inputs", count_only = false, count_rules = [] },
+    # The api's store is Postgres, reached through storekit's placeholder
+    # derivation; this is the network-edge layer for the same attack class,
+    # not a substitute for it.
+    { name = "AWSManagedRulesSQLiRuleSet", priority = 70, metric = "sqli", count_only = false, count_rules = [] },
+    { name = "AWSManagedRulesLinuxRuleSet", priority = 80, metric = "linux", count_only = false, count_rules = [] },
+  ]
+
+  waf_log_group_name = "aws-waf-logs-${var.name_prefix}"
+}
+
 resource "aws_wafv2_web_acl" "alb" {
   name        = "${var.name_prefix}-alb"
-  description = "Baseline managed-rule and rate-limit protection for ${var.name_prefix}'s public ALB"
+  description = "Managed-rule, rate-limit and optional geo protection for the ${var.name_prefix} public ALB (mode: ${var.waf_mode})"
   scope       = "REGIONAL"
 
   default_action {
     allow {}
   }
 
-  rule {
-    name     = "AWS-AWSManagedRulesCommonRuleSet"
-    priority = 1
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesCommonRuleSet"
-        vendor_name = "AWS"
-
-        # SizeRestrictions_BODY blocks every request body over 8 KB, which
-        # rejects attachment uploads, MCP payloads and webhook batches. Count
-        # it instead; the ALB and the api still bound body size.
-        rule_action_override {
-          name = "SizeRestrictions_BODY"
-          action_to_use {
-            count {}
+  # Block (or count) anything from outside the allowed countries, except the
+  # provider webhook paths.
+  dynamic "rule" {
+    for_each = length(var.waf_allowed_country_codes) > 0 ? [1] : []
+    content {
+      name     = "GeoAllowList"
+      priority = 0
+      action {
+        dynamic "block" {
+          for_each = local.waf_block ? [1] : []
+          content {}
+        }
+        dynamic "count" {
+          for_each = local.waf_block ? [] : [1]
+          content {}
+        }
+      }
+      statement {
+        and_statement {
+          statement {
+            not_statement {
+              statement {
+                geo_match_statement {
+                  country_codes = var.waf_allowed_country_codes
+                }
+              }
+            }
+          }
+          statement {
+            not_statement {
+              statement {
+                regex_match_statement {
+                  regex_string = local.waf_webhook_regex
+                  field_to_match {
+                    uri_path {}
+                  }
+                  text_transformation {
+                    priority = 0
+                    type     = "NONE"
+                  }
+                }
+              }
+            }
           }
         }
       }
-    }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      sampled_requests_enabled   = true
-      metric_name                = "${var.name_prefix}-common-rule-set"
-    }
-  }
-
-  rule {
-    name     = "AWS-AWSManagedRulesKnownBadInputsRuleSet"
-    priority = 2
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesKnownBadInputsRuleSet"
-        vendor_name = "AWS"
+      visibility_config {
+        cloudwatch_metrics_enabled = true
+        sampled_requests_enabled   = true
+        metric_name                = "${var.name_prefix}-geo-allow-list"
       }
     }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      sampled_requests_enabled   = true
-      metric_name                = "${var.name_prefix}-known-bad-inputs"
-    }
   }
 
-  rule {
-    name     = "AWS-AWSManagedRulesAmazonIpReputationList"
-    priority = 3
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesAmazonIpReputationList"
-        vendor_name = "AWS"
+  dynamic "rule" {
+    for_each = local.waf_managed_rule_groups
+    content {
+      name     = "AWS-${rule.value.name}"
+      priority = rule.value.priority
+      override_action {
+        dynamic "none" {
+          for_each = local.waf_block && !rule.value.count_only ? [1] : []
+          content {}
+        }
+        dynamic "count" {
+          for_each = local.waf_block && !rule.value.count_only ? [] : [1]
+          content {}
+        }
+      }
+      statement {
+        managed_rule_group_statement {
+          name        = rule.value.name
+          vendor_name = "AWS"
+          dynamic "rule_action_override" {
+            for_each = rule.value.count_rules
+            content {
+              name = rule_action_override.value
+              action_to_use {
+                count {}
+              }
+            }
+          }
+        }
+      }
+      visibility_config {
+        cloudwatch_metrics_enabled = true
+        sampled_requests_enabled   = true
+        metric_name                = "${var.name_prefix}-${rule.value.metric}"
       }
     }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      sampled_requests_enabled   = true
-      metric_name                = "${var.name_prefix}-ip-reputation"
-    }
   }
 
-  # The api's own store is Postgres, reached through storekit's placeholder
-  # derivation (AGENTS.md's "never hand-type a SQL placeholder") — this rule
-  # group is the network-edge layer for the same class of attack that
-  # invariant defends in the code, not a substitute for it.
-  rule {
-    name     = "AWS-AWSManagedRulesSQLiRuleSet"
-    priority = 4
-    override_action {
-      none {}
-    }
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesSQLiRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      sampled_requests_enabled   = true
-      metric_name                = "${var.name_prefix}-sqli"
-    }
-  }
-
-  # 2000 requests / 5-minute rolling window per client IP — generous enough
-  # for a real user driving the SPA, tight enough to bound a single client
-  # hammering the api. Evaluated at the ALB, ahead of any per-endpoint
-  # rate limiting the api itself may apply.
-  rule {
-    name     = "RateLimitPerIP"
-    priority = 5
-    action {
-      block {}
-    }
-    statement {
-      rate_based_statement {
-        limit              = 2000
-        aggregate_key_type = "IP"
-      }
-    }
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      sampled_requests_enabled   = true
-      metric_name                = "${var.name_prefix}-rate-limit"
-    }
-  }
-
-  # backend/internal/modules/identity/handlers.go's own limiters
-  # (loginPerIP: 30/min, loginFailures: 10/min per email+IP) are, by their own
-  # comment, "single-binary scope" — in-memory per api TASK, not shared
-  # across the fleet. With api_desired_count/api_autoscaling_max_count
-  # (variables.tf) putting 2-4 api tasks behind this ALB, an attacker's
-  # requests spread across tasks by the ALB see up to N independent budgets,
-  # not one shared one — the effective fleet-wide ceiling scales UP with
-  # every task ECS adds, which is exactly backwards for a login endpoint.
-  # This rule closes that gap the only place that sees traffic before it
-  # fans out to any task at all: 100/5min (WAF's floor — rate_based_statement
-  # can't go lower) is tighter per-IP than any single task's own 30/min, and
-  # unlike the app's limiter, it holds regardless of fleet size.
+  # backend/internal/modules/identity/handlers.go's own login limiters are,
+  # by their own comment, "single-binary scope": in-memory per api TASK, not
+  # shared across the fleet, so every task autoscaling adds raises the
+  # effective fleet-wide login budget. This rule is the one point that sees
+  # traffic before it fans out to any task. URL_DECODE so an encoded path
+  # (/v1/auth/%6Cogin, which Go's mux still routes to login) cannot slip
+  # past it. Blocked requests get 429, not 403, so clients back off.
   rule {
     name     = "RateLimitAuthPaths"
-    priority = 6
+    priority = 20
     action {
-      block {}
+      dynamic "block" {
+        for_each = local.waf_block ? [1] : []
+        content {
+          custom_response {
+            response_code = 429
+          }
+        }
+      }
+      dynamic "count" {
+        for_each = local.waf_block ? [] : [1]
+        content {}
+      }
     }
     statement {
       rate_based_statement {
-        limit              = 100
+        limit              = var.waf_auth_rate_limit_per_ip
         aggregate_key_type = "IP"
         scope_down_statement {
-          byte_match_statement {
-            search_string         = "/v1/auth/"
-            positional_constraint = "STARTS_WITH"
+          regex_match_statement {
+            regex_string = local.waf_auth_regex
             field_to_match {
               uri_path {}
             }
@@ -455,6 +491,124 @@ resource "aws_wafv2_web_acl" "alb" {
     }
   }
 
+  # Global per-IP bound (default 2000 per 5-minute window): generous for a
+  # real user driving the SPA, tight enough to bound one client hammering the
+  # api. The scope-down EXCLUDES the exact webhook paths. No text
+  # transformation there on purpose: an encoded webhook path simply fails
+  # the exclusion and is rate limited like everything else, the safe
+  # direction.
+  rule {
+    name     = "RateLimitPerIP"
+    priority = 30
+    action {
+      dynamic "block" {
+        for_each = local.waf_block ? [1] : []
+        content {
+          custom_response {
+            response_code = 429
+          }
+        }
+      }
+      dynamic "count" {
+        for_each = local.waf_block ? [] : [1]
+        content {}
+      }
+    }
+    statement {
+      rate_based_statement {
+        limit              = var.waf_rate_limit_per_ip
+        aggregate_key_type = "IP"
+        scope_down_statement {
+          not_statement {
+            statement {
+              regex_match_statement {
+                regex_string = local.waf_webhook_regex
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "NONE"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      sampled_requests_enabled   = true
+      metric_name                = "${var.name_prefix}-rate-limit"
+    }
+  }
+
+  # Optional, metered. Webhook paths are scoped out (provider callers are
+  # HTTP libraries by definition), and CategoryHttpLibrary plus
+  # SignalNonBrowserUserAgent are counted in both modes: MCP clients, OAuth
+  # clients and API scripts are legitimate non-browser traffic to this api.
+  dynamic "rule" {
+    for_each = var.enable_waf_bot_control ? [1] : []
+    content {
+      name     = "AWS-AWSManagedRulesBotControlRuleSet"
+      priority = 90
+      override_action {
+        dynamic "none" {
+          for_each = local.waf_block ? [1] : []
+          content {}
+        }
+        dynamic "count" {
+          for_each = local.waf_block ? [] : [1]
+          content {}
+        }
+      }
+      statement {
+        managed_rule_group_statement {
+          name        = "AWSManagedRulesBotControlRuleSet"
+          vendor_name = "AWS"
+          managed_rule_group_configs {
+            aws_managed_rules_bot_control_rule_set {
+              inspection_level = "COMMON"
+            }
+          }
+          rule_action_override {
+            name = "CategoryHttpLibrary"
+            action_to_use {
+              count {}
+            }
+          }
+          rule_action_override {
+            name = "SignalNonBrowserUserAgent"
+            action_to_use {
+              count {}
+            }
+          }
+          scope_down_statement {
+            not_statement {
+              statement {
+                regex_match_statement {
+                  regex_string = local.waf_webhook_regex
+                  field_to_match {
+                    uri_path {}
+                  }
+                  text_transformation {
+                    priority = 0
+                    type     = "NONE"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      visibility_config {
+        cloudwatch_metrics_enabled = true
+        sampled_requests_enabled   = true
+        metric_name                = "${var.name_prefix}-bot-control"
+      }
+    }
+  }
+
   visibility_config {
     cloudwatch_metrics_enabled = true
     sampled_requests_enabled   = true
@@ -469,17 +623,14 @@ resource "aws_wafv2_web_acl_association" "alb" {
   web_acl_arn  = aws_wafv2_web_acl.alb.arn
 }
 
-# The "aws-waf-logs-" prefix is not stylistic — it is what lets WAF deliver to
-# this log group at all (WAF only accepts a CloudWatch Logs destination whose
-# name carries this exact prefix, no separate resource policy to maintain in
-# step). Left on the account's default CloudWatch Logs encryption rather than
-# this stack's own CMK — extending the CMK's key policy to the logs.amazonaws.com
-# service principal is a separate, larger change than "log what WAF blocks",
-# and every other CloudWatch Logs group in this stack (iam.tf) is unencrypted
-# by the same default already.
+# The "aws-waf-logs-" prefix is not stylistic: WAF only accepts a CloudWatch
+# Logs destination whose name carries it. Encrypted under the stack CMK;
+# kms.tf's AllowCloudWatchLogsForWafLogGroup statement (pinned to this log
+# group's ARN by encryption context) is what lets CloudWatch Logs use the key.
 resource "aws_cloudwatch_log_group" "waf" {
-  name              = "aws-waf-logs-${var.name_prefix}"
-  retention_in_days = var.log_retention_days
+  name              = local.waf_log_group_name
+  retention_in_days = var.waf_log_retention_days
+  kms_key_id        = aws_kms_key.data.arn
   tags              = { Name = "${var.name_prefix}-waf-logs", Component = "observability" }
 }
 
@@ -487,13 +638,10 @@ resource "aws_wafv2_web_acl_logging_configuration" "alb" {
   resource_arn            = aws_wafv2_web_acl.alb.arn
   log_destination_configs = [aws_cloudwatch_log_group.waf.arn]
 
-  # WAF logs the full request by default — headers included. Without this,
-  # every session cookie and bearer token that ever crossed the ALB sits in
-  # plaintext in a CloudWatch Logs group retained for
-  # var.log_retention_days, readable by anyone with logs:GetLogEvents on it.
-  # Redacting here doesn't stop the request from being evaluated (WAF still
-  # sees the real header when deciding allow/block); it only replaces the
-  # value with REDACTED in what gets written to aws_cloudwatch_log_group.waf.
+  # WAF logs the full request by default. Without redaction every bearer
+  # token, session cookie and OAuth code/state query parameter that crossed
+  # the ALB would sit in plaintext in this log group. Redaction only affects
+  # what is written; WAF still evaluates the real values.
   redacted_fields {
     single_header {
       name = "authorization"
@@ -502,6 +650,41 @@ resource "aws_wafv2_web_acl_logging_configuration" "alb" {
   redacted_fields {
     single_header {
       name = "cookie"
+    }
+  }
+  redacted_fields {
+    query_string {}
+  }
+
+  # Count mode logs everything: the point of the count phase is seeing which
+  # requests WOULD have been blocked, and those carry an ALLOW terminating
+  # action with the matching rules listed as non-terminating. Block mode keeps
+  # only BLOCK, COUNT and EXCLUDED_AS_COUNT records (what a rule acted on or
+  # would have), and drops plain ALLOW traffic, which is most of the volume
+  # and already in the ALB access logs.
+  dynamic "logging_filter" {
+    for_each = local.waf_block ? [1] : []
+    content {
+      default_behavior = "DROP"
+      filter {
+        behavior    = "KEEP"
+        requirement = "MEETS_ANY"
+        condition {
+          action_condition {
+            action = "BLOCK"
+          }
+        }
+        condition {
+          action_condition {
+            action = "COUNT"
+          }
+        }
+        condition {
+          action_condition {
+            action = "EXCLUDED_AS_COUNT"
+          }
+        }
+      }
     }
   }
 }

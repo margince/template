@@ -1,4 +1,4 @@
-# Keeps ECS→AWS-API traffic (ECR pulls, Secrets Manager reads, KMS decrypts,
+# Keeps ECS→AWS-API traffic (ECR pulls, SSM parameter reads, KMS decrypts,
 # CloudWatch Logs writes) inside the VPC instead of round-tripping through the
 # NAT gateway and the public internet path — the same traffic the ecs_tasks
 # security group's 0.0.0.0/0:443 egress rule (network.tf) would otherwise
@@ -72,7 +72,7 @@ resource "aws_vpc_endpoint" "s3" {
 
 resource "aws_security_group" "vpc_endpoints" {
   name_prefix = "${var.name_prefix}-vpce-"
-  description = "Interface VPC endpoints (ECR/Secrets Manager/KMS/CloudWatch Logs); ingress from ECS tasks on 443 only, no egress."
+  description = "Interface VPC endpoints (ECR, SSM, KMS, CloudWatch Logs); HTTPS ingress from ECS tasks and the bootstrap host only, no egress."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-vpce", Component = "network" }
 
@@ -82,6 +82,19 @@ resource "aws_security_group" "vpc_endpoints" {
     to_port         = 443
     protocol        = "tcp"
     security_groups = [aws_security_group.ecs_tasks.id]
+  }
+
+  # private_dns_enabled on the ssm endpoint makes ssm.<region>.amazonaws.com
+  # resolve to these ENIs for EVERYTHING in the VPC, the bootstrap host's SSM
+  # agent included (ops.tf). Without this rule the agent cannot register and
+  # Session Manager never reaches the host. ssmmessages/ec2messages have no
+  # endpoint here and still leave through the NAT gateway.
+  ingress {
+    description     = "HTTPS from the temporary bootstrap host (ops.tf)"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ops.id]
   }
 
   # No egress block — an interface endpoint's ENI answers requests, it never
@@ -97,7 +110,10 @@ locals {
   interface_endpoint_services = toset([
     "ecr.api",
     "ecr.dkr",
-    "secretsmanager",
+    # ssm replaced secretsmanager when secrets.tf moved to Parameter Store:
+    # ECS resolves task "secrets" through the SSM API. Same hourly and per-GB
+    # cost as the endpoint it replaces, so cost-neutral.
+    "ssm",
     "kms",
     "logs",
   ])

@@ -55,22 +55,15 @@ output "s3_blobstore_bucket" {
 }
 
 output "alerts_topic_arn" {
-  description = "Empty when var.enable_deep_monitoring is false — there is no topic to subscribe to."
-  value       = var.enable_deep_monitoring ? aws_sns_topic.alerts[0].arn : ""
+  description = "SNS topic every alarm (alarms.tf) notifies. Empty when enable_alarms is false."
+  value       = var.enable_alarms ? aws_sns_topic.alerts[0].arn : ""
 }
 
-output "secret_arns" {
-  description = "Secrets Manager ARNs (not values) for every credential this stack seals."
-  value = {
-    owner_dsn            = aws_secretsmanager_secret.owner_dsn.arn
-    app_dsn              = aws_secretsmanager_secret.app_dsn.arn
-    redis_password       = aws_secretsmanager_secret.redis_password.arn
-    keyvault_root_key    = aws_secretsmanager_secret.keyvault_root_key.arn
-    webhook_key          = aws_secretsmanager_secret.webhook_key.arn
-    connector_state_key  = aws_secretsmanager_secret.connector_state_key.arn
-    admin_password       = aws_secretsmanager_secret.admin_password.arn
-    license              = aws_secretsmanager_secret.license.arn
-    blobstore_access_key = aws_secretsmanager_secret.blobstore_access_key.arn
-    blobstore_secret_key = aws_secretsmanager_secret.blobstore_secret_key.arn
-  }
+output "secret_parameter_names" {
+  description = <<-EOT
+    SSM Parameter Store names (not values) of every credential this stack
+    seals, SecureString under alias/aws/ssm. Read one with:
+      aws ssm get-parameter --name <name> --with-decryption --query Parameter.Value --output text
+  EOT
+  value       = { for k, p in aws_ssm_parameter.secret : k => p.name }
 }

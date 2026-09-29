@@ -64,8 +64,20 @@ Read this before you provision it:
   shifting to a healthy peer — there is no peer.
 - **Single-AZ database.** RDS runs `multi_az = false`. Recovery from an
   underlying host failure is "restore from the last backup/snapshot."
-- **No customer-managed KMS key.** Everything at rest (RDS, S3, Secrets
-  Manager) uses the relevant service's own AWS-managed default key.
+- **No customer-managed KMS key.** Everything at rest (RDS, S3, SSM
+  Parameter Store) uses the relevant service's own AWS-managed default key.
+- **No WAF, by design for cost.** A CloudFront web ACL (~$5/month plus
+  per-rule and per-request fees) would be a large share of this stack's
+  bill. Request filtering is nginx's job on edge, with the same rules as the
+  Azure light stack: a per-client-IP limit (`auth_rate_limit_per_minute`,
+  default 30, 429 on excess) on login, password reset, `/oauth/token` and
+  `/setup/`, the
+  `X-Origin-Verify` shared-secret header check, and the CloudFront-only
+  security group in front of it. Use `../standard/` if you need a managed
+  WAF.
+- **No Secrets Manager.** Secrets are SSM Parameter Store SecureStrings
+  (Standard tier, `alias/aws/ssm`), which are free; there is no automatic
+  rotation.
 - **ACM's DNS validation is a manual step.** This stack has no Route53
   integration — see step 3 below.
 
@@ -107,7 +119,7 @@ Four have no default (must be set in `terraform.tfvars`):
 Everything else has a working default:
 
 - **`aws_region`** (`eu-central-1`) — where every resource lives, except
-  the CloudFront/ACM/WAF resources in `cloudfront.tf`, which are always
+  the CloudFront ACM certificate in `cloudfront.tf`, which is always
   us-east-1 regardless of this value (a CloudFront/ACM API requirement, not
   a choice this stack makes).
 - **`name_prefix`** (`margince-light`) — prefixes every resource name; change
@@ -137,13 +149,14 @@ Everything else has a working default:
   with a previous deletion's snapshot.
 - **`log_retention_days`** (`14`) — CloudWatch Logs retention for all three
   instances' log groups (`iam.tf`).
-- **`enable_deep_monitoring`** (`false`) — adds an SNS topic + a
-  StatusCheckFailed alarm per instance (`alarms.tf`). Off by default so you
-  don't get a half-wired SNS topic with nothing subscribed to it.
-- **`enable_waf`** (`false`) — attaches a WAFv2 web ACL (AWS managed rule
-  groups only) to the CloudFront distribution (`cloudfront.tf`). The
-  origin-facing-prefix-list SG restriction is the floor this stack keeps
-  either way; WAF is the opt-in extra.
+- **`enable_alarms`** (`true`) — the SNS topic and CloudWatch alarms in
+  `alarms.tf` (see "Alerting" below). On by default.
+- **`alert_email`** (`""`) — optional email subscribed to the alerts topic.
+  AWS sends a confirmation email to that address; **click the link in it**,
+  or no alert is ever delivered. Empty creates no subscription.
+- **`db_max_connections_alarm_threshold`** (`70`) — the RDS
+  `DatabaseConnections` alarm threshold; raise it with a larger
+  `db_instance_class`.
 
 ### `network.tf` — VPC, subnets, four security groups
 
@@ -151,7 +164,7 @@ One VPC, one public subnet (all three instances live here — nothing here
 is highly available enough to benefit from AZ spread), two private
 subnets (RDS's subnet group only, which requires two AZs). No NAT gateway:
 every instance gets an auto-assigned public IP for outbound internet
-(package installs, S3, Secrets Manager, Go/npm registries), and inbound is
+(package installs, S3, SSM, Go/npm registries), and inbound is
 locked down by security group, not subnet placement.
 
 Four security groups, each naming exactly which OTHER security group may
@@ -179,24 +192,33 @@ egress to the internet) can stay inline.
 **To adapt:** widening `sg-edge`'s ingress back to `0.0.0.0/0` defeats the
 entire point of fronting this with CloudFront — don't, unless you're also
 removing CloudFront and accepting the tradeoffs that were the whole reason
-it's there (hiding the origin's IP, TLS/WAF for less than an ALB costs).
+it's there (hiding the origin's IP, TLS for less than an ALB costs).
 
 ### `iam.tf` — three roles, least-privilege per role
 
 No shared role anymore. Each instance's own role reads only:
 
-| Role | Secrets Manager | S3 |
+| Role | SSM parameters | S3 |
 |---|---|---|
-| edge | none | `source/<tag>.zip` (read), `binaries/edge-<tag>.tar.gz` (read/write) |
+| edge | none (all explicitly denied) | `source/<tag>.zip` (read), `binaries/edge-<tag>.tar.gz` (read/write) |
 | app | everything (owner_dsn, app_dsn, redis_password, keyvault/webhook/connector keys, admin_password, license, blobstore keys) | same shape, `binaries/app-<tag>.tar.gz` |
-| worker | everything EXCEPT owner_dsn/admin_password/license | same shape, `binaries/worker-<tag>.tar.gz` |
+| worker | everything EXCEPT owner_dsn/admin_password/license (explicitly denied) | same shape, `binaries/worker-<tag>.tar.gz` |
 
-**To adapt:** if you add a new secret the api or worker needs to read, add
-it to BOTH the relevant `data "aws_iam_policy_document"` block here AND the
-matching `local.app_secrets`/`local.worker_secrets` list in `ec2.tf` — the
-IAM grant and the fetch-list are two places carrying the same invariant on
-purpose (least-privilege review vs. what actually gets fetched), and they
-need to agree.
+No role can read `rds_master_password`; it is for humans only (step 8).
+
+Each role gets `ssm:GetParameter`/`ssm:GetParameters` on exactly its own
+parameter ARNs, plus an explicit **Deny** on every other parameter this
+stack owns. The Deny matters: `AmazonSSMManagedInstanceCore` (attached for
+Session Manager) allows `ssm:GetParameter*` on `*`, and the AWS-managed
+`aws/ssm` key lets any principal in the account decrypt through SSM, so
+without it worker could read `owner_dsn`. No `kms:Decrypt` grant is needed
+for that same reason: the `aws/ssm` key policy (not editable) already
+allows decryption via SSM for account principals.
+
+**To adapt:** add a new secret as one entry in `local.secret_parameters`
+(`secrets.tf`) with its `readers` list, plus its value in
+`local.secret_values`. `iam.tf`'s allow/deny lists and `ec2.tf`'s per-role
+fetch lists are both derived from `readers`, so they cannot drift.
 
 ### `ec2.tf` — the three instances
 
@@ -237,8 +259,8 @@ edge's.
 ### `cloudfront.tf` — the public entry point
 
 `aws_acm_certificate` (us-east-1) + `aws_acm_certificate_validation` (waits
-for DNS validation — see step 3), an optional `aws_wafv2_web_acl`
-(`var.enable_waf`), and the `aws_cloudfront_distribution` itself: origin is
+for DNS validation — see step 3) and the `aws_cloudfront_distribution`
+itself (no WAF web ACL, see "What this is NOT"): origin is
 the edge instance's public IP over plain HTTP (TLS terminates at
 CloudFront, not the origin), `price_class = "PriceClass_100"` (North
 America + Europe only — the cheapest tier), caching disabled
@@ -253,7 +275,13 @@ cost increase.
 
 ### `secrets.tf` / `s3.tf` — credentials and the blobstore bucket
 
-Same shape as before: one Secrets Manager secret per credential, DSNs
+One SSM Parameter Store SecureString per credential (`aws_ssm_parameter.secret`,
+Standard tier, `alias/aws/ssm`, named `/<name_prefix>/<name>`; see
+`terraform output secret_parameter_names`), including the RDS master
+password and the bootstrap admin password so humans read them from SSM
+rather than from state. `license` only exists when `license_token` is set
+(SSM rejects empty values; the app then gets an empty `MARGINCE_LICENSE`).
+Standard parameters hold at most 4 KB. DSNs
 built from `aws_db_instance.this.address` (RDS, unchanged),
 `redis_host = aws_instance.app.private_ip` (valkey now runs on the app
 instance itself, not a managed endpoint — see `network.tf`'s note on why
@@ -347,9 +375,11 @@ instance (it already sits in the same VPC as RDS):
 ```bash
 INSTANCE_ID="$(terraform output -raw app_instance_id)"
 RDS_ENDPOINT="$(terraform output -raw rds_endpoint)"
-MASTER_PW="$(terraform show -json | jq -r '.values.root_module.resources[] | select(.type=="random_password" and .name=="rds_master") | .values.result')"
-OWNER_PW="$(aws secretsmanager get-secret-value --secret-id "$(terraform output -json secret_arns | jq -r .owner_dsn)" --query SecretString --output text | sed -E 's#.*:([^:@]+)@.*#\1#')"
-APP_PW="$(aws secretsmanager get-secret-value --secret-id "$(terraform output -json secret_arns | jq -r .app_dsn)" --query SecretString --output text | sed -E 's#.*:([^:@]+)@.*#\1#')"
+export AWS_REGION="$(terraform output -raw aws_region)"
+param() { aws ssm get-parameter --name "$(terraform output -json secret_parameter_names | jq -r ".$1")" --with-decryption --query Parameter.Value --output text; }
+MASTER_PW="$(param rds_master_password)"
+OWNER_PW="$(param owner_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
+APP_PW="$(param app_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
 
 curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-ca-bundle.pem
 
@@ -373,7 +403,13 @@ its own, just not instantly.
 Once nginx (edge) can reach a healthy `/healthz` on app, the api applies
 migrations and bootstraps the organization from `MARGINCE_ADMIN_PASSWORD`.
 After that, per the Margince repository's `docs/deployment.md`, remove `bootstrap_admin` from
-`margince.yaml` and rotate the `admin_password` secret. A real, non-empty
+`margince.yaml` and rotate the `admin_password` parameter. The initial
+admin password, if you need it to log in, is:
+
+```bash
+aws ssm get-parameter --name "$(terraform output -json secret_parameter_names | jq -r .admin_password)" \
+  --with-decryption --query Parameter.Value --output text
+``` A real, non-empty
 `license_token` is required for api/worker to fully start — see the "What
 this is NOT" section if you're testing without one.
 
@@ -385,6 +421,37 @@ pulls it from S3 if another apply already built that tag). No rolling
 deploy — this briefly stops all three during the replacement, same
 tradeoff as before: one instance per role, no peer to shift traffic to.
 
+## Alerting
+
+On by default (`enable_alarms = true`, `alarms.tf`), one SNS topic
+(`terraform output -raw alerts_topic_arn`). Set `alert_email` and confirm
+the subscription email AWS sends, or subscribe your own endpoint to the
+topic. Alarms (about $1/month in total):
+
+| Alarm | Condition | Action |
+|---|---|---|
+| `<role>-system-status-check-failed` (edge/app/worker) | `StatusCheckFailed_System` >= 1 for 2 x 1 min | **EC2 auto-recover** + SNS |
+| `<role>-instance-status-check-failed` | `StatusCheckFailed_Instance` >= 1 for 3 x 1 min (no data counts as failing) | SNS |
+| `<role>-cpu-high` | `CPUUtilization` > 90% for 15 min | SNS |
+| `db-free-storage-low` | `FreeStorageSpace` < 2 GiB | SNS |
+| `db-cpu-high` | `CPUUtilization` > 90% for 15 min | SNS |
+| `db-connections-high` | `DatabaseConnections` > `db_max_connections_alarm_threshold` for 15 min | SNS |
+
+Auto-recover keeps the instance ID, private IP, Elastic IP and EBS volumes.
+The topic has no SSE: CloudWatch alarms cannot publish to a topic encrypted
+with the AWS-managed `alias/aws/sns` key, and a customer-managed key is
+something this stack avoids. Alarm payloads contain no secrets.
+
+## Upgrading an existing deployment
+
+Moving from the Secrets Manager version of this stack: `terraform apply`
+destroys the `aws_secretsmanager_secret` resources (scheduled for deletion
+with the default 30-day recovery window; nothing reuses their names),
+creates the SSM parameters with the same values, and replaces all three
+instances because their user data changed. The WAF web ACL, if you had
+`enable_waf = true`, is destroyed; remove `enable_waf` and
+`enable_deep_monitoring` from your `terraform.tfvars`.
+
 ## Security posture
 
 - **IMDSv2 only**, **no SSH ingress** (SSM Session Manager instead) — same
@@ -392,10 +459,17 @@ tradeoff as before: one instance per role, no peer to shift traffic to.
 - **CloudFront + shared-secret header + prefix-list SG restriction** is
   what replaces "the instance's own Elastic IP is the internet-facing
   thing" — nothing external ever reaches an instance's raw IP directly.
-- **Secrets are not in user data** — each instance fetches them at boot via
-  its own scoped `secretsmanager:GetSecretValue` grant into `/.env` (mode
-  600). They are in Terraform state in plain text, which is why the S3
-  backend is required (`versions.tf`).
+- **Secrets are not in user data** — each instance fetches them at boot
+  (and on every service restart, `ExecStartPre`) from SSM Parameter Store
+  with `--with-decryption`, retrying transient failures, into `/.env`
+  (mode 600, swapped in atomically). Its role can read only its own
+  parameters (`iam.tf`). They are also in Terraform state in plain text,
+  which is why the S3 backend is required (`versions.tf`).
+- **No WAF** — nginx on edge rate-limits the credential endpoints per client
+  IP (keyed on the viewer IP CloudFront appends to `X-Forwarded-For`) and
+  rejects any request missing the `X-Origin-Verify` header; the security
+  group admits only CloudFront. Tune the rate with
+  `auth_rate_limit_per_minute`.
 - **valkey's AUTH token** (`secrets.tf`'s `redis_password` secret) protects
   the one real network hop this design has that a single-box design
   wouldn't — worker reaching app's valkey over the VPC, not loopback.
@@ -405,8 +479,10 @@ tradeoff as before: one instance per role, no peer to shift traffic to.
 
 ## Deliberately not done
 
-- **Secrets Manager rotation**, **remote state** — same gaps the full
-  stack names, same reasons.
+- **Secret rotation** — SSM Parameter Store has no built-in rotation;
+  rotate by changing the source (`terraform taint random_password.<x>` or a
+  new tfvars value) and re-applying, which replaces the instances.
+- **WAF** — see "What this is NOT"; nginx is the filter, by design.
 - **Per-role instance sizing** — `instance_type`/`root_volume_gb` are
   shared across edge/app/worker; a real tuning pass would split them.
 - **CloudFront caching for static assets** — see `cloudfront.tf`'s own

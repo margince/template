@@ -31,33 +31,21 @@ locals {
     domain               = local.domain
     app_private_ip       = local.app_private_ip
     origin_verify_secret = random_password.origin_verify.result
+    auth_rate            = var.auth_rate_limit_per_minute
   })
 
-  # One entry per Secrets Manager secret a given role reads — mirrors
-  # iam.tf's own per-role statement lists exactly, so adding a secret to one
-  # without the other is the kind of drift `iam.tf`'s ReadOwnSecrets
-  # statement (not this list) actually enforces; this is just what gets
-  # fetched into that role's .env.
+  # One entry per SSM parameter a given role reads, derived from the same
+  # `readers` lists (secrets.tf) iam.tf's ReadOwnParameters/Deny statements
+  # use, so the fetch list and the IAM grant cannot drift apart. Built from
+  # the resource's own name attribute so each instance waits for its
+  # parameters to exist before it boots.
   app_secrets = [
-    { env_name = "MARGINCE_OWNER_DSN", secret_id = aws_secretsmanager_secret.owner_dsn.name },
-    { env_name = "MARGINCE_DSN", secret_id = aws_secretsmanager_secret.app_dsn.name },
-    { env_name = "MARGINCE_REDIS_PASSWORD", secret_id = aws_secretsmanager_secret.redis_password.name },
-    { env_name = "MARGINCE_KEYVAULT_ROOT_KEY", secret_id = aws_secretsmanager_secret.keyvault_root_key.name },
-    { env_name = "MARGINCE_WEBHOOK_KEY", secret_id = aws_secretsmanager_secret.webhook_key.name },
-    { env_name = "MARGINCE_CONNECTOR_STATE_KEY", secret_id = aws_secretsmanager_secret.connector_state_key.name },
-    { env_name = "MARGINCE_ADMIN_PASSWORD", secret_id = aws_secretsmanager_secret.admin_password.name },
-    { env_name = "MARGINCE_LICENSE", secret_id = aws_secretsmanager_secret.license.name },
-    { env_name = "MARGINCE_BLOBSTORE_ACCESS_KEY", secret_id = aws_secretsmanager_secret.blobstore_access_key.name },
-    { env_name = "MARGINCE_BLOBSTORE_SECRET_KEY", secret_id = aws_secretsmanager_secret.blobstore_secret_key.name },
+    for k, v in local.secret_parameters : { env_name = v.env, parameter_name = aws_ssm_parameter.secret[k].name }
+    if contains(v.readers, "app")
   ]
   worker_secrets = [
-    { env_name = "MARGINCE_DSN", secret_id = aws_secretsmanager_secret.app_dsn.name },
-    { env_name = "MARGINCE_REDIS_PASSWORD", secret_id = aws_secretsmanager_secret.redis_password.name },
-    { env_name = "MARGINCE_KEYVAULT_ROOT_KEY", secret_id = aws_secretsmanager_secret.keyvault_root_key.name },
-    { env_name = "MARGINCE_WEBHOOK_KEY", secret_id = aws_secretsmanager_secret.webhook_key.name },
-    { env_name = "MARGINCE_CONNECTOR_STATE_KEY", secret_id = aws_secretsmanager_secret.connector_state_key.name },
-    { env_name = "MARGINCE_BLOBSTORE_ACCESS_KEY", secret_id = aws_secretsmanager_secret.blobstore_access_key.name },
-    { env_name = "MARGINCE_BLOBSTORE_SECRET_KEY", secret_id = aws_secretsmanager_secret.blobstore_secret_key.name },
+    for k, v in local.secret_parameters : { env_name = v.env, parameter_name = aws_ssm_parameter.secret[k].name }
+    if contains(v.readers, "worker")
   ]
 
   common_build_vars = {
@@ -77,6 +65,7 @@ locals {
     redis_host       = "127.0.0.1"
     blobstore_bucket = aws_s3_bucket.blobstore.bucket
     secrets          = local.app_secrets
+    license_set      = local.license_set
     log_group        = aws_cloudwatch_log_group.app.name
   }))
 

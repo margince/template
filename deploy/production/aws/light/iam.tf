@@ -1,6 +1,6 @@
 # Three EC2 instance roles, one per compute role (edge/app/worker) — unlike
 # the single shared role this stack used to carry, each is scoped to only
-# the secrets and S3 objects that role's own process actually reads. worker
+# the SSM parameters and S3 objects that role's own process actually reads. worker
 # in particular drops owner_dsn/admin_password/license entirely: its
 # entrypoint (scripts/deploy/worker-entrypoint.sh) runs no migrations and
 # reads none of those.
@@ -29,6 +29,25 @@ resource "aws_cloudwatch_log_group" "worker" {
 # condition the way the full stack's ecs_assume does for the shared
 # ecs-tasks.amazonaws.com principal.
 locals {
+  # Per-role SSM parameter ARNs from secrets.tf's `readers` lists. `allow`
+  # is what that role's user-data fetches; `deny` is every other parameter
+  # this stack owns (incl. rds_master_password, which no role reads). The
+  # explicit Deny matters: AmazonSSMManagedInstanceCore, attached to every
+  # role for Session Manager, grants ssm:GetParameter/GetParameters on "*",
+  # and the aws/ssm key policy lets any account principal decrypt via SSM,
+  # so without it worker could read owner_dsn/admin_password.
+  #
+  # No kms:Decrypt grant: the AWS-managed aws/ssm key authorizes decryption
+  # through its own key policy (kms:ViaService = ssm.<region> +
+  # kms:CallerAccount), which cannot be edited and needs no IAM allow.
+  role_parameter_arns = {
+    for role in ["edge", "app", "worker"] : role => {
+      allow = [for k, v in local.secret_parameters : aws_ssm_parameter.secret[k].arn if contains(v.readers, role)]
+      deny  = [for k, v in local.secret_parameters : aws_ssm_parameter.secret[k].arn if !contains(v.readers, role)]
+    }
+  }
+  ssm_read_actions = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"]
+
   ec2_assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -40,7 +59,7 @@ locals {
 }
 
 # ---- edge --------------------------------------------------------------------
-# nginx + the built frontend. No application secrets at all — the frontend
+# nginx + the built frontend. No application secrets at all: the frontend
 # is static, nothing server-side here ever holds a credential.
 
 resource "aws_iam_role" "edge" {
@@ -61,6 +80,20 @@ resource "aws_iam_role_policy_attachment" "edge_ssm" {
 }
 
 data "aws_iam_policy_document" "edge_extra" {
+  # AmazonSSMManagedInstanceCore allows ssm:GetParameter* on "*"; edge reads
+  # no application secret, so every one of this stack's parameters is denied.
+  statement {
+    sid       = "DenyAllParameters"
+    effect    = "Deny"
+    actions   = local.ssm_read_actions
+    resources = local.role_parameter_arns.edge.deny
+  }
+  statement {
+    sid       = "DenyParameterBulkReads"
+    effect    = "Deny"
+    actions   = ["ssm:GetParametersByPath", "ssm:GetParameterHistory"]
+    resources = ["*"]
+  }
   # The shared source archive (build.tf) for this instance's own from-source
   # build, and its own built-frontend cache under binaries/ — read to skip a
   # rebuild if another boot already published it, write to publish this
@@ -113,20 +146,21 @@ resource "aws_iam_role_policy_attachment" "app_ssm" {
 
 data "aws_iam_policy_document" "app_extra" {
   statement {
-    sid     = "ReadOwnSecrets"
-    actions = ["secretsmanager:GetSecretValue"]
-    resources = [
-      aws_secretsmanager_secret.owner_dsn.arn,
-      aws_secretsmanager_secret.app_dsn.arn,
-      aws_secretsmanager_secret.redis_password.arn,
-      aws_secretsmanager_secret.keyvault_root_key.arn,
-      aws_secretsmanager_secret.webhook_key.arn,
-      aws_secretsmanager_secret.connector_state_key.arn,
-      aws_secretsmanager_secret.admin_password.arn,
-      aws_secretsmanager_secret.license.arn,
-      aws_secretsmanager_secret.blobstore_access_key.arn,
-      aws_secretsmanager_secret.blobstore_secret_key.arn,
-    ]
+    sid       = "ReadOwnParameters"
+    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
+    resources = local.role_parameter_arns.app.allow
+  }
+  statement {
+    sid       = "DenyOtherParameters"
+    effect    = "Deny"
+    actions   = local.ssm_read_actions
+    resources = local.role_parameter_arns.app.deny
+  }
+  statement {
+    sid       = "DenyParameterBulkReads"
+    effect    = "Deny"
+    actions   = ["ssm:GetParametersByPath", "ssm:GetParameterHistory"]
+    resources = ["*"]
   }
   statement {
     sid       = "ReadConfigObject"
@@ -181,17 +215,21 @@ resource "aws_iam_role_policy_attachment" "worker_ssm" {
 
 data "aws_iam_policy_document" "worker_extra" {
   statement {
-    sid     = "ReadOwnSecrets"
-    actions = ["secretsmanager:GetSecretValue"]
-    resources = [
-      aws_secretsmanager_secret.app_dsn.arn,
-      aws_secretsmanager_secret.redis_password.arn,
-      aws_secretsmanager_secret.keyvault_root_key.arn,
-      aws_secretsmanager_secret.webhook_key.arn,
-      aws_secretsmanager_secret.connector_state_key.arn,
-      aws_secretsmanager_secret.blobstore_access_key.arn,
-      aws_secretsmanager_secret.blobstore_secret_key.arn,
-    ]
+    sid       = "ReadOwnParameters"
+    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
+    resources = local.role_parameter_arns.worker.allow
+  }
+  statement {
+    sid       = "DenyOtherParameters"
+    effect    = "Deny"
+    actions   = local.ssm_read_actions
+    resources = local.role_parameter_arns.worker.deny
+  }
+  statement {
+    sid       = "DenyParameterBulkReads"
+    effect    = "Deny"
+    actions   = ["ssm:GetParametersByPath", "ssm:GetParameterHistory"]
+    resources = ["*"]
   }
   statement {
     sid       = "ReadConfigObject"

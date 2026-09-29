@@ -27,19 +27,44 @@ curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
 # ---- Secrets -> .env (mode 600, never written to a log or S3) ---------------
 cat > /opt/margince/fetch-secrets.sh <<'FETCH_SECRETS'
 #!/bin/bash
+# SSM Parameter Store SecureStrings (alias/aws/ssm), decrypted on read.
+# Retries cover the instance profile / SSM endpoint not being ready yet
+# right after boot, and SSM API throttling.
 set -euo pipefail
 ENV_FILE=/.env
+TMP_FILE=/.env.tmp
 umask 077
-: > "$ENV_FILE"
+
+fetch_param() {
+  local name="$1" value attempt
+  for attempt in 1 2 3 4 5 6; do
+    if value=$(aws ssm get-parameter --name "$name" --with-decryption --region "${aws_region}" --query Parameter.Value --output text); then
+      printf '%s' "$value"
+      return 0
+    fi
+    echo "reading SSM parameter $name failed (attempt $attempt), retrying" >&2
+    sleep $((attempt * 5))
+  done
+  echo "giving up on SSM parameter $name" >&2
+  return 1
+}
+
+: > "$TMP_FILE"
 %{ for s in secrets ~}
-_value=$(aws secretsmanager get-secret-value --secret-id '${s.secret_id}' --region "${aws_region}" --query SecretString --output text)
+_value=$(fetch_param '${s.parameter_name}')
 if [[ "$_value" == *$'\n'* || "$_value" == *$'\r'* ]]; then
-  echo "secret ${s.secret_id} contains a newline or carriage return; refusing to write to $ENV_FILE" >&2
+  echo "parameter ${s.parameter_name} contains a newline or carriage return; refusing to write to $ENV_FILE" >&2
   exit 1
 fi
-echo "${s.env_name}=$_value" >> "$ENV_FILE"
+echo "${s.env_name}=$_value" >> "$TMP_FILE"
 %{ endfor ~}
-chmod 600 "$ENV_FILE"
+%{ if !license_set ~}
+# No license token set (secrets.tf creates no parameter for an empty value).
+echo "MARGINCE_LICENSE=" >> "$TMP_FILE"
+%{ endif ~}
+chmod 600 "$TMP_FILE"
+# Atomic swap: a failed fetch never leaves a truncated /.env behind.
+mv -f "$TMP_FILE" "$ENV_FILE"
 FETCH_SECRETS
 chmod 700 /opt/margince/fetch-secrets.sh
 /opt/margince/fetch-secrets.sh

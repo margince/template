@@ -1,8 +1,9 @@
 # Margince on AWS
 
 ECS Fargate (api, worker, web), RDS for PostgreSQL, ElastiCache for Redis, S3,
-EFS (for the mounted `margince.yaml`), Secrets Manager, one customer-managed
-KMS key, one ALB fronted by a baseline WAFv2 web ACL. See the [shared
+EFS (for the mounted `margince.yaml`), SSM Parameter Store (SecureString), one
+customer-managed KMS key, one ALB fronted by a WAFv2 web ACL, and baseline
+CloudWatch alarms into an SNS topic. See the [shared
 README](../README.md) for the cross-cloud design notes and what is
 deliberately out of scope (autoscaling policies, multi-region/HA, DR
 runbooks).
@@ -13,6 +14,7 @@ runbooks).
 RDS/ElastiCache). Dashed: image pulls from ECR, EFS config mounts, Secrets
 Manager/S3 access, logs shipped to CloudWatch. Dotted red: the
 customer-managed KMS key encrypting RDS/ElastiCache/EFS/Secrets Manager/S3.
+The diagram predates the move from Secrets Manager to SSM Parameter Store.
 Regenerate from `docs/diagrams/aws.py` after a real architecture change —
 see `docs/diagrams/README.md`.*
 
@@ -36,15 +38,15 @@ terraform apply \
   -target=aws_db_instance.this -target=aws_elasticache_replication_group.this \
   -target=aws_s3_bucket.blobstore -target=aws_efs_file_system.config \
   -target=aws_efs_mount_target.config -target=aws_efs_access_point.config \
-  -target=aws_secretsmanager_secret_version.owner_dsn -target=aws_secretsmanager_secret_version.app_dsn \
+  -target=aws_ssm_parameter.owner_dsn -target=aws_ssm_parameter.app_dsn -target=aws_ssm_parameter.rds_master_password \
   -target=aws_security_group.ops -target=aws_iam_instance_profile.ops \
   -target=aws_iam_role_policy.ops_efs -target=aws_iam_role_policy_attachment.ops_ssm
 ```
 
 This creates the VPC, KMS key, RDS instance, ElastiCache replication group,
-S3 bucket, EFS filesystem and access point, the two DSN secrets that step 2
-reads, the bootstrap host's security group and instance profile (`ops.tf`),
-and the 3 ECR repos. The final untargeted apply creates the other secrets. Do
+S3 bucket, EFS filesystem and access point, the two DSN parameters and the
+RDS master password parameter that step 2 reads, the bootstrap host's security group and instance profile (`ops.tf`),
+and the 3 ECR repos. The final untargeted apply creates the other parameters. Do
 steps 2–4 next — bootstrap the database, push the images, mount
 `margince.yaml` — then run a final untargeted `terraform apply` to create
 the ALB and the 3 ECS services, which by then have an image to pull and a
@@ -78,16 +80,20 @@ aws ssm start-session --target "$OPS_ID" \
   --parameters "host=$(terraform output -raw rds_endpoint),portNumber=5432,localPortNumber=5432"
 ```
 
-Then, on your machine (it has the Terraform state), run the bootstrap SQL.
+Then, on your machine, run the bootstrap SQL. The three passwords come from
+SSM Parameter Store (SecureString, decrypted with the stack CMK), so your AWS
+identity needs `ssm:GetParameter` on `/<name_prefix>/*` and `kms:Decrypt` on
+`terraform output -raw kms_key_arn`; nothing is read out of Terraform state.
 `hostaddr=127.0.0.1` sends the connection through the tunnel while
 `sslmode=verify-full` still checks the certificate against the RDS host name:
 
 ```bash
 curl -o /tmp/rds-ca-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
-OWNER_PW="$(aws secretsmanager get-secret-value --secret-id "$(terraform output -json secret_arns | jq -r .owner_dsn)" --query SecretString --output text | sed -E 's#.*:([^:@]+)@.*#\1#')"
-APP_PW="$(aws secretsmanager get-secret-value --secret-id "$(terraform output -json secret_arns | jq -r .app_dsn)" --query SecretString --output text | sed -E 's#.*:([^:@]+)@.*#\1#')"
-MASTER_PW="$(terraform state show random_password.rds_master | grep 'result ' | awk '{print $3}' | tr -d '"')"
+ssm_get() { aws ssm get-parameter --with-decryption --name "$(terraform output -json ssm_parameter_names | jq -r ".$1")" --query Parameter.Value --output text; }
+OWNER_PW="$(ssm_get owner_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
+APP_PW="$(ssm_get app_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
+MASTER_PW="$(ssm_get rds_master_password)"
 
 psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432/margince?hostaddr=127.0.0.1&sslmode=verify-full&sslrootcert=/tmp/rds-ca-bundle.pem" \
   -v owner_pw="$OWNER_PW" -v app_pw="$APP_PW" \
@@ -95,7 +101,9 @@ psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432
 ```
 
 (`aws rds describe-db-instances` never returns the master password; it only
-exists as this Terraform-generated value.)
+exists as this Terraform-generated value, copied into the
+`/<name_prefix>/rds-master-password` parameter for exactly this step. No ECS
+task or execution role can read that parameter.)
 
 ## 3. Push the three images
 
@@ -166,7 +174,16 @@ or an ALIAS record) and confirm `acm_certificate_arn` covers that host. Once
 the api task can reach a healthy `/healthz` on the target group, it applies
 migrations and bootstraps the organization from `MARGINCE_ADMIN_PASSWORD` —
 after which, per the Margince repository's `docs/deployment.md`, remove `bootstrap_admin` from
-`margince.yaml` and rotate the `admin_password` secret to something inert.
+`margince.yaml` and overwrite the admin password parameter with something inert
+(`secrets.tf` ignores later changes to its value, so apply will not put the
+bootstrap password back):
+
+```bash
+aws ssm put-parameter --overwrite --type SecureString \
+  --key-id "$(terraform output -raw kms_key_arn)" \
+  --name "$(terraform output -json ssm_parameter_names | jq -r .admin_password)" \
+  --value "$(openssl rand -base64 32)"
+```
 
 ## 6. Releasing a new version
 
@@ -209,13 +226,60 @@ This only matters the FIRST time you turn either flag on (or after any gap
 where an old, non-TLS/non-SSE image was running). A steady-state release
 that already has both flags set can apply untargeted as usual.
 
+## WAF rollout
+
+`alb.tf`'s web ACL, in priority order: optional geo allow-list
+(`waf_allowed_country_codes`, default off; the provider webhook paths are
+always exempt), `AmazonIpReputationList`, a per-IP rate limit on the
+credential endpoints (`waf_auth_paths`, default `/v1/auth/login`,
+`/v1/auth/forgot-password`, `/v1/auth/reset-password`, `/oauth/token`,
+`/oauth/register`; `waf_auth_rate_limit_per_ip`, default 100 per 5 min), a
+global per-IP rate limit (`waf_rate_limit_per_ip`, default 2000 per 5 min)
+that excludes `/webhooks/gmail|graph|hubspot` (HMAC-verified provider
+traffic from shared provider IPs), `AnonymousIpList` (always count-only,
+informational: labels VPN/Tor/hosting traffic in the logs), `CommonRuleSet`
+(`SizeRestrictions_BODY` always count), `KnownBadInputsRuleSet`,
+`SQLiRuleSet`, `LinuxRuleSet`, and optionally `BotControlRuleSet`
+(`enable_waf_bot_control`, default off: it adds a monthly fee plus a
+per-request charge; `CategoryHttpLibrary` and `SignalNonBrowserUserAgent`
+are always counted because MCP/OAuth/API clients are legitimate non-browser
+traffic). Rate-limited requests get HTTP 429.
+
+`waf_mode` defaults to `"count"`: every rule only counts, nothing is
+blocked. Run like that for about a week of real traffic, then review what
+WOULD have been blocked:
+
+```bash
+# CloudWatch Logs Insights on aws-waf-logs-<name_prefix>. In count mode a
+# would-be block is an ALLOW record whose nonTerminatingMatchingRules names
+# the rule (or rule group); ruleGroupList carries the rule inside the group.
+fields @timestamp, httpRequest.clientIp, httpRequest.uri, nonTerminatingMatchingRules.0.ruleId, ruleGroupList.0.terminatingRule.ruleId
+| filter ispresent(nonTerminatingMatchingRules.0.ruleId)
+| stats count(*) as hits by nonTerminatingMatchingRules.0.ruleId, ruleGroupList.0.terminatingRule.ruleId, httpRequest.uri
+| sort hits desc
+```
+
+(or the web ACL's "Sampled requests" in the console). For every legitimate
+request that matched, add a `rule_action_override` (count) for that rule in
+`local.waf_managed_rule_groups` (the CRM's rich-text bodies are a likely
+`CrossSiteScripting_BODY` candidate). Then set `waf_mode = "block"` and apply.
+
+Logging: every request goes to the CMK-encrypted `aws-waf-logs-<name_prefix>`
+group (`waf_log_retention_days`, default 30) with the `authorization` and
+`cookie` headers and the query string redacted. In block mode a logging
+filter keeps only BLOCK / COUNT / EXCLUDED_AS_COUNT records and drops plain
+ALLOW traffic, which is most of the volume and already in the ALB access
+logs; in count mode everything is kept, since the would-be blocks are ALLOW
+records with non-terminating matches.
+
 ## Security posture
 
 **Encryption at rest** — one customer-managed KMS key (`kms.tf`, rotation
 enabled) covers everything this stack stores: RDS, ElastiCache, S3 (SSE-KMS
-with Bucket Keys), EFS, every Secrets Manager secret, and all 3 ECR repos.
+with Bucket Keys), EFS, every SSM SecureString parameter, all 3 ECR repos,
+the SNS alert topic and the WAF log group.
 IAM grants are scoped to exactly who needs the key — the ECS execution role
-(Secrets Manager reads + its own ECR image), `execution_web`'s own narrower
+(SSM parameter reads + its own ECR image), `execution_web`'s own narrower
 grant (its ECR image only, no secrets), and the blobstore IAM user (S3
 object encrypt/decrypt) — nobody else can use it. One key, not one per
 service: see `kms.tf` for why a single CMK is the right blast-radius
@@ -240,9 +304,9 @@ traffic, so allow-all egress bought nothing); `ecs_tasks`' own egress is
 scoped to in-VPC traffic plus the specific external ports the product
 genuinely calls out on (443 HTTPS, 25/465/587 SMTP) rather than every
 port/protocol to anywhere; VPC endpoints (S3 Gateway + Interface endpoints
-for ECR/Secrets Manager/KMS/CloudWatch Logs, `vpc-endpoints.tf`) keep that
+for ECR/SSM/KMS/CloudWatch Logs, `vpc-endpoints.tf`) keep that
 AWS-internal traffic off the NAT/public path entirely; the `web` ECS task
-uses its own execution role with no Secrets Manager access, since it reads
+uses its own execution role with no SSM parameter access, since it reads
 no secrets — only `api` and `worker`'s shared execution role can, and
 neither execution role carries the `AmazonECSTaskExecutionRolePolicy`
 managed policy (its `Resource: "*"` ECR/logs grants would have overridden
@@ -281,26 +345,17 @@ anything but redoing that step by hand.
 SSE-S3-only bucket (`aws_s3_bucket.alb_logs` — Elastic Load Balancing does not
 support SSE-KMS for this destination, unlike every other bucket in this
 stack) with a 90-day expiry and a bucket policy scoped to this account's
-load balancers only. A baseline `aws_wafv2_web_acl` sits in front of it: AWS's
-Managed Common Rule Set, Known Bad Inputs, IP Reputation, and SQLi rule
-groups, a 2000-req/5-min per-IP rate limit, plus a second, tighter
-100-req/5-min-per-IP rule scoped to `/v1/auth/*` — all in blocking mode,
-logged to `aws-waf-logs-<name_prefix>` in CloudWatch Logs with the
-`authorization` and `cookie` headers redacted from what's actually written
-(WAF logs the full request by default; without this, every bearer token and
-session cookie that crossed the ALB would sit in plaintext in a CloudWatch
-Logs group). The auth-path rule exists because
+load balancers only. An `aws_wafv2_web_acl` sits in front of it; see "WAF
+rollout" below for the rule set and the count-then-block procedure. The
+auth-path rate rule exists because
 `backend/internal/modules/identity/handlers.go`'s own login limiters are, by
-their own comment, "single-binary scope" — in-memory per api task, not
-shared across the fleet, so `api_autoscaling_max_count` (`variables.tf`)
-scaling out to more tasks scales the *effective* fleet-wide login-attempt
-budget up too, backwards for what a login endpoint wants. This WAF rule is
-the one point that sees traffic before it fans out to any task. This is a
-floor, not tuned rules for any particular deployment's traffic; see the
-shared README's "What this does NOT cover".
+their own comment, "single-binary scope": in-memory per api task, so
+`api_autoscaling_max_count` scaling out raises the *effective* fleet-wide
+login-attempt budget. The WAF is the one point that sees traffic before it
+fans out to any task.
 
 **VPC endpoints** (`vpc-endpoints.tf`): every endpoint (the S3 Gateway
-endpoint and all 5 interface endpoints) now carries a policy restricting use
+endpoint and all 5 interface endpoints: ecr.api, ecr.dkr, ssm, kms, logs) now carries a policy restricting use
 to THIS account's own IAM principals (`aws:PrincipalAccount`) — actions and
 resources are deliberately left to IAM (already scoped per role in
 `iam.tf`; duplicating that here would drift). What this adds that IAM can't:
@@ -388,11 +443,7 @@ second bucket standing up to hold nothing but a different prefix.
   linked, zero cgo; nginx-unprivileged already runs capability-free), and
   Fargate's own restrictions (no privileged mode, no capability additions
   beyond `CAP_SYS_PTRACE`) mean this only narrows further, never conflicts.
-- **WAF**: added `AWSManagedRulesSQLiRuleSet` — this api's one datastore is
-  Postgres, reached through `storekit`'s placeholder derivation
-  (`AGENTS.md`'s "never hand-type a SQL placeholder"); this is the
-  network-edge layer for the same attack class that invariant defends in the
-  code, not a substitute for it.
+- **WAF**: see "WAF rollout" above.
 
 **Deliberately not done**:
 
@@ -411,15 +462,15 @@ second bucket standing up to hold nothing but a different prefix.
   keep in sync by hand, for marginal incremental narrowing over what the
   SGs already refuse. A real add for a compliance mandate that specifically
   asks for defense-in-depth at the subnet layer, not a default.
-- **Shield Advanced / WAF Bot Control.** Both are real, both are metered
-  per-month options on top of what's here (Shield Advanced for L3/L4 DDoS
-  with a cost-protection SLA, Bot Control for bot-traffic classification) —
-  left for an operator whose traffic and threat model actually calls for
-  them, per the shared README's "What this does NOT cover".
-- **Secrets Manager rotation** for `owner_dsn`/`app_dsn` needs a custom
-  rotation Lambda — AWS's canned single-user rotation templates rotate a
-  JSON secret shaped `{host, username, password, ...}`, and these secrets are
-  DSN URL strings, not that shape. The blobstore IAM user's access key
+- **Shield Advanced.** Metered per-month L3/L4 DDoS option with a
+  cost-protection SLA; left for an operator whose threat model calls for it.
+  WAF Bot Control is available behind `enable_waf_bot_control` (off by
+  default, also metered).
+- **Credential rotation** for `owner_dsn`/`app_dsn`. Parameter Store has no
+  managed rotation, and Secrets Manager's canned single-user rotation
+  templates rotate a JSON secret shaped `{host, username, password, ...}`,
+  not the DSN URL strings the app consumes, so either path needs a custom
+  rotation Lambda. The blobstore IAM user's access key
   (`s3.tf`) has the same gap for the same underlying reason: no native
   rotation for a long-lived IAM access key, and the blobstore client
   (`credentials.NewStaticV4`) has no path to assume a role instead. Writing
@@ -449,19 +500,23 @@ elsewhere in this stack (the security group, the subnet group, secret names)
 still correctly names the protocol this thing speaks, not the engine binary —
 see `elasticache.tf`'s own comment.
 
-**CPU credit alarms — off by default**: gated on `var.enable_deep_monitoring`
-(`false` unless set). When on, `alarms.tf` watches `CPUCreditBalance` on both
-burstable (T-family) resources this stack defaults to — `aws_db_instance.this`
-and each ElastiCache node — and pages an SNS topic (`alerts_topic_arn`
-output) when either is running out, rather than waiting for the throttling
-itself to show up as an unexplained slowdown. No subscription is created;
-subscribe your own destination with the `aws sns subscribe` command in that
-file's own comment. The threshold (20) is a starting point, not a tuned
-value — the same honest-floor reasoning as the instance sizing itself.
-CloudWatch Logs and the log/metric *exports* (`enabled_cloudwatch_logs_exports`,
-the flow-log group, the Redis slow-log group) are unaffected by this toggle —
-those are baseline observability every deployment keeps regardless of whether
-it also wants alerting.
+**Alerting, on by default** (`alarms.tf`, `var.enable_alarms = true`): one
+SNS topic encrypted with the stack CMK (`alerts_topic_arn` output), paged on
+ALARM and OK by:
+
+| Area | Alarm |
+|---|---|
+| ALB | `HTTPCode_ELB_5XX_Count` and `HTTPCode_Target_5XX_Count` over `alarm_alb_5xx_threshold` per 5 min; `UnHealthyHostCount > 0` for 3 min on the api and web target groups; `TargetResponseTime` p95 over `alarm_alb_p95_latency_seconds` for 15 min |
+| ECS | `CPUUtilization` and `MemoryUtilization` > 85% for 15 min on api, worker, web |
+| RDS | `FreeStorageSpace` under 5% of the initial allocation; `CPUUtilization` > 85%; `DatabaseConnections` over `alarm_rds_max_connections`; `CPUCreditBalance` < 20 (burstable classes only) |
+| ElastiCache | per node: `DatabaseMemoryUsagePercentage` > 80%, `EngineCPUUtilization` > 80%, `CPUCreditBalance` < 20 (burstable only) |
+| WAF | `BlockedRequests` (Rule=ALL) over `alarm_waf_blocked_requests_threshold` per 5 min; quiet while `waf_mode = "count"` |
+
+Set `alert_email` for an email subscription (AWS sends a confirmation mail;
+nothing is delivered until it is clicked), or subscribe your own endpoint:
+`aws sns subscribe --topic-arn "$(terraform output -raw alerts_topic_arn)" --protocol https --notification-endpoint ...`.
+Thresholds are starting points, not tuned values. Traffic-driven alarms treat
+missing data as OK; RDS storage and CPU credits treat it as breaching.
 
 **S3 SSE-KMS enforcement**: `s3.tf`'s bucket policy denies any `PutObject`
 that isn't `aws:kms`-encrypted under this stack's own key
