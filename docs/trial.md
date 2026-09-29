@@ -1,14 +1,30 @@
-# Laptop trial
+# Trial
 
-`make trial VERSION=<v>` builds a **production-mode** desktop bundle with a
-trial license, for a client to evaluate on a laptop. It never falls back to
-development mode: without a trial license, nothing is built.
+This guide covers `make trial VERSION=<v>`, which builds a desktop bundle that
+runs in production mode with a trial license, for a client to evaluate
+Margince on a laptop. It is for the developer who prepares a trial. It is the
+one guide for trial bundles. Without a trial license, `make trial` builds
+nothing; it never falls back to development mode.
+
+## 1. Prerequisites
+
+- A Mac (Apple silicon or Intel). `make trial` runs `make desktop`, which
+  builds the macOS folder; see [desktop-build.md](desktop-build.md).
+- A checkout on which `make install` has run, and `python3`.
+- A trial license value, or access to the license service
+  ([license.md](license.md)).
+- Optional: a local checkout of the demo dataset named in `data.dataset` of
+  `instance.yaml`, to ship a bundle that can seed itself (Section 5).
+
+## 2. Build a trial bundle
+
+With a trial license value:
 
 ```sh
 MARGINCE_TRIAL_LICENSE=<jwt> make trial VERSION=v0.3.0
 ```
 
-or, to request one from the license service instead of supplying it by hand:
+With a request to the license service:
 
 ```sh
 MARGINCE_LICENSE_API=https://license.margince.example \
@@ -16,80 +32,80 @@ MARGINCE_ACCOUNT_TOKEN=<token> \
   make trial VERSION=v0.3.0
 ```
 
-## Steps
+`make trial` does the following, in order:
 
-1. **License.** `scripts/license.sh trial` (see [license.md](license.md) for
-   the variables). Fails before any build when no trial license is available.
-2. **Build.** `make desktop VERSION=<v>` — the same desktop build
-   [desktop-build.md](desktop-build.md) describes.
-3. **Copy.** The built folder goes to
-   `dist/trial/<name>-<v>-<platform>/`, where `<platform>` is `macos-arm64`,
-   `macos-x64`, or `windows-x64`. `make trial` fails if the directory already
-   exists, unless `FORCE=1` is given.
-4. **License and mode.** `MARGINCE_LICENSE` (the trial license) and
-   `MARGINCE_ENV=production` are written into the bundle's `margince.env`,
-   which the launcher reads from the folder it runs in and overrides its own
-   `MARGINCE_ENV=dev` default with. The license value is never printed and
-   never passed on a command line.
-5. **Dataset reference.** When `instance.yaml` sets `data.dataset`, its
-   `<git-url>@<ref>` is written to `data/demo/DATASET.txt` inside the bundle
-   — a reference, not a clone. The dataset itself is not fetched by `make
-   trial`.
-6. **`TRIAL.txt`.** Name, version, core version, platform, mode, and the
-   license expiry (read from the JWT's `exp` claim; `unknown` if the license
-   has no readable one).
+1. Checks that `VERSION` is a release version and that the platform is
+   supported.
+2. Checks that `dist/trial/<name>-<v>-<platform>/` does not exist, unless
+   `FORCE=1`.
+3. Obtains the trial license with `scripts/license.sh trial`. Without one, it
+   stops before the build.
+4. Runs `make desktop VERSION=<v>`.
+5. Copies `build/desktop/margince` to a staging directory.
+6. Writes `MARGINCE_LICENSE` (the trial license) and `MARGINCE_ENV=production`
+   into the bundle's `margince.env`. The launcher reads that file from its
+   folder, and the value overrides its default `MARGINCE_ENV=dev`.
+7. When `instance.yaml` sets `data.dataset`, writes its URL and ref to
+   `data/demo/DATASET.txt`. The dataset itself is not fetched.
+8. Writes `TRIAL.txt`: name, version, core version, platform, mode, the
+   license expiry from the JWT's `exp` claim (`unknown` when it has none), and
+   the dataset when set.
+9. Moves the staged bundle to `dist/trial/<name>-<v>-<platform>/`.
+
+The license is never printed and never passed on a command line.
+`<platform>` is `macos-arm64` or `macos-x64`.
 
 | Variable | Meaning |
 |---|---|
 | `VERSION` | Required. A release version (`vX.Y.Z` or `vX.Y.Z-rc.N`). |
-| `FORCE` | `FORCE=1` replaces an existing output directory. Without it, an existing directory stops the build before anything runs. |
-| `DATASET` | Path to a local checkout of the dataset named in `data.dataset`, so the desktop build can seed it and ship a demo loader (see below). |
+| `FORCE` | `FORCE=1` replaces an existing output directory. Without it, an existing directory stops `make trial` before the license request. |
+| `DATASET` | The path to a local checkout of the demo dataset, used by the desktop build to seed the bundle (Section 5). |
+| `MARGINCE_TRIAL_LICENSE`, `MARGINCE_LICENSE_API`, `MARGINCE_ACCOUNT_TOKEN` | See [license.md](license.md#5-variables). |
 
-## Output
+## 3. Output
 
 ```
 dist/trial/<name>-<v>-<platform>/
-├── margince                  the launcher
-├── margince.env               MARGINCE_LICENSE, MARGINCE_ENV=production, ...
+├── margince.env           MARGINCE_LICENSE, MARGINCE_ENV=production, and the launcher's settings
 ├── TRIAL.txt
-└── data/demo/DATASET.txt      only when data.dataset is set
+└── data/demo/DATASET.txt  only when data.dataset is set
 ```
 
-## First start
+The rest of the folder is the desktop folder that `make desktop` builds.
+`dist/` is ignored by git; a bundle holds a license and is never committed.
 
-Unzip and run the launcher (`docs/desktop-build.md` covers running it in
-detail). It starts in production mode with the trial license already in
-place — no separate license step for the person trying the bundle.
+## 4. First start
 
-`make trial` builds straight into `dist/trial/<name>-<v>-<platform>/` inside
-the checkout, and that path is routinely too long: the launcher's database
-socket lives at `<root>/data/sockets/.s.PGSQL.5432`, and macOS caps a unix
-socket path at 103 bytes, so the bundle's own root must be at most 76.
-`make trial` checks this and, when the path is too long, prints a note and a
-command to move the bundle somewhere short before the first start, the same
-way `make desktop-install` does for an installed copy:
+macOS limits a Unix socket path to 103 bytes. The launcher's database socket
+is `<root>/data/sockets/.s.PGSQL.5432`, so the bundle's path can be at most 76
+bytes. A path inside the checkout is often longer. When it is, `make trial`
+prints a note and a command to move the bundle:
 
 ```sh
 mv dist/trial/<name>-<v>-<platform> ~/Trial
 ```
 
-Run the launcher from the new location, not the original.
+1. Move the bundle to a short path when `make trial` says so.
+2. Start the launcher from that path, as
+   [desktop-build.md](desktop-build.md) describes.
 
-## Seeding
+The bundle starts in production mode with the trial license in place.
 
-A plain `make trial` has **no demo loader** unless a dataset checkout was
-available to the desktop build at the time it ran — `make trial` itself does
-not clone `data.dataset`; it only writes the reference. To ship a bundle that
-can seed itself, pass a checkout of the dataset:
+## 5. Seed demo data
+
+`make trial` does not clone `data.dataset`. The bundle has a demo loader only
+when the desktop build could read the dataset. To ship a bundle with a demo
+loader, pass a checkout:
 
 ```sh
-git clone <dataset-url> /path/to/dataset-checkout
-git -C /path/to/dataset-checkout checkout <ref>
-make trial VERSION=v0.3.0 DATASET=/path/to/dataset-checkout
+git clone <dataset-url> <dataset-checkout>
+git -C <dataset-checkout> checkout <ref>
+make trial VERSION=v0.3.0 DATASET=<dataset-checkout>
 ```
 
-When `data.dataset` is set but no such checkout was passed, `make trial`
-prints the commands to seed the bundle by hand after the first start:
+When `data.dataset` is set but no `DATASET` was passed, `make trial` prints
+the commands to seed the bundle by hand after its first start, and notes that
+the bundle has no demo loader:
 
 ```sh
 git clone <url> "<bundle>/data/demo/dataset"
@@ -97,9 +113,13 @@ git -C "<bundle>/data/demo/dataset" checkout <ref>
 make desktop-seed DESKTOP_DEST="<bundle>" DATASET="<bundle>/data/demo/dataset"
 ```
 
-`DESKTOP_DEST` must point at the trial bundle itself — where the launcher is
-actually running from, which is `<bundle>` unless you moved it (see "First
-start" above) — not `make desktop-seed`'s own default (`~/Margince`), which is
-a separate `make desktop-install` copy that a trial bundle never uses.
+`DESKTOP_DEST` must be the path the bundle runs from: `<bundle>`, or the new
+path if you moved it. The default of `make desktop-seed`, `~/Margince`, is a
+`make desktop-install` copy, not the trial bundle.
 
-and a note that the bundle ships without a demo loader in that case.
+## Related guides
+
+- [license.md](license.md): the trial license and the license service.
+- [desktop-build.md](desktop-build.md): building, running, and seeding the
+  desktop folder.
+- [release.md](release.md): the desktop bundles of a release.
