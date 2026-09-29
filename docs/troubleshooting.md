@@ -1,582 +1,673 @@
 # Troubleshooting
 
-Symptoms you will actually see, and what to do. Each entry quotes the real
-message and names the file that produces it, so you can check it yourself.
+This guide lists known error messages of the instance lifecycle, with their
+cause and fix, by area. It is for every developer who works in an instance.
+Each entry starts with the message as the code prints it; `<...>` marks a part
+that changes. The guide that owns each topic has the full procedure; this
+guide links to it.
 
-Two terms used below. A **unit** is one of our extensions, living in
-`extensions/<name>/`. **Staging** is the copy step: every make target here first
-copies our units into `core/extensions/`, then calls upstream's own make
-targets. That copy is scratch. Never edit it.
+## 1. Start here
 
-## First, where am I?
+These commands change nothing:
 
-These four commands change nothing. They answer most questions.
+| Command | Output |
+|---|---|
+| `make help` | Every target. |
+| `make preflight` | Missing required and optional tools. |
+| `make toolcheck` | Whether the local pnpm major version matches core's. |
+| `make config-check` | Keys that `.env.local` and `config/margince.yaml` lack compared with core's examples. |
+| `make core-status` | Where `core/` is: branch, pinned commit, distance from `origin/main`, modified files. |
+| `make check-instance` | Whether `instance.yaml` is valid and names the tag that `core/` is at. |
 
-```sh
-make help          # every make target in this repo, one line each
-make core-status   # what core/ is: branch or detached, pinned sha, drift, dirty
-make preflight     # which prerequisites this machine is missing
-make config-check  # which settings your config files lack against core's examples
-```
-
-## Setting up
+## 2. Install and setup
 
 ### `preflight: REQUIRED tools are missing:`
 
-One of git, go, node, pnpm or docker is not on `PATH`. The message names every
-missing tool at once, with a `brew install` line for the ones brew can install
-(`scripts/preflight.sh:95`). Fix: `make install INSTALL_TOOLS=1` lets brew
-install what it can, then runs `make init`.
+**Cause:** git, go, node, pnpm, or docker is not on `PATH`. The message lists
+each missing tool and a `brew install` line for the tools that Homebrew
+installs.
+
+**Fix:** Install the tools, or run `make install INSTALL_TOOLS=1`, which runs
+the `brew install` line first.
 
 ### `preflight: docker is installed but its daemon is not responding.`
 
-The `docker` command exists, but Docker Desktop is not running. `make dev`,
-`make check` and `make ci` all need a database. The probe is `docker info`
-(`scripts/preflight.sh:41`, message at `scripts/preflight.sh:86`). Start Docker
-Desktop, then `docker info && make preflight`.
+**Cause:** The Docker CLI exists, but `docker info` fails. The database needs a
+running Docker daemon.
 
-### `toolcheck: pnpm 10.x locally, but CI runs pnpm 11.x.`
+**Fix:** Start Docker Desktop, check that `docker info` succeeds, and run the
+command again.
 
-pnpm 10 and pnpm 11 read different files for the same setting, so a target can
-pass here and fail in CI on a config nobody changed. The pinned major is read
-out of core's own workflow (`scripts/toolcheck.sh:40`). The script prints the
-fix: `npm install -g pnpm@11`. If pnpm is missing entirely, the message is
-`toolcheck: pnpm is not installed, and CI runs pnpm <version>.` with the same
-fix (`scripts/toolcheck.sh:36`).
+### `toolcheck: pnpm <local> locally, but CI runs pnpm <pinned>.`
 
-### `watch: needs fswatch (brew install fswatch)`
+**Cause:** The local pnpm major version differs from the version in
+`packageManager` of `core/package.json`. Two pnpm major versions can resolve
+the same configuration differently.
 
-`make watch` re-stages on every file change and is built on `fswatch`, which is
-optional and not installed by default (`Makefile:134`). `make init` warns about
-it at setup time (`Makefile:71`). Fix: `brew install fswatch`.
+**Fix:** Run the command that the message prints:
+
+```sh
+corepack enable && corepack prepare pnpm@<pinned> --activate
+```
+
+`toolcheck: pnpm is not installed, and CI runs pnpm <pinned>.` has the same fix.
 
 ### `error: core/ is not checked out — run 'make init' (git submodule update --init)`
 
-The submodule is empty (`scripts/lib.sh:20`). Run `make init`.
+**Cause:** The `core/` submodule is empty.
 
-### `instance.yaml: yaml: unmarshal errors: line N: field flavor not found in type main.Instance`
+**Fix:** Run `make init`.
 
-An instance created before this template dropped per-instance license
-products still has a `flavor:` line in `instance.yaml`. The template no
-longer has that field, so once `make template-sync` pulls in the change,
-`flavor:` is an unknown key and every CLI call that reads `instance.yaml`
-refuses it (`scripts/cli/instance.go`, `Parse`; `scripts/cli/get.go:37` lists
-the keys it does accept). Fix: delete the `flavor:` line from `instance.yaml`
-and commit.
+### `instance.yaml: core: instance.yaml says "<tag>", but core/ is at <tags>`
 
-## Running the stack
+**Cause:** `core/` is not at the commit of the tag that `instance.yaml` names,
+for example after a pull that changed the core pointer.
 
-### Port 8080 is already in use, or another checkout's stack is running
+**Fix:** Run `git submodule update --init core`. To move to another core
+release, use `make update-core REF=<tag>`
+([create-an-instance.md](create-an-instance.md#7-upgrade-core)).
 
-`:8080` is the frontend port of an unslugged stack, so two unslugged stacks
-cannot coexist. Give yours a slug and it gets its own database and its own ports:
+### `instance.yaml: yaml: unmarshal errors:` ... `field <key> not found in type main.Instance`
 
-```sh
-make dev DEV_SLUG=mine
-make dev-stop DEV_SLUG=mine DROP=1    # DROP=1 also drops its database
-```
+**Cause:** `instance.yaml` has a key that the template does not accept. The
+accepted keys are `name`, `display_name`, `core`, `data`, and `deploy`. An
+instance created by an older template can still have a `flavor:` line.
 
-The frontend port of a slugged stack is `8080 + (cksum(slug) % 1000)`; the api
-sits on `18080 +` the same offset (`core/scripts/dev.sh:94`,
-`core/scripts/dev.sh:101-102`). Do not compute it by hand. The stack prints the
-real port when it comes up (`core/scripts/dev.sh:683`):
+**Fix:** Remove the key from `instance.yaml` and commit.
 
-```
-  OPEN     http://localhost:8341
-```
+### `watch: needs fswatch (brew install fswatch)`
 
-A slug must match `^[a-z0-9_-]+$`, or the stack refuses with
-`FAIL: DEV_SLUG must match ^[a-z0-9_-]+$` (`core/scripts/dev.sh:89`).
+**Cause:** `make watch` needs `fswatch`, which is optional.
 
-### `make dev` with no slug took over the machine
+**Fix:** Run `brew install fswatch`.
 
-This is by design, and worth knowing before you type it. A bare `make dev` kills
-every Margince api, worker and Vite process on the machine, frees `:8080`, and
-drops leftover `margince_dev_*` databases (`Makefile:330-339`). A bare
-`make dev-stop` is the mirror: it stops every stack (`Makefile:343-346`).
+### The editor reports `could not import github.com/margince/margince/backend/pkg/extension` or `Cannot find module '@margince/frontend/api'`
 
-If anyone else on the machine — another worktree, another checkout — has a stack
-up, always pass `DEV_SLUG=<name>`. A slugged stack sweeps nothing.
+**Cause:** A unit resolves core through the composed workspace, which an editor
+does not read. The generated files `go.work` (for gopls) and `tsconfig.json`
+(for tsserver) at the repository root give the editor the same paths. Both are
+ignored by git.
 
-### `FAIL: check-ext-migrations — N unit(s) declare migrations/ but the test cluster ... is unreachable.`
+**Fix:** Run `make stage`, which writes both files, then restart the language
+server. `make config` also writes them.
 
-This gate applies each unit's migrations as that unit's restricted `ext_<name>`
-role against a throwaway database. It exits early only while no unit ships a
-`migrations/` directory; once one does, it needs a running Postgres and refuses
-rather than skipping (`core/scripts/check-ext-migrations.sh:45-48`). Our target
-starts the cluster itself when a unit declares migrations (`Makefile:269-274`),
-so this usually means Docker is not up. Fix: `make db-up`.
+## 3. Units and staging
 
-## Working on a unit
+### `error: new-unit: '<name>' must match ^[a-z0-9]+(-[a-z0-9]+)*$ ...`
 
-### gopls or tsserver says a host import cannot be resolved
+**Cause:** The unit name does not follow core's name rule. `make new-unit` also
+refuses a name over 32 characters (`exceeds 32 characters`), an existing
+directory (`extensions/<name> already exists`), and a name of a core unit
+(`'<name>' is an upstream unit`).
 
-On the first import line of a new unit:
+**Fix:** Choose another name ([adding-an-extension.md](adding-an-extension.md#3-create-a-unit)).
 
-```
-could not import github.com/margince/margince/backend/pkg/extension
-Cannot find module '@margince/frontend/api' or its corresponding type declarations. ts(2307)
-```
+### `error: extensions/<unit> collides with an upstream unit of the same name — rename ours`
 
-The build is fine. A unit resolves the host surface through generated files under
-`core/build/`, which an editor cannot see (`scripts/gowork.sh:1-25`,
-`scripts/tsconfig-editor.sh:1-22`). Two generated files at this repository's root
-fix it: `go.work` for gopls and `tsconfig.json` for tsserver. Both are
-gitignored. `make config` and every `make stage` rewrite them
-(`Makefile:76-77`, `Makefile:105-106`).
+**Cause:** A unit in `extensions/` has the name of a unit that core ships, for
+example after `make update-core` to a release that added a unit with that
+name. `make stage` does not replace a core unit.
 
-Run `make stage`, then restart the language server. Both files list the source
-directories, so "go to definition" opens `extensions/`, never the staged copy.
+**Fix:** Rename the unit directory, its module path, and `Extension.Name`.
 
-### `ERR_PNPM_OUTDATED_LOCKFILE`
+### `error: <checkout>/core has modified tracked files, and staging would overwrite work in it:`
 
-The composer rewrites the composed frontend workspace's member set, which leaves
-that workspace's lockfile describing the old set. Core's target installs without
-`--no-frozen-lockfile`, and pnpm defaults to frozen under CI, so a stale lockfile
-is an error instead of a re-resolve. `make check` installs twice — once with
-core's members, once with ours — so the second install always disagrees
-(`Makefile:116-127`).
+**Cause:** Tracked files in `core/` are modified, or `core/extensions/` has an
+untracked directory that the last `make stage` did not create. `make stage`
+refuses, because it replaces staged copies in `core/extensions/`.
 
-`make compose` already deletes that lockfile, so this error means a target ran
-without going through `make compose`. The file is generated and sits under
-ignored build output, so deleting it is safe:
+**Fix:**
 
-```sh
-rm -f core/build/composition-frontend/workspace/pnpm-lock.yaml
-make compose
-```
-
-### `error: core has modified tracked files, and staging would overwrite work in it:`
-
-Staging deletes and recopies each unit, so an edit inside `core/` could be lost
-without warning. It refuses instead (`scripts/lib.sh:118-149`). Untracked staged
-copies from a previous run are normal and never cause this.
-
-If you did not mean to change `core/`, inspect with `git -C core status`, then
-discard with `git -C core checkout -- .` once you are sure.
-
-If you are editing a core seam on a contribution branch, `core/` is dirty by
-design. The escape hatch is a variable. **Prefix it on the single command. Do
-not `export` it**, or the guard stays off for the rest of your session,
-including for targets that really would destroy work:
-
-```sh
-MARGINCE_ALLOW_DIRTY_CORE=1 make u NAME=acme-sync
-```
-
-The full procedure is in [contributing-to-core.md](contributing-to-core.md).
+- For changes you did not intend, inspect them with `git -C core status`, and
+  discard them with `git -C core checkout -- .` once you are sure.
+- For a staged copy of a unit you removed from `extensions/`, delete
+  `core/extensions/<unit>/`.
+- For a change to core on a contribution branch, set
+  `MARGINCE_ALLOW_DIRTY_CORE=1` on each command
+  ([contributing-to-core.md](contributing-to-core.md#32-margince_allow_dirty_core1)).
 
 ### `FAIL: a unit's manifest.generated.json is not committed as generated.`
 
-`manifest.generated.json` is generated by the composer and committed next to the
-source, because operators read it to see a unit's risk tiers. The gate makes two
-separate complaints (`scripts/check-manifests.sh:58-71`):
+**Cause:** One of two cases, named in the message:
 
-- `changed by the composer (commit the new content):` — the file is tracked but
-  out of date.
-- `not tracked by git (run 'make compose', then git add these):` — the file was
-  never added. This is the normal state of a brand-new unit, because
-  `scripts/new-unit.sh` deletes the template's manifest.
+- `changed by the composer (commit the new content):` the manifest differs from
+  the version in git.
+- `not tracked by git (run 'make compose', then git add these):` the manifest
+  was never added. This is the state of a new unit after its first
+  `make compose`.
 
-Both fixes:
+**Fix:**
 
 ```sh
 make compose
 git add extensions/<unit>/manifest.generated.json
 ```
 
-Only manifests are checked here. Your own uncommitted source edits do not
-trigger it.
+### `u: no such unit: extensions/<name>`
 
-### `new-unit: '<name>' must match ^[a-z0-9]+(-[a-z0-9]+)*$`
+**Cause:** `NAME` does not name a directory in `extensions/`.
 
-The unit name keys SQL identifiers and the `#/ext/<name>` route, so the grammar
-is upstream's, checked here before the composer can produce a worse message
-(`scripts/new-unit.sh:20`). The same script also refuses a name over 32
-characters (`:21`), a directory that already exists (`:23`), and a name upstream
-already uses (`:30`). Rename ours.
+**Fix:** Pass the directory name: `make u NAME=<name>`.
 
-## Gates and CI
+### `ERR_PNPM_OUTDATED_LOCKFILE`
 
-### The pre-push hook blocked a push
+**Cause:** The lockfile of the composed frontend workspace describes an older
+set of units. `make compose` deletes it; the error means that a core target
+ran without `make compose` before it.
 
-The hook runs two checks (`.githooks/pre-push`):
-
-```
-pre-push: the staging lane's tests fail — push blocked.
-Run 'make test-scripts' to reproduce.
-```
-
-```
-pre-push: core/ is pinned to a commit upstream has not merged.
-Pushing this would put that pointer on the branch. See the fix above.
-```
-
-Reproduce with `make test-scripts` or `make core-check-pin`. Both messages offer
-`--no-verify`, and both mean it narrowly: use it **only** when the failure is
-unrelated to what you are pushing (`.githooks/pre-push:23`,
-`.githooks/pre-push:32`).
-
-### `release: v0.3 is not a release version.`
-
-`release.yml` reads the tag as the version — it names the build, both zips and
-the release itself — so it checks the grammar before spending twenty minutes of
-runner time. It wants `vMAJOR.MINOR.PATCH`, optionally with an `-rc.N`
-suffix (`N` is 1 or greater). Delete the tag and push one that names a version:
+**Fix:**
 
 ```sh
-git push --delete origin v0.3 && git tag -d v0.3
-git tag -a v0.3.0 -m "..." && git push origin v0.3.0
+rm -f core/build/composition-frontend/workspace/pnpm-lock.yaml
+make compose
 ```
 
-A SUFFIXED version — `v0.3.0-rc.1` — is accepted and publishes as a pre-release,
-so a build meant for testing is tagged the same way as one meant to ship. See
-[release.md](release.md).
+### `FAIL: check-ext-migrations — <n> unit(s) declare migrations/ but the test cluster at <dsn>/ is unreachable.`
 
-### `release: v0.3.0 does not point at a commit on main.`
+**Cause:** A staged unit has `migrations/` (core's own units do too), and the
+test database does not answer. `make check-ext-migrations` runs `make db-up`
+first, so Docker is usually not running.
 
-The tag is on a branch that has not merged. Nothing has gated that commit — the
-light gate runs on `main`, and `core-check-pin` with it — so the lane refuses
-rather than shipping a build nobody reviewed. Merge first, then tag the merge
-commit.
+**Fix:** Start Docker, then run `make db-up`.
 
-If the message is `origin/main is not in this checkout` instead, the tag is fine
-and the checkout is not: the ancestry check found no `origin/main` to compare
-against, which means the lane's `fetch-depth: 0` stopped fetching branches. That
-is a CI bug, not yours.
+### `error: a second 'migrate up' applied work — a unit migration is not idempotent`
 
-### `package: refusing to build — this repository has uncommitted changes.`
+**Cause:** In `make test-integration-ext`, the second `migrate up` applied a
+migration again.
 
-The image tag is this repository's commit, so an image built from a dirty tree
-would be tagged with a commit it does not contain (`scripts/package.sh:41-47`).
-Commit first, or run `ALLOW_DIRTY=1 make package` for a throwaway build.
+**Fix:** Correct the unit's migration files. Core's rules for unit migrations
+are in [core/docs/how-to/add-an-extension.md](../core/docs/how-to/add-an-extension.md).
+
+### `FAIL: gofmt would rewrite the files above — run 'make fmt'`
+
+**Cause:** `make lint` found Go files that are not gofmt-formatted.
+
+**Fix:** Run `make fmt`, then `make lint`.
+
+### `FAIL: golangci-lint not found at <path> — run 'make init' ...`
+
+**Cause:** golangci-lint is not installed in `$(go env GOPATH)/bin`.
+
+**Fix:** Run `make init`.
+
+## 4. Development stack
+
+### `FAIL: port :<port> already in use — is <stack> already running?`
+
+**Cause:** Another process listens on the port of the development stack, for
+example a stack that is still running.
+
+**Fix:** Stop the stack with `make dev-stop` (with `DEV_SLUG=<name>` for a named
+stack), or start a separate stack with its own database and ports:
+
+```sh
+make dev DEV_SLUG=<name>
+make dev-stop DEV_SLUG=<name> DROP=1
+```
+
+The message also suggests core's `dev-sweep` target, which stops every stack
+on the machine. The instance has no such target; run it as
+`make core-root-dev-sweep`.
+
+### `seed-demo: DATASET=<path> required — clone the demo dataset repository, then:`
+
+**Cause:** `make seed-demo` has no default dataset.
+
+**Fix:** Pass the checkout: `make seed-demo DATASET=<dataset-checkout>`.
+`make seed-demo` seeds the `make dev` stack only; for a desktop folder use
+`make desktop-seed` ([desktop-build.md](desktop-build.md#6-seed-demo-data)).
+
+## 5. Checks and CI
+
+### `pre-push: the staging lane's tests fail — push blocked.`
+
+**Cause:** The pre-push hook runs `make test-scripts`, and a test failed.
+
+**Fix:** Run `make test-scripts`, and correct the failure. Use
+`git push --no-verify` only when the failure is not related to the push.
+
+### `pre-push: core/ is pinned to a commit upstream has not merged.`
+
+**Cause:** `make core-check-pin` failed: the recorded `core` commit is not on
+core's `origin/main`. See Section 9.
+
+**Fix:** See `error: core/ is pinned to <commit>, which is NOT on origin/main.`
+in Section 9.
+
+### `check-template: template-owned paths differ from template commit <commit>:`
+
+**Cause:** In an instance, a template-owned path was changed. The message lists
+the paths.
+
+**Fix:** Revert the paths in the instance. Make the change in the template and
+run `make template-sync` in the instance
+([create-an-instance.md](create-an-instance.md#6-receive-template-changes)).
+
+### `check-instance-mk: instance.mk redefines a template target:`
+
+**Cause:** `instance.mk` defines a target that the `Makefile` also defines.
+`check-instance-mk: instance.mk may only set variables named INSTANCE_*` is the
+same check for variables.
+
+**Fix:** Rename the target, or the variable to `INSTANCE_<name>`
+([create-an-instance.md](create-an-instance.md#8-instance-only-make-targets)).
+
+### `FAIL: <file> names `make <target>`, which the Makefile does not declare.`
+
+**Cause:** `make check-docs` found a `make <target>` in `README.md`,
+`CLAUDE.md`, or `docs/*.md` that the `Makefile` does not define with a `##`
+description.
+
+**Fix:** Correct the target name in the document.
 
 ### `secret-scan: FAIL — the finding above is in the commit, not just your worktree.`
 
-The scan runs over `git archive HEAD`, not your working tree, so the finding is
-committed (`scripts/secret-scan.sh:45-47`). Values are redacted; open the named
-line to see it.
+**Cause:** gitleaks found a credential in `git archive HEAD`, the committed
+tree. Values are redacted in the output.
 
-- A real credential: remove it from the source, then **rotate it** — it is in
+**Fix:**
+
+- A real credential: remove it from the source, and rotate it, because it is in
   git history.
-- A false positive: add a scoped allowlist entry to `.gitleaks.toml` saying why.
+- A false positive: add a scoped allowlist entry with a reason to
+  `.gitleaks.toml`.
 
-### `gitleaks-pin: checksum mismatch`
+### `gitleaks-pin: checksum mismatch for gitleaks v<version> (<platform>).`
 
-The pinned scanner binary did not match its digest
-(`scripts/gitleaks-pin.sh:93-95`). Do not bypass it: it means the downloaded
-artifact changed, not that the pin is stale.
+**Cause:** The downloaded gitleaks archive does not match the digest in
+`scripts/gitleaks-pin.sh`.
 
-## Deploying
+**Fix:** Do not bypass the check. Remove `.tmp/` and run the scan again. If the
+mismatch stays, the download changed; report it.
 
-### `keyvault: this installation holds sealed secrets but MARGINCE_KEYVAULT_ROOT_KEY is not set` / `no keyvault is configured for this installation`
+## 6. Release and images
 
-The api refuses to boot with the first message when its database already
-holds sealed secrets — connector credentials, provider keys, the license
-token — but no `MARGINCE_KEYVAULT_ROOT_KEY` reaches it
-(`core/backend/internal/platform/keyvault/local.go:298`). It instead answers
-500 with the second message, `extsecrets: no keyvault is configured for this
-installation, so no extension secret can be stored or read`, when nothing was
-ever sealed and no vault is configured at all (`core/backend/internal/platform/extsecrets/store.go`,
-`ErrNoCustodian`; `capture` and `ai` refuse the same way for a connector or
-provider-key operation).
+### `error: release: VERSION '<v>' does not match ...`
 
-The `host` adapter and `make local-up` now generate
-`MARGINCE_KEYVAULT_ROOT_KEY` (with `MARGINCE_CONNECTOR_STATE_KEY` and
-`MARGINCE_WEBHOOK_KEY`) into `shared/instance.env` on an environment's first
-`apply`, so a newly deployed environment never hits either message
-(docs/deploy.md, "Generated instance keys and the first admin password"). You
-can still see one of these on an environment that was deployed by an older
-version of this template, before `instance.env` existed:
+**Cause:** `make release` needs a version in the format of
+[release.md](release.md#2-version-format).
 
-- **Nothing is sealed yet:** deploy again with the current template. The next
-  `apply` generates `instance.env`, and the vault becomes configured from
-  then on.
-- **Something is already sealed under a key you supplied yourself** (an
-  older `secrets` listed `MARGINCE_KEYVAULT_ROOT_KEY` before this template
-  generated one, or you rotated it by hand): deploying again does **not**
-  recover it — list that exact value in `secrets` again first. The root key
-  is not recoverable from anywhere else the installation holds. See
-  [deploy.md](deploy.md) ("Generated instance keys" and "Rollback limits")
-  for what removing a name like this from `secrets` does on an environment
-  that already has a generated `instance.env`.
+**Fix:** Pass a valid version, for example `make release VERSION=v1.2.0`.
 
-### `entrypoint: MARGINCE_ADMIN_PASSWORD is set, but this installation already has a company … unset MARGINCE_ADMIN_PASSWORD`
+### `error: release: the working tree has uncommitted changes; commit or discard them first`
 
-Expected, and harmless, the first time the `api` container starts after a
-first boot that used the template's generated `MARGINCE_ADMIN_PASSWORD`
-(`core/scripts/deploy/api-entrypoint.sh`): the bootstrap credential did its
-one job — creating the admin account — and every start after that finds a
-company already exists, so the credential is neither written nor read again.
-No action needed. See "Generated instance keys and the first admin password"
-in [deploy.md](deploy.md) for what the password is for and how long it stays
-valid.
+**Cause:** `make release` needs a clean working tree, untracked files included.
 
-## The core submodule
+**Fix:** Commit or remove the changes.
 
-### `git status` shows `core` as modified
+### `error: release: HEAD is not an ancestor of origin/main; push or merge it first`
 
-The submodule pointer moved, normally because a contribution branch is checked
-out inside `core/`. Do not commit it.
+**Cause:** The commit to release is not on `origin/main`.
 
-**`git checkout core` does not fix this.** It is a no-op: the modified state
-comes from the submodule's `HEAD` differing from the index, and
-`git checkout <path>` does not enter the submodule. With `submodule.recurse=true`
-set it does something worse — it silently detaches `core/` off your contribution
-branch.
+**Fix:** Merge it to `main`, update the checkout, and run `make release` again.
 
-The correct command puts `core/` back on the pinned commit and keeps your branch
-(`scripts/core-contrib.sh:274-293`):
+### `error: release: <v> is not newer than <tag>`
+
+**Cause:** An existing release tag is the same version or newer.
+
+**Fix:** Choose a higher version.
+
+### `error: release: make check failed; nothing was tagged`
+
+**Cause:** The last precondition of `make release` failed.
+
+**Fix:** Run `make check`, correct the failure, and run `make release` again.
+
+### `release: <tag> is not a release version.` (in `release.yml`)
+
+**Cause:** A tag that starts with `v` but does not match the version format was
+pushed, for example `v1.2`.
+
+**Fix:** Delete the tag and push a valid one:
 
 ```sh
-make core-restore
+git push --delete origin <tag> && git tag -d <tag>
+make release VERSION=<v>
 ```
 
-If the bad pointer is already committed:
+### `release: <tag> does not point at a commit on main.` (in `release.yml`)
+
+**Cause:** The tag names a commit that is not on `main`.
+
+**Fix:** Delete the tag, merge the work to `main`, and tag the merge commit
+with `make release`. `release: origin/main is not in this checkout.` means that
+the workflow's checkout did not fetch `main`; check its `fetch-depth`.
+
+### `package: refusing to build — this repository has uncommitted changes.`
+
+**Cause:** The images are labelled with the instance commit, and the working
+tree differs from it.
+
+**Fix:** Commit the changes, or run `make package ALLOW_DIRTY=1 VERSION=<v>`
+for a build that you do not release.
+
+### `error: package: docker buildx is required (it drives core's bake file)`
+
+**Cause:** `docker buildx` is not installed.
+
+**Fix:** Install Docker Desktop or the buildx plugin.
+
+## 7. Desktop
+
+### `the installation folder is too deeply nested: the database socket path would be <n> bytes and the system limit is 103.`
+
+**Cause:** The launcher refuses to start: macOS limits a socket path to 103
+bytes, and the folder path is longer than 76 bytes. A path inside the checkout,
+such as `build/desktop/margince/`, is usually too long.
+
+**Fix:** Install the folder at a short path, then start it there:
 
 ```sh
-git checkout HEAD~1 -- core      # if it was the last commit
-# or: make core-restore, then
-git commit core -m "core: restore the pinned commit"
-```
-
-`make core-restore` refuses while `core/` has modified tracked files, rather than
-discarding them (`scripts/core-contrib.sh:280-285`). Commit them on the branch
-first.
-
-### `error: core/ is pinned to <sha>, which is NOT on origin/main.`
-
-This repository may only pin a commit upstream has merged. A pointer to a
-contribution branch builds on your machine and breaks for everyone else — and if
-the branch was pushed, CI passes too, until the pull request is squashed or
-closed (`scripts/core-contrib.sh:258-270`). The remedy the message prints:
-
-```sh
-make core-restore
-git checkout HEAD -- core        # if the bad pointer is already committed
-git commit core -m "core: restore the pinned commit"
-```
-
-If your seam is merged upstream, bump to it properly instead: `make update-core REF=<tag>`.
-
-### `core-check-pin: SKIPPED — cannot resolve origin/main or the pinned object.`
-
-Not a failure. The check could not reach upstream — no network, or a shallow
-clone missing the object — so it says so rather than passing silently
-(`scripts/core-contrib.sh:254-256`). Fix:
-`git -C core fetch origin main && make core-check-pin`.
-
-### `make update-core` refuses to run
-
-It protects three states — `core/` on a contribution branch, uncommitted work,
-or commits upstream does not have — and it also refuses a `REF` that is not a
-core release tag: instances pin releases only. `make core-status` says which
-of the first three applies; `git -C core tag --list 'v*'` lists the release
-tags. See [contributing-to-core.md](contributing-to-core.md).
-
-## The desktop build
-
-### `Cannot find module 'react'` in a unit screen, during `desktop-app`
-
-Fixed upstream in core `50f57116`, and gone from this repo with it: core's
-`build-app.sh` installs the composed pnpm workspace itself now and refuses the
-build if the composer did not produce one. If you see this on an older pin, the
-cause is that missing install — `make update-core REF=<tag>`, or use `make desktop`, which
-carried the install itself until the pin moved.
-
-### `the installation folder is too deeply nested: the database socket path would be N bytes`
-
-Not a build failure — the launcher refusing to start, correctly. macOS caps a
-unix socket path at 103 bytes and the database socket lives inside the
-installation folder, so the folder's path must be at most 76. This checkout is
-79 bytes on its own, so no location inside the repository can ever run it, the
-`build/desktop/` mirror included. Install it out of the tree:
-
-```sh
-make desktop-install   # ~/Margince, or DEST=<somewhere short>
+make desktop-install DESKTOP_DEST=~/Margince
 make desktop-run
 ```
 
-`make desktop-install` measures the path the same way the launcher does, so it
-refuses before copying 163 MB somewhere that cannot start.
+### `error: the installation path is too long: the database socket would be <n> bytes and the system limit is 103.`
 
-### `margince.env line 1: expected KEY=value, got "\ufeff# Margince settings."`
+**Cause:** `make desktop-install` checks the path before it copies the folder.
 
-A Windows installation refusing to start on a file it wrote itself. The comment
-is not the problem — the launcher's parser skips comments, and that line is one.
-`\ufeff` in front of it is a UTF-8 **byte-order mark**, and the mark is what
-defeats the leading-`#` test, so the line is taken for a setting and refused.
+**Fix:** Pass a shorter `DESKTOP_DEST`, for example
+`make desktop-install DESKTOP_DEST=~/M`. The message suggests `DEST=`, which
+the `make` target does not read.
 
-`Setup.cmd` put it there. Up to and including **v0.0.1-rc.1** the setup script
-wrote `margince.env` back through `Set-Content -Encoding UTF8`, which on Windows
-PowerShell 5.1 — the engine `Setup.cmd` invokes, deliberately, because every
-Windows box has it — prepends a mark. PowerShell 7 does not, which is why no
-lane caught it. Every Windows install was affected: the setup script generates
-the keyvault key on every run, and generating it is what rewrote the file.
+### `error: the installation at <folder> is running — quit it first (Ctrl-C in its window), then install again`
 
-Fixed in `scripts/desktop-kit/setup.ps1`: all writes go through
-`Write-Utf8NoBom`, and setup now repairs a file an earlier release corrupted.
-**For a folder you already have, run `Setup.cmd` again** — it strips the mark and
-keeps your settings. To do it by hand instead, in PowerShell:
+**Cause:** `make desktop-install` updates a folder whose app is running.
 
-```powershell
-$p = 'C:\Users\you\Downloads\margince-windows\margince.env'
-[System.IO.File]::WriteAllLines($p, (Get-Content -LiteralPath $p),
-  (New-Object System.Text.UTF8Encoding($false)))
-```
+**Fix:** Stop the app, then run `make desktop-install` again.
 
-Nothing else in the folder needs repairing. `margince.yaml` was written the same
-way and is unaffected: `yaml.v3` strips a leading mark per the YAML spec, and the
-launcher's own reader for that file meets it on a comment line.
+### `error: the installation at <folder> has no demo loader.`
 
-Worth knowing for a hand-edited `margince.env`: a mark in front of a line that
-*is* an assignment does **not** fail. It parses, and the child process is handed
-a variable whose name begins with an invisible character — so the setting is
-silently ignored rather than refused. If a setting you added is having no
-effect, check the file's encoding before anything else. Save it as UTF-8
-*without* a BOM.
+**Cause:** The folder was built without a demo dataset, so it has no
+`Load Demo Data.command`.
 
-### `BUILD-INFO.txt` says `dev-b287031-dirty` and I wanted a version
-
-Both halves are the file working. `VERSION=` is what names a build, and a local
-`make desktop` sets none, so the version is derived: `git describe` against `v*`
-tags, then `dev-<sha>`. The `-dirty` says the tree had uncommitted changes — a
-build whose commit does not identify it, which is worth knowing before that
-folder travels anywhere.
-
-To name one:
+**Fix:** Build again with the dataset, and install:
 
 ```sh
-make desktop VERSION=v0.3.0
+make desktop DATASET=<dataset-checkout>
+make desktop-install
 ```
 
-A release lane passes its own tag, so a downloaded folder always names the
-release it came from.
+### `error: no demo dataset.`
 
-### Which build is an installed folder?
+**Cause:** `make desktop-seed` has no `DATASET`, and `<folder>/data/demo/` has
+no dataset.
+
+**Fix:** Pass `DATASET=<dataset-checkout>`, or copy the dataset into
+`<folder>/data/demo/`.
+
+### `422 fx_rate_base_self` during `make desktop-seed`
+
+**Cause:** The folder's base currency is not EUR. The demo dataset is based on
+EUR, and the `api` refuses an exchange rate for the base currency. The base
+currency is fixed when the workspace is created.
+
+**Fix:** Start over with a new database; this deletes the folder's data:
 
 ```sh
-cat ~/Margince/BUILD-INFO.txt
+rm -rf ~/Margince/data ~/Margince/margince.yaml ~/Margince/margince.env
+make desktop-install
 ```
 
-Version, build time, platform, this repo's commit, the pinned `core/` commit and
-every unit with its version. `runtime/build-info.json` is the same facts for a
-program. Ask for it first when someone reports a problem with an installation
-you did not build — the zip's name is the only other record, and it does not
-survive being unzipped.
+`make desktop-install` writes `base_currency: EUR` unless `CURRENCY` is set
+([desktop-build.md](desktop-build.md#41-what-setupcommand-writes)).
 
-### The sign-in screen wants an account and I have none
+### A `/v1/ext/...` request answers `500`, and `api.log` says `extsecrets: no keyvault is configured for this installation`
+
+**Cause:** `margince.env` has no `MARGINCE_KEYVAULT_ROOT_KEY`. Every unit that
+stores a credential needs it. The folder was configured without
+`Setup.command`, or without `openssl`.
+
+**Fix:** Stop the app, run `Setup.command` in the folder (or
+`make desktop-install` again), and start the app. Set the key before you
+connect an account: credentials sealed under one key do not open with another.
+
+### `margince.env line 1: expected KEY=value, got "﻿# ..."` (Windows)
+
+**Cause:** `margince.env` starts with a UTF-8 byte-order mark. `setup.ps1` of an
+older release wrote it.
+
+**Fix:** Run `Setup.cmd` in the folder again. It removes the mark and keeps the
+settings. A hand-edited `margince.env` must be saved as UTF-8 without a BOM.
+
+### `error: margince.env names an object store at <host:port> and nothing is listening there.`
+
+**Cause:** `margince.env` sets `MARGINCE_BLOBSTORE_ENDPOINT`, and the `api`
+does not start without that object store.
+
+**Fix:** Start the object store, or remove the `MARGINCE_BLOBSTORE_*` lines from
+`margince.env` to store files in `data/blobs/`.
+
+### `error: neither data/admin-password nor the seeded password signs in as <email>.`
+
+**Cause:** The admin password was changed in the app.
+
+**Fix:** Pass the password: `MARGINCE_SEED_PASSWORD=<password> make desktop-seed`.
+
+### A database client cannot connect to the desktop folder
+
+**Cause:** The macOS database has no TCP listener. It accepts connections only
+on the socket in `<folder>/data/sockets/`.
+
+**Fix:** Run `make desktop-dsn` for the socket path and a `socat` bridge, or
+`make desktop-psql` ([desktop-build.md](desktop-build.md#121-the-database)).
+
+### `Bad CPU type in executable`
+
+**Cause:** The folder was built for the other Mac architecture.
+
+**Fix:** Use the zip for the Mac: `margince-macos-apple-silicon-<v>.zip` or
+`margince-macos-intel-<v>.zip`. A local `make desktop` builds for the Mac
+that runs it.
+
+Core's failure table for the desktop app is in
+[core/docs/how-to/build-the-desktop-app.md](../core/docs/how-to/build-the-desktop-app.md#when-something-goes-wrong).
+
+## 8. Deploy and host
+
+### `error: deploy: the working tree has uncommitted changes, so the hooks and configuration match no commit; commit them, or re-run with ALLOW_DIRTY=1`
+
+**Cause:** `make deploy` reads `deploy/<env>/` from the working tree, which
+differs from the commit.
+
+**Fix:** Commit the changes. `ALLOW_DIRTY=1` deploys anyway.
+
+### `deploy: <env> runs in production mode and needs MARGINCE_LICENSE: ...`
+
+**Cause:** The environment runs in production mode, and `secrets` does not list
+`MARGINCE_LICENSE` or it has no value.
+
+**Fix:** List `MARGINCE_LICENSE` in `deploy/<env>/secrets` and set it in the
+environment of `make deploy` ([license.md](license.md)). For a test environment,
+list `MARGINCE_ENV` and set it to `test`
+([deploy.md](deploy.md#58-the-license-check)).
+
+### `deploy: <dir>/config/margince.yaml still has the placeholder admin email admin@example.com; ...`
+
+**Cause:** `bootstrap_admin.email` in `deploy/<env>/config/margince.yaml` is the
+placeholder.
+
+**Fix:** Set the real admin email and commit.
+
+### `HOST_KNOWN_HOSTS is not set: pass the server's known_hosts line(s) ...`
+
+**Cause:** The `host` adapter never disables host key checking, and needs the
+server's `known_hosts` lines.
+
+**Fix:** Compare the key fingerprint with the server's, then:
 
 ```sh
-make desktop-logins
+export HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host>)"
 ```
 
-It lists every account in the installation's own database with its password, and
-probes the admin password against the live api — which matters because seeding
-replaces it: a seeded installation is on `demo-password-123` and
-`data/admin-password` is then stale. `make desktop-status` reports the same one
-line at a time.
+### `deploy: Docker on <target> does not answer for this user; run make host-bootstrap ENV=<env>`
 
-### `make seed-demo` cannot reach the desktop app
+**Cause:** Docker is not installed on the server, or the SSH user is not in the
+`docker` group. `<target> has no Docker Compose plugin` has the same fix.
 
-It is not meant to. That lane is bound to the dev stack: it reads
-`core/config/margince-admin-password`, defaults the api to `:8080` and hands the
-seeder the compose MinIO. Use `make desktop-seed`, which feeds the same upstream
-seeder the desktop installation's own port, credentials and Postgres socket.
+**Fix:** Run `make host-bootstrap ENV=<env>`
+([deploy.md](deploy.md#54-prepare-the-server)).
 
-### `422 fx_rate_base_self` part-way through `make desktop-seed`
+### `deploy: <target> cannot read the manifest of <image> (is the release pushed, and the registry login right?)`
 
-```
-seed-demo: setting the USD rate: POST /v1/fx-rates: HTTP 422 ...
-  from_currency equals the base currency (the rate is always 1)
-```
+**Cause:** The server cannot read an image: the release was not pushed, the
+image name has no or another `REGISTRY` prefix, or the registry login is
+missing or wrong.
 
-The installation's base currency is USD and the demo dataset is euro-based. The
-seeder loads a rate for every non-EUR currency it meets, and the api correctly
-refuses one for the base currency itself — after most of the dataset is already
-written, which is why `make desktop-seed` warns about this before it starts.
+**Fix:** Check that `release.yml` pushed the images, deploy with the same
+`REGISTRY` as the repository variable, and, for a private registry, set
+`REGISTRY_USERNAME` and `REGISTRY_PASSWORD`
+([deploy.md](deploy.md#53-credentials)).
 
-`margince.yaml` is written once and the workspace is bootstrapped from it, so
-a euro installation means a fresh one:
+### `error: render: no value in the environment for: <names> (listed in <dir>/secrets)`
+
+**Cause:** A name in `deploy/<env>/secrets` has no value in the environment of
+`make deploy`.
+
+**Fix:** Set each named variable, or remove the name from `secrets`.
+
+### `keyvault: this installation holds sealed secrets but MARGINCE_KEYVAULT_ROOT_KEY is not set`
+
+**Cause:** The `api` does not start: the database holds data sealed with a
+vault key, and no `MARGINCE_KEYVAULT_ROOT_KEY` reaches the container. This
+happens on an environment deployed before `shared/instance.env` existed, when
+the key that sealed the data was set by hand and is no longer listed in
+`secrets`.
+
+**Fix:** List `MARGINCE_KEYVAULT_ROOT_KEY` in `secrets` again and deploy with
+the original value. No other copy of the key exists. See
+[deploy.md](deploy.md#56-generated-instance-keys-and-the-first-admin-password)
+and [deploy.md](deploy.md#512-rollback-limits).
+
+### `entrypoint: MARGINCE_ADMIN_PASSWORD is set, but this installation already has a company, ...`
+
+**Cause:** Expected after the first start. The `api` used
+`MARGINCE_ADMIN_PASSWORD` once to create the first admin account, and ignores
+it afterwards.
+
+**Fix:** None. See
+[deploy.md](deploy.md#56-generated-instance-keys-and-the-first-admin-password).
+
+### `error: host-admin-password: no generated admin password: ...`
+
+**Cause:** The environment was set up before `instance.env` existed, or
+`secrets` lists `MARGINCE_ADMIN_PASSWORD`.
+
+**Fix:** Use the admin password that you set. `host-admin-password: <target> has
+no <file>; run make deploy ...` means that the environment was never deployed.
+
+## 9. The core submodule
+
+### `git status` shows `core` as modified
+
+**Cause:** `core/` is not at the recorded commit, usually because a
+contribution branch is checked out.
+
+**Fix:** Run `make core-restore`. Do not commit the change, and do not use
+`git checkout core`, which does not enter the submodule
+([contributing-to-core.md](contributing-to-core.md#7-the-core-pointer)).
+
+### `error: core/ is pinned to <commit>, which is NOT on origin/main.`
+
+**Cause:** The instance records a `core` commit that is not on core's `main`,
+for example a commit of a contribution branch.
+
+**Fix:** If the pointer change is not committed, run `make core-restore`. If
+it is committed, restore the pointer from the last correct commit:
 
 ```sh
-rm -rf ~/Margince/data ~/Margince/margince.yaml && make desktop-install
+git checkout <good-commit> -- core
+git commit -m "core: restore the pinned commit"
+make core-restore
 ```
 
-A fresh `make desktop-install` writes `base_currency: EUR` for exactly this
-reason. `CURRENCY=USD make desktop-install` opts out.
+The fix that the message prints (`git checkout HEAD -- core`) does not change a
+pointer that is already committed.
 
-### `501 not_implemented` on attachments, or `make desktop-seed` stops at documents
+### `core-check-pin: SKIPPED — could not establish whether <commit> is on origin/main.`
 
-```
-seed-demo: document for "metoda — Rahmenvertrag 2": POST /v1/attachments: HTTP 501
-  operation attachments is specified but not yet implemented
-```
+**Cause:** Not a failure. The check could not fetch `origin/main`, the object
+is missing, or `core/` is a shallow clone.
 
-The api wired no object store, and a role without one answers 501 —
-`handlers_attachment.go` maps `ErrBlobstoreUnconfigured` to it. Not cosmetic for
-seeding: the documents phase sits mid-run, so products, offers, surfaces,
-consent, lifecycle, relationship types and the owner assignment that runs last
-never happen.
+**Fix:** Run `git -C core fetch origin main` (or
+`git -C core fetch --unshallow origin main` for a shallow clone), then
+`make core-check-pin`.
 
-A desktop installation should never see this: the launcher points the blobstore's
-filesystem provider at `data/blobs`, which needs no service and no
-configuration. Seeing it means the bundle was built from a core that does not
-carry that provider — it is committed on `core/`'s
-`feat/blobstore-filesystem-provider` branch and not yet merged, so a build from
-the pinned commit still answers 501. `make core-status` says which core you have.
+### `error: update-core: '<ref>' must be a release tag like v0.0.2`
 
-If `margince.env` names `MARGINCE_BLOBSTORE_ENDPOINT`, that wins over the
-directory — remove those lines and attachments go back to `data/blobs`.
+**Cause:** `REF` is not a core release tag (`vX.Y.Z`). An instance pins core
+releases only. `update-core: '<ref>' is not a core release tag.` means that no
+such tag exists in `core/`.
 
-### `500` on any `/v1/ext/*` endpoint, and the body says nothing
+**Fix:** List the tags with `git -C core tag --list 'v*'`, and pass one.
 
-The body is a bare `{"code":"internal","status":500}`, so the cause is only in the
-log:
+### `error: core/ is on branch <branch>, and moving it would abandon that branch.`
 
-```sh
-tail -50 ~/Margince/data/logs/api.log
-```
+**Cause:** `make update-core` or `make core-branch` found a contribution branch
+in `core/`. The same guard refuses modified tracked files
+(`moving it would discard them`) and commits on a detached `HEAD` that
+`origin/main` does not have.
 
-The common one on a hand-made installation is a missing keyvault:
+**Fix:** Finish or park the contribution with `make core-pr` and
+`make core-restore`, or give the commits a branch name with
+`git -C core branch <name>`.
 
-```
-err="extsecrets: no keyvault is configured for this installation, so no
-     extension secret can be stored or read"
-```
+## 10. Local stack
 
-Every unit that stores a credential needs `MARGINCE_KEYVAULT_ROOT_KEY` in
-`margince.env` (`openssl rand -base64 32`; a wrong length refuses the boot).
-`make desktop-install` generates one on a fresh install for exactly this reason.
+### `error: local: make local-up needs ports 80 and 443:` ...
 
-It does not present the same way twice, which is what makes it look like several
-unrelated bugs: a unit whose `status` reads a secret has its screen fail on load
-("Couldn't load this view"); a unit whose `status` does not renders normally,
-reports "Not connected", and only its `connect` 500s — with copy that points at
-the provider rather than at the vault. Same single cause.
+**Cause:** Another process listens on port 80 or 443. The message names it when
+`lsof` is installed.
 
-Set the key **before** connecting an account. Changing it later makes already
-sealed credentials unreadable.
+**Fix:** Stop that process, or a local stack of another checkout with
+`make local-down` there.
 
-### `422 read_only` on a project's `key`, part-way through a seed
+### `error: local: image(s) not found locally: <images> — run 'make package VERSION=<v>' first`
 
-```
-seed-demo: projects: project for communicode.de: POST /v1/projects: HTTP 422
-  a project's key is assigned by the server from its name and cannot be set
-```
+**Cause:** The images of `VERSION` are not in the local Docker image store.
 
-Not ours and not desktop-specific: core commit `1da94847` (2026-08-23) made the
-server mint project keys and refuse a caller-supplied one, and
-`backend/tools/seed-demo/surfaces.go` still sends `key`. `make seed-demo` fails
-the same way on the dev stack at this pin. It stops the run, so the phases after
-`projects` do not happen. The fix belongs upstream — `make core-branch`,
-`make core-pr` — or in a later `make update-core REF=<tag>`, once a release
-carries it.
+**Fix:** Run `make package VERSION=<v>`, with the same `REGISTRY` as for
+`make local-up`.
 
-### A database client cannot connect to the desktop app
+### The database rejects its password after `.local/` was deleted
 
-There is no TCP listener: the launcher starts Postgres with
-`listen_addresses=''`, so it is reachable only through a socket in a `0700`
-directory — and for the same reason there is no password. `make desktop-dsn`
-prints the socket path, the roles and a `socat` bridge for a client that speaks
-TCP only; `make desktop-psql` opens the `psql` the installation ships.
+**Cause:** `make local-up` generated new database passwords in a new `.local/`,
+and the data volumes still hold the old database.
+
+**Fix:** Run `make local-down WIPE=1`, which removes the volumes and `.local/`,
+then `make local-up VERSION=<v>`. This deletes the local data.
+
+## 11. Trial and license
+
+### `error: trial: <dir> exists; pass FORCE=1 to replace it`
+
+**Cause:** A trial bundle for this name, version, and platform exists.
+
+**Fix:** Run `make trial VERSION=<v> FORCE=1`, or move the existing bundle.
+
+### `license: set MARGINCE_LICENSE_API and MARGINCE_ACCOUNT_TOKEN (or set $MARGINCE_TRIAL_LICENSE directly to skip the request)`
+
+**Cause:** No license value and no license service settings are set. For
+`make license`, the variable named last is `MARGINCE_LICENSE`.
+
+**Fix:** Set the license value, or the two service variables
+([license.md](license.md#5-variables)). `make trial` then stops with
+`error: trial: no trial license; nothing was built`.
+
+### `license: cannot reach <url>`
+
+**Cause:** The license service does not answer.
+
+**Fix:** Check `MARGINCE_LICENSE_API` and the network. Other answers of the
+service are printed as `license: the license service answered <code>: <message>`
+([license.md](license.md#6-behavior)).
+
+## Related guides
+
+- [create-an-instance.md](create-an-instance.md): setup, template sync, core
+  upgrades.
+- [adding-an-extension.md](adding-an-extension.md): units and gates.
+- [release.md](release.md): releases and images.
+- [deploy.md](deploy.md): deployment.
+- [desktop-build.md](desktop-build.md): the desktop folder.
+- [trial.md](trial.md) and [license.md](license.md): trials and licenses.
