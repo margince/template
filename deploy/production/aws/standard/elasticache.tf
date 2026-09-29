@@ -29,8 +29,10 @@ resource "random_id" "redis_final_snapshot" {
 # recoverable cache miss. noeviction makes that failure loud (OOM errors on
 # write) instead of quiet.
 resource "aws_elasticache_parameter_group" "this" {
-  name   = "${var.name_prefix}-redis"
-  family = "valkey8"
+  name = "${var.name_prefix}-redis"
+  # "valkey7" for engine_version 7.2; derived so a later major bump moves
+  # the family with it. maxmemory-policy is a valid valkey7 parameter.
+  family = "valkey${split(".", var.cache_engine_version)[0]}"
 
   parameter {
     name  = "maxmemory-policy"
@@ -75,8 +77,14 @@ resource "aws_elasticache_replication_group" "this" {
   # durability modes) lands on Valkey, not Redis OSS, from here on. Picking
   # Redis now would only mean paying this exact migration later, with live
   # data instead of none.
+  #
+  # Version 7.2 (var.cache_engine_version), not the newest Valkey: dev runs
+  # redis:7.2 and the Azure stacks run Redis 7.2, and ElastiCache has no
+  # Redis OSS 7.2. Valkey 7.2 is the Redis 7.2 fork, so every environment
+  # speaks the same protocol series. TLS-required transit encryption and the
+  # AUTH token below both apply unchanged to Valkey 7.2.
   engine               = "valkey"
-  engine_version       = "8.2"
+  engine_version       = var.cache_engine_version
   node_type            = var.redis_node_type
   port                 = 6379
   parameter_group_name = aws_elasticache_parameter_group.this.name

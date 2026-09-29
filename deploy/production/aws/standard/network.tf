@@ -198,17 +198,29 @@ resource "aws_security_group" "alb" {
     cidr_blocks = [var.vpc_cidr]
   }
 
+  # Explicit rule for the web tasks' own SG (aws_security_group.web below).
+  # The VPC-CIDR rule above already covers it; this names the path so it
+  # survives a later narrowing of that rule. No cycle: web's ingress from
+  # this SG is a standalone rule resource, not an inline block.
+  egress {
+    description     = "To web (nginx SPA) tasks on 8080"
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web.id]
+  }
+
   lifecycle { create_before_destroy = true }
 }
 
 resource "aws_security_group" "ecs_tasks" {
   name_prefix = "${var.name_prefix}-ecs-"
-  description = "api/worker/web tasks; ingress from the ALB only, egress to in-VPC services plus the specific external ports the app genuinely calls out on."
+  description = "api/worker tasks; ingress from the ALB only, egress to in-VPC services plus the specific external ports the app genuinely calls out on."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-ecs-tasks", Component = "network" }
 
   ingress {
-    description     = "ALB to api/web containers"
+    description     = "ALB to api containers"
     from_port       = 8080
     to_port         = 8080
     protocol        = "tcp"
@@ -266,6 +278,58 @@ resource "aws_security_group" "ecs_tasks" {
   }
 
   lifecycle { create_before_destroy = true }
+}
+
+# ---- web (nginx SPA) tasks ---------------------------------------------------
+# The web service serves static files and talks to nothing but AWS itself
+# (ECR for its image, CloudWatch Logs for its output), so it gets its own SG
+# instead of sharing ecs_tasks' reach into RDS, ElastiCache, EFS and the
+# internet. Rules are standalone resources (not inline blocks) because the
+# ALB and VPC-endpoint SGs reference this one inline; inline rules on both
+# sides would form a dependency cycle. Terraform still strips AWS's default
+# allow-all egress rule when it creates the group.
+resource "aws_security_group" "web" {
+  name_prefix = "${var.name_prefix}-web-"
+  description = "web (nginx SPA) tasks; ingress 8080 from the ALB only, egress 443 to the VPC interface endpoints and the S3 gateway endpoint only."
+  vpc_id      = aws_vpc.this.id
+  tags        = { Name = "${var.name_prefix}-web", Component = "network" }
+
+  lifecycle { create_before_destroy = true }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "web_from_alb" {
+  security_group_id            = aws_security_group.web.id
+  description                  = "ALB to web containers"
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+  referenced_security_group_id = aws_security_group.alb.id
+  tags                         = { Name = "${var.name_prefix}-web-from-alb", Component = "network" }
+}
+
+# ECR API/registry and CloudWatch Logs via the interface endpoints
+# (vpc-endpoints.tf). web reads no SSM parameters (execution_web, iam.tf);
+# the ECR repo's KMS decrypt is made by ECR itself, not by the task.
+resource "aws_vpc_security_group_egress_rule" "web_to_vpc_endpoints" {
+  security_group_id            = aws_security_group.web.id
+  description                  = "HTTPS to the interface VPC endpoints (ECR, CloudWatch Logs)"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.vpc_endpoints.id
+  tags                         = { Name = "${var.name_prefix}-web-to-vpce", Component = "network" }
+}
+
+# ECR image layers come from S3 through the gateway endpoint, which has no
+# ENI or SG; its managed prefix list is the only way to name it here.
+resource "aws_vpc_security_group_egress_rule" "web_to_s3" {
+  security_group_id = aws_security_group.web.id
+  description       = "HTTPS to S3 via the gateway endpoint (ECR image layers)"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  prefix_list_id    = aws_vpc_endpoint.s3.prefix_list_id
+  tags              = { Name = "${var.name_prefix}-web-to-s3", Component = "network" }
 }
 
 resource "aws_security_group" "db" {

@@ -230,6 +230,111 @@ run "defaults_encryption_and_wiring" {
   }
 }
 
+# Global bucket names, the web SG split, and the Valkey 7.2 pin.
+run "naming_sg_split_and_cache_version" {
+  command = plan
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
+  }
+
+  override_resource {
+    target          = aws_security_group.ecs_tasks
+    override_during = plan
+    values          = { id = "sg-0ecs0000000000000" }
+  }
+
+  override_resource {
+    target          = aws_security_group.web
+    override_during = plan
+    values          = { id = "sg-0web0000000000000" }
+  }
+
+  override_resource {
+    target          = aws_security_group.vpc_endpoints
+    override_during = plan
+    values          = { id = "sg-0vpce000000000000" }
+  }
+
+  override_resource {
+    target          = aws_security_group.alb
+    override_during = plan
+    values          = { id = "sg-0alb0000000000000" }
+  }
+
+  assert {
+    condition     = var.aws_region == "eu-central-1"
+    error_message = "Test expectations below assume the default region eu-central-1."
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket.blobstore.bucket == "margince-blobstore-123456789012-eu-central-1" &&
+      aws_s3_bucket.alb_logs.bucket == "margince-alb-logs-123456789012-eu-central-1" &&
+      endswith(aws_s3_bucket.blobstore.bucket, "-123456789012-eu-central-1") &&
+      endswith(aws_s3_bucket.alb_logs.bucket, "-123456789012-eu-central-1")
+    )
+    error_message = "Bucket names must end with -<account_id>-<region>."
+  }
+
+  assert {
+    condition = (
+      toset(aws_ecs_service.web.network_configuration[0].security_groups) == toset(["sg-0web0000000000000"]) &&
+      !contains(aws_ecs_service.web.network_configuration[0].security_groups, aws_security_group.ecs_tasks.id) &&
+      contains(aws_ecs_service.api.network_configuration[0].security_groups, aws_security_group.ecs_tasks.id) &&
+      !contains(aws_ecs_service.api.network_configuration[0].security_groups, aws_security_group.web.id)
+    )
+    error_message = "web must use its own SG, distinct from api/worker's ecs_tasks SG."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.web_from_alb.referenced_security_group_id == aws_security_group.alb.id &&
+      aws_vpc_security_group_ingress_rule.web_from_alb.from_port == 8080 &&
+      aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.referenced_security_group_id == aws_security_group.vpc_endpoints.id &&
+      aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.from_port == 443 &&
+      aws_vpc_security_group_egress_rule.web_to_s3.from_port == 443 &&
+      length(aws_security_group.web.ingress) == 0
+    )
+    error_message = "web SG: 8080 from the ALB only; egress 443 to the endpoints SG and the S3 prefix list."
+  }
+
+  assert {
+    condition = anytrue([
+      for r in aws_security_group.vpc_endpoints.ingress : contains(r.security_groups, aws_security_group.web.id) && r.from_port == 443
+    ])
+    error_message = "The interface endpoints SG must admit the web SG on 443."
+  }
+
+  assert {
+    condition = !anytrue([
+      for sg in [aws_security_group.db, aws_security_group.redis, aws_security_group.efs] :
+      anytrue([for r in sg.ingress : contains(r.security_groups, aws_security_group.web.id)])
+    ])
+    error_message = "web must have no path to RDS, Redis or EFS."
+  }
+
+  assert {
+    condition = (
+      aws_elasticache_replication_group.this.engine == "valkey" &&
+      aws_elasticache_replication_group.this.engine_version == "7.2" &&
+      aws_elasticache_parameter_group.this.family == "valkey7" &&
+      aws_elasticache_replication_group.this.transit_encryption_mode == "required"
+    )
+    error_message = "ElastiCache must run Valkey 7.2 (family valkey7) with TLS required."
+  }
+}
+
+run "long_name_prefix_is_refused" {
+  command = plan
+  variables {
+    name_prefix = "margince-a-very-long-production-prefix"
+  }
+  expect_failures = [var.name_prefix]
+}
+
 run "block_mode_and_options" {
   command = plan
 

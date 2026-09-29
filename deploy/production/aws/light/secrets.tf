@@ -11,7 +11,7 @@
 # also why iam.tf carries explicit Denies: AmazonSSMManagedInstanceCore
 # grants ssm:GetParameter/GetParameters on "*".
 
-# valkey's AUTH token (no ElastiCache here - network.tf/ec2.tf's own notes
+# redis's AUTH token (requirepass) (no ElastiCache here - network.tf/ec2.tf's own notes
 # on why this crosses a real network hop between the app and worker
 # instances, unlike a loopback-only single-box design).
 resource "random_password" "redis_auth" {
@@ -42,8 +42,8 @@ locals {
   owner_dsn = "postgres://margince_owner:${urlencode(random_password.margince_owner.result)}@${local.db_host}:${local.db_port}/margince?sslmode=verify-full&sslrootcert=/app/config/rds-ca-bundle.pem"
   app_dsn   = "postgres://margince_app:${urlencode(random_password.margince_app.result)}@${local.db_host}:${local.db_port}/margince?sslmode=verify-full&sslrootcert=/app/config/rds-ca-bundle.pem"
 
-  # No ElastiCache - valkey runs natively on the app instance itself
-  # (ec2.tf). Its private IP, not a managed endpoint, is what worker (a
+  # No ElastiCache - redis runs in a Docker container on the app instance
+  # itself (ec2.tf). Its private IP, not a managed endpoint, is what worker (a
   # separate instance) and api both use to reach it.
   redis_host = local.app_private_ip
 
@@ -75,7 +75,7 @@ locals {
         name        = "margince-redis-password"
         env         = "MARGINCE_REDIS_PASSWORD"
         readers     = ["app", "worker"]
-        description = "MARGINCE_REDIS_PASSWORD: AUTH token for the valkey instance on the app EC2 instance (not ElastiCache)."
+        description = "MARGINCE_REDIS_PASSWORD: AUTH token for the redis container on the app EC2 instance (not ElastiCache)."
       }
       keyvault_root_key = {
         name        = "margince-keyvault-root-key"

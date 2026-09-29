@@ -72,7 +72,7 @@ resource "aws_vpc_endpoint" "s3" {
 
 resource "aws_security_group" "vpc_endpoints" {
   name_prefix = "${var.name_prefix}-vpce-"
-  description = "Interface VPC endpoints (ECR, SSM, KMS, CloudWatch Logs); HTTPS ingress from ECS tasks and the bootstrap host only, no egress."
+  description = "Interface VPC endpoints (ECR, SSM, KMS, CloudWatch Logs); HTTPS ingress from ECS tasks (api/worker and web) and the bootstrap host only, no egress."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-vpce", Component = "network" }
 
@@ -82,6 +82,15 @@ resource "aws_security_group" "vpc_endpoints" {
     to_port         = 443
     protocol        = "tcp"
     security_groups = [aws_security_group.ecs_tasks.id]
+  }
+
+  # web tasks have their own SG (network.tf) and need ECR + Logs only.
+  ingress {
+    description     = "HTTPS from web tasks (ECR pulls, CloudWatch Logs)"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web.id]
   }
 
   # private_dns_enabled on the ssm endpoint makes ssm.<region>.amazonaws.com

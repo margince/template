@@ -15,9 +15,18 @@
 # bucket uses AES256 while every other bucket in this stack uses this
 # stack's own CMK — not an inconsistency, a constraint of the two services
 # being logged.
+# Same account+region suffix as s3.tf's blobstore bucket (local.bucket_suffix):
+# bucket names are global across all AWS accounts.
 resource "aws_s3_bucket" "alb_logs" {
-  bucket = "${var.name_prefix}-alb-logs"
+  bucket = "${var.name_prefix}-alb-logs-${local.bucket_suffix}"
   tags   = { Name = "${var.name_prefix}-alb-logs", Component = "observability" }
+
+  lifecycle {
+    precondition {
+      condition     = length("${var.name_prefix}-alb-logs-${local.bucket_suffix}") <= 63
+      error_message = "ALB log bucket name exceeds S3's 63-character limit; shorten name_prefix."
+    }
+  }
 }
 
 resource "aws_s3_bucket_ownership_controls" "alb_logs" {

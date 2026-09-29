@@ -1,10 +1,10 @@
 # Margince on AWS — light
 
 Three EC2 instances — **edge** (nginx + the built frontend, public via
-CloudFront), **app** (api + a natively-installed valkey), **worker** — plus
-managed RDS for PostgreSQL. No Docker, no ECR, no ElastiCache, no ALB, no
-ECS. Every instance compiles its own piece from source at boot (Go/Node
-directly, not containers). See [the standard stack](../standard/README.md) for the
+CloudFront), **app** (api + redis in a Docker container), **worker** — plus
+managed RDS for PostgreSQL. No ECR, no ElastiCache, no ALB, no ECS. Every
+instance compiles its own piece from source at boot (Go/Node directly, not
+containers); the only container is redis, pinned by digest. See [the standard stack](../standard/README.md) for the
 production-shaped alternative this trades against.
 
 ```
@@ -23,8 +23,8 @@ production-shaped alternative this trades against.
                     ┌─────────────────────┐        ┌─────────────────────┐
                     │  app                │◄───────┤  worker             │
                     │  margince-api       │  :6379  │  margince-worker    │
-                    │  valkey (localhost  │         │                     │
-                    │   + reachable from  │         │                     │
+                    │  redis in Docker    │         │                     │
+                    │   (reachable from   │         │                     │
                     │   worker)           │         │                     │
                     └──────────┬──────────┘         └──────────┬──────────┘
                                │ :5432                          │ :5432
@@ -41,12 +41,31 @@ red: not applicable here (this stack has no customer-managed KMS key — see
 "What this is NOT"). Regenerate from `docs/diagrams/aws-light.py` after a
 real architecture change — see `docs/diagrams/README.md`.*
 
+## Versions
+
+Same pins as the Azure light stack; the Margince repository is the single
+source of truth, read at build time rather than copied here:
+
+- **Terraform** >= 1.10 (`versions.tf`; S3 native state locking).
+- **PostgreSQL 16**: RDS server (`db_engine_version`) and the `postgresql16`
+  client package on app/worker.
+- **Redis 7.2**: `redis_image`, the same image and digest as the repo's
+  `docker-compose.dev.yml` (and the Azure standard stack).
+- **Go**: the `go` line of the source's `go.work`, official tarball from
+  `dl.google.com`, checked against its `.sha256`.
+- **Node**: the major of the source `Dockerfile`'s `node:` base image
+  (fallback 24), latest patch from `nodejs.org/dist/latest-v<major>.x`,
+  checked against `SHASUMS256.txt`.
+- **OS**: Amazon Linux 2023 (latest AMI at create time; `ami` changes are
+  ignored afterwards, see `ec2.tf`).
+
 ## What this is NOT
 
 Read this before you provision it:
 
-- **Not containerized.** api/worker/nginx/valkey all run as native systemd
-  services, compiled/installed directly on their instance. This means the
+- **Not containerized.** api/worker/nginx all run as native systemd
+  services, compiled/installed directly on their instance (redis is the one
+  exception: the pinned `redis_image` under Docker, as a systemd unit). This means the
   build toolchain (Go, and Node/pnpm on edge) lives permanently on the same
   box that serves traffic — normally you'd build somewhere isolated and
   ship only the artifact. It also means no automatic base-image patching
@@ -147,6 +166,13 @@ Everything else has a working default:
   `db_final_snapshot_generation` before destroying/recreating the RDS
   instance in the same state, so the final-snapshot suffix doesn't collide
   with a previous deletion's snapshot.
+- **`db_deletion_protection`** (`true`) — RDS deletion protection. A
+  `terraform destroy` (or anything that replaces the database) fails until
+  you set it to `false` and apply. Either way a final snapshot is taken and
+  automated backups are kept after deletion (`delete_automated_backups =
+  false`), until their retention period runs out.
+- **`redis_image`** — the redis container image on app, digest-pinned
+  (validated); see "Versions".
 - **`log_retention_days`** (`14`) — CloudWatch Logs retention for all three
   instances' log groups (`iam.tf`).
 - **`enable_alarms`** (`true`) — the SNS topic and CloudWatch alarms in
@@ -200,9 +226,12 @@ No shared role anymore. Each instance's own role reads only:
 
 | Role | SSM parameters | S3 |
 |---|---|---|
-| edge | none (all explicitly denied) | `source/<tag>.zip` (read), `binaries/edge-<tag>.tar.gz` (read/write) |
-| app | everything (owner_dsn, app_dsn, redis_password, keyvault/webhook/connector keys, admin_password, license, blobstore keys) | same shape, `binaries/app-<tag>.tar.gz` |
-| worker | everything EXCEPT owner_dsn/admin_password/license (explicitly denied) | same shape, `binaries/worker-<tag>.tar.gz` |
+| edge | none (all explicitly denied) | `source/<tag>.zip` (read), `binaries/edge-<tag>-<sha>.tar.gz` (read/write) |
+| app | everything (owner_dsn, app_dsn, redis_password, keyvault/webhook/connector keys, admin_password, license, blobstore keys) | same shape, `binaries/app-<tag>-<sha>.tar.gz` |
+| worker | everything EXCEPT owner_dsn/admin_password/license (explicitly denied) | same shape, `binaries/worker-<tag>-<sha>.tar.gz` |
+
+`<sha>` is the first 16 hex chars of the source archive's SHA-256
+(`build.tf`'s `local.source_sha`).
 
 No role can read `rds_master_password`; it is for humans only (step 8).
 
@@ -244,17 +273,16 @@ single shared template to parameterize further.
 Each: installs its own toolchain only (edge needs Go — only to run the
 composition codegen step, not to build a Go binary — AND Node/pnpm;
 app/worker need Go only), checks its own S3 artifact cache first
-(`binaries/<role>-<tag>.tar.gz`), builds from the shared source archive
+(`binaries/<role>-<tag>-<sha>.tar.gz`), builds from the shared source archive
 if missing, publishes what it built, and (app/worker) reuses
 `scripts/deploy/api-entrypoint.sh` / `worker-entrypoint.sh` VERBATIM as the
 systemd `ExecStart` — those scripts already handle migrations and the
 admin-password bootstrap; nothing here reimplements that logic.
 
-**To adapt:** a pinned toolchain version bump (Go, Node) means editing the
-`GO_VERSION`/`NODE_VERSION` line in the relevant template(s) — these are
-NOT sourced from a single shared variable, so bumping Go means editing it
-in all three templates that use it (edge, app, worker), and Node only in
-edge's.
+Toolchain versions are not pinned here: each build reads Go from the
+source's `go.work` and the Node major from its `Dockerfile` (see
+"Versions"), so a toolchain bump in the Margince repository needs no change
+in this stack.
 
 ### `cloudfront.tf` — the public entry point
 
@@ -283,7 +311,7 @@ rather than from state. `license` only exists when `license_token` is set
 (SSM rejects empty values; the app then gets an empty `MARGINCE_LICENSE`).
 Standard parameters hold at most 4 KB. DSNs
 built from `aws_db_instance.this.address` (RDS, unchanged),
-`redis_host = aws_instance.app.private_ip` (valkey now runs on the app
+`redis_host = aws_instance.app.private_ip` (redis runs in Docker on the app
 instance itself, not a managed endpoint — see `network.tf`'s note on why
 this crosses a real network hop for worker). The blobstore IAM user (used
 by api/worker for attachment storage) is explicitly denied `config/*`,
@@ -416,7 +444,9 @@ this is NOT" section if you're testing without one.
 ## 10. Releasing a new version
 
 Bump `image_tag`, `terraform apply`. Each instance's `user_data_replace_on_change`
-means all three get replaced; each rebuilds its own piece from source (or
+means all three get replaced (a changed source tree under the SAME tag also
+replaces them: the archive's hash is in every user data and in every binary
+cache key, so a stale cached build is never reused); each rebuilds its own piece from source (or
 pulls it from S3 if another apply already built that tag). No rolling
 deploy — this briefly stops all three during the replacement, same
 tradeoff as before: one instance per role, no peer to shift traffic to.
@@ -453,8 +483,8 @@ instances because their user data changed. The WAF web ACL, if you had
 `enable_deep_monitoring` entry in `terraform.tfvars` fails the plan with a
 message; delete it (`enable_deep_monitoring` is now `enable_alarms`).
 
-Replacing the app instance loses valkey's data, which lives on its root
-disk: sessions and any outbox events not yet relayed. Apply in a quiet
+Replacing the app instance loses redis's data (AOF under
+`/var/lib/margince/redis` on its root disk): sessions and any outbox events not yet relayed. Apply in a quiet
 window, after the worker has drained the queue. Postgres and S3 data are not
 affected. The site is down while the three instances rebuild from source.
 
@@ -476,9 +506,10 @@ affected. The site is down while the three instances rebuild from source.
   rejects any request missing the `X-Origin-Verify` header; the security
   group admits only CloudFront. Tune the rate with
   `auth_rate_limit_per_minute`.
-- **valkey's AUTH token** (`secrets.tf`'s `redis_password` secret) protects
-  the one real network hop this design has that a single-box design
-  wouldn't — worker reaching app's valkey over the VPC, not loopback.
+- **redis's AUTH token** (`secrets.tf`'s `redis_password` secret, as
+  `requirepass` in a mode-600 config file mounted into the container)
+  protects the one real network hop this design has that a single-box
+  design wouldn't — worker reaching app's redis over the VPC, not loopback.
 - **No supply-chain gate on the native build** — no SBOM, no provenance
   attestation the way the release workflow's own Docker bake has. This is
   a real, open cost of "no Docker" worth naming plainly.

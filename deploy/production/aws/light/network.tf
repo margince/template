@@ -109,7 +109,7 @@ resource "aws_security_group" "edge" {
   }
 
   # api egress to app is a SEPARATE aws_security_group_rule below, same
-  # cross-reference-cycle reasoning as app/worker's valkey rule.
+  # cross-reference-cycle reasoning as app/worker's redis rule.
   egress {
     description = "HTTPS for its own from-source build (S3, Go/npm registries) and SSM"
     from_port   = 443
@@ -123,11 +123,11 @@ resource "aws_security_group" "edge" {
 
 resource "aws_security_group" "app" {
   name_prefix = "${var.name_prefix}-app-"
-  description = "api + valkey. Ingress on 8080 from edge only, on 6379 from worker only; never the internet."
+  description = "api + redis. Ingress on 8080 from edge only, on 6379 from worker only; never the internet."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-app", Component = "network" }
 
-  # api ingress from edge, and valkey ingress from worker, are SEPARATE
+  # api ingress from edge, and redis ingress from worker, are SEPARATE
   # aws_security_group_rule resources below, not inline here — edge/app and
   # app/worker each reference the OTHER's SG id, and Terraform can't
   # resolve two security groups' inline rule blocks each depending on the
@@ -172,7 +172,7 @@ resource "aws_security_group" "worker" {
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-worker", Component = "network" }
 
-  # valkey egress to app is the other half of the separate
+  # redis egress to app is the other half of the separate
   # aws_security_group_rule pair below — see the note on app's own ingress
   # block above for why this can't be an inline block here.
   # Postgres egress to RDS is a SEPARATE aws_security_group_rule below —
@@ -247,7 +247,7 @@ resource "aws_security_group_rule" "edge_egress_api_to_app" {
 
 resource "aws_security_group_rule" "app_ingress_valkey_from_worker" {
   type                     = "ingress"
-  description              = "valkey, from worker"
+  description              = "redis, from worker"
   from_port                = 6379
   to_port                  = 6379
   protocol                 = "tcp"
@@ -257,7 +257,7 @@ resource "aws_security_group_rule" "app_ingress_valkey_from_worker" {
 
 resource "aws_security_group_rule" "worker_egress_valkey_to_app" {
   type                     = "egress"
-  description              = "valkey, on the app instance"
+  description              = "redis, on the app instance"
   from_port                = 6379
   to_port                  = 6379
   protocol                 = "tcp"

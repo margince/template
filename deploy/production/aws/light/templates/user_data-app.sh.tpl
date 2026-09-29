@@ -1,7 +1,7 @@
 #!/bin/bash
-# Boot-time provisioning for the app instance: margince-api + a natively
-# installed valkey (no ElastiCache — see network.tf/secrets.tf). Runs once,
-# at first boot (cloud-init), as root.
+# Boot-time provisioning for the app instance: margince-api + redis in a
+# Docker container (no ElastiCache — see network.tf/secrets.tf). Runs once,
+# at first boot (cloud-init), as root. Source archive sha: ${source_sha}
 set -euo pipefail
 
 ARCH="$(uname -m)"
@@ -11,8 +11,9 @@ case "$ARCH" in
   *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
-dnf install -y valkey postgresql15 awscli2 unzip tar gzip amazon-cloudwatch-agent
-# postgresql15 (client only, psql) — this stack's README uses THIS instance,
+dnf install -y docker postgresql16 awscli2 unzip tar gzip amazon-cloudwatch-agent
+systemctl enable --now docker
+# postgresql16 (client only, psql; same major as RDS) — this stack's README uses THIS instance,
 # over SSM, to run scripts/deploy/db-bootstrap.sql against RDS once, since
 # there's no separate bastion.
 
@@ -69,38 +70,69 @@ FETCH_SECRETS
 chmod 700 /opt/margince/fetch-secrets.sh
 /opt/margince/fetch-secrets.sh
 
-# ---- valkey: local, network-reachable by the worker instance too -----------
+# ---- redis: Docker container, reachable by the worker instance too ---------
 # 127.0.0.1 alone isn't enough here — worker (a separate EC2 instance) needs
 # this over the network, not loopback, so an AUTH token replaces the
 # loopback-only trust a single-box design could have skipped (network.tf's
-# sg-app only lets sg-worker's traffic reach 6379 at all).
+# sg-app only lets sg-worker's traffic reach 6379 at all). The password sits
+# in a mode-600 config file mounted into the container, never on a command
+# line. AOF persistence on the host: /var/lib/margince/redis -> /data.
 REDIS_PW="$(grep '^MARGINCE_REDIS_PASSWORD=' /.env | cut -d= -f2-)"
-mkdir -p /etc/valkey/valkey.conf.d
-cat > /etc/valkey/valkey.conf.d/margince.conf <<EOF
-bind 0.0.0.0 -::1
+mkdir -p /etc/margince /var/lib/margince/redis
+( umask 077; cat > /etc/margince/redis.conf <<EOF
+bind 0.0.0.0
 requirepass $REDIS_PW
+appendonly yes
+dir /data
 EOF
-systemctl enable --now valkey
+)
+# The official image runs redis-server as uid/gid 999.
+chown 999:999 /etc/margince/redis.conf /var/lib/margince/redis
+docker pull '${redis_image}'
+cat > /etc/systemd/system/margince-redis.service <<'UNIT'
+[Unit]
+Description=Margince redis (Docker)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f margince-redis
+ExecStart=/usr/bin/docker run --rm --name margince-redis -p 6379:6379 -v /var/lib/margince/redis:/data -v /etc/margince/redis.conf:/usr/local/etc/redis/redis.conf:ro ${redis_image} redis-server /usr/local/etc/redis/redis.conf
+ExecStop=/usr/bin/docker stop margince-redis
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now margince-redis.service
 
 # ---- Build-if-missing: api + migrate binaries -------------------------------
-BINARY_KEY="binaries/app-${image_tag}.tar.gz"
+# Keyed by tag AND source hash (build.tf), so never reused across source changes.
+BINARY_KEY="${binary_key}"
 if aws s3 cp "s3://${blobstore_bucket}/$BINARY_KEY" /tmp/app-artifact.tar.gz --region "${aws_region}"; then
-  echo "api binaries for tag ${image_tag} already published, skipping build"
+  echo "api binaries for tag ${image_tag} (source ${source_sha}) already published, skipping build"
   tar -xzf /tmp/app-artifact.tar.gz -C /opt/margince/bin
   rm /tmp/app-artifact.tar.gz
 else
-  echo "api binaries for tag ${image_tag} not yet published, building from source"
-
-  GO_VERSION=1.26.6
-  curl -fsSL "https://go.dev/dl/go$${GO_VERSION}.linux-$${GOARCH}.tar.gz" -o /tmp/go.tar.gz
-  tar -C /usr/local -xzf /tmp/go.tar.gz
-  rm /tmp/go.tar.gz
-  export PATH=$PATH:/usr/local/go/bin
+  echo "api binaries for tag ${image_tag} (source ${source_sha}) not yet published, building from source"
 
   mkdir -p /opt/margince/src
   aws s3 cp "s3://${blobstore_bucket}/${source_object_key}" /tmp/source.zip --region "${aws_region}"
   unzip -q /tmp/source.zip -d /opt/margince/src
   rm /tmp/source.zip
+
+  # Go at the version the source's go.work pins, checksum-verified.
+  GO_VERSION="$(awk '$1 == "go" { print $2; exit }' /opt/margince/src/go.work)"
+  GO_TGZ="go$${GO_VERSION}.linux-$${GOARCH}.tar.gz"
+  curl -fsSL "https://dl.google.com/go/$GO_TGZ" -o "/tmp/$GO_TGZ"
+  echo "$(curl -fsSL "https://dl.google.com/go/$GO_TGZ.sha256")  /tmp/$GO_TGZ" | sha256sum -c -
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "/tmp/$GO_TGZ"
+  rm -f "/tmp/$GO_TGZ"
+  export PATH=$PATH:/usr/local/go/bin
 
   (cd /opt/margince/src/backend && GOWORK=/opt/margince/src/go.work go run ./tools/gen-composition)
 
@@ -137,7 +169,7 @@ sed -i 's#margince-api#/opt/margince/bin/margince-api#; s#margince-migrate#/opt/
 cat > /etc/systemd/system/margince-api.service <<UNIT
 [Unit]
 Description=Margince api
-After=network-online.target valkey.service
+After=network-online.target margince-redis.service
 Wants=network-online.target
 
 [Service]

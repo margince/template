@@ -106,7 +106,7 @@ data "aws_iam_policy_document" "edge_extra" {
   statement {
     sid       = "ReadWriteOwnBinaryCache"
     actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${aws_s3_bucket.blobstore.arn}/binaries/edge-${var.image_tag}.tar.gz"]
+    resources = ["${aws_s3_bucket.blobstore.arn}/${local.binary_cache_keys.edge}"]
   }
   statement {
     sid     = "WriteOwnLogs"
@@ -124,7 +124,7 @@ resource "aws_iam_role_policy" "edge_extra" {
 }
 
 # ---- app ---------------------------------------------------------------------
-# api + valkey. Everything api's entrypoint (migrations, admin-password
+# api + redis. Everything api's entrypoint (migrations, admin-password
 # bootstrap) or process itself reads.
 
 resource "aws_iam_role" "app" {
@@ -175,7 +175,7 @@ data "aws_iam_policy_document" "app_extra" {
   statement {
     sid       = "ReadWriteOwnBinaryCache"
     actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${aws_s3_bucket.blobstore.arn}/binaries/app-${var.image_tag}.tar.gz"]
+    resources = ["${aws_s3_bucket.blobstore.arn}/${local.binary_cache_keys.app}"]
   }
   statement {
     sid     = "WriteOwnLogs"
@@ -244,7 +244,7 @@ data "aws_iam_policy_document" "worker_extra" {
   statement {
     sid       = "ReadWriteOwnBinaryCache"
     actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${aws_s3_bucket.blobstore.arn}/binaries/worker-${var.image_tag}.tar.gz"]
+    resources = ["${aws_s3_bucket.blobstore.arn}/${local.binary_cache_keys.worker}"]
   }
   statement {
     sid     = "WriteOwnLogs"

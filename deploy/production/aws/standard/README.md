@@ -1,6 +1,6 @@
 # Margince on AWS
 
-ECS Fargate (api, worker, web), RDS for PostgreSQL, ElastiCache for Redis, S3,
+ECS Fargate (api, worker, web), RDS for PostgreSQL, ElastiCache (Valkey 7.2, Redis protocol), S3,
 EFS (for the mounted `margince.yaml`), SSM Parameter Store (SecureString), one
 customer-managed KMS key, one ALB fronted by a WAFv2 web ACL, and baseline
 CloudWatch alarms into an SNS topic. See the [shared
@@ -17,6 +17,15 @@ customer-managed KMS key encrypting RDS/ElastiCache/EFS/Secrets Manager/S3.
 The diagram predates the move from Secrets Manager to SSM Parameter Store.
 Regenerate from `docs/diagrams/aws.py` after a real architecture change —
 see `docs/diagrams/README.md`.*
+
+### Versions
+
+| Component | Version |
+|---|---|
+| Terraform CLI | >= 1.10 (S3 backend native locking, `versions.tf`) |
+| PostgreSQL (RDS) | 16 (`db_engine_version`, major only) |
+| Cache (ElastiCache) | Valkey 7.2 (`cache_engine_version`): Redis 7.2 protocol, the same series as dev's `redis:7.2` and the Azure stacks |
+| api / worker / web images | Built from the Margince repository's `Dockerfile` (step 3), tagged `image_tag` |
 
 ## 1. Provision
 
@@ -317,7 +326,7 @@ boundary here rather than six to separately grant.
 | Client → ALB | TLS 1.2 and TLS 1.3 (`ELBSecurityPolicy-TLS13-1-2-2021-06` — the name is the policy's, not a claim that 1.2 is refused), HTTP redirects to HTTPS |
 | ALB → api/web tasks | Plaintext HTTP inside the VPC's private subnets — matches the product's own architecture: `cmd/api` serves plain HTTP and terminates TLS ahead of itself (`docs/reference/configuration.md`) |
 | Task → RDS | `rds.force_ssl=1` (server refuses plaintext) + `sslmode=verify-full` on both DSNs — encrypted AND authenticated against the RDS CA bundle (step 4), not merely encrypted; `sslmode=require` alone lets pgx accept any certificate, including an attacker's |
-| Task → ElastiCache | `transit_encryption_enabled = true`, `transit_encryption_mode = "preferred"` (not `"required"`) + auth token. `"preferred"` rather than the stricter default because the product's Redis client (`backend/internal/platform/events/relay.go`) sets no `TLSConfig` at all — `"required"` would refuse every connection this app actually makes. The real fix is in the Go client; this is the honest floor until it lands, not a claim the wire is protected end to end |
+| Task → ElastiCache (Valkey 7.2) | `transit_encryption_enabled = true`, `transit_encryption_mode = "required"` + AUTH token. The Redis client (`backend/internal/platform/events/relay.go`) negotiates TLS when `MARGINCE_REDIS_TLS=true` (set for api and worker in `ecs.tf`); see "Turning on the Redis-TLS / S3-SSE-KMS enforcement, safely" for the rollout order. Both settings apply to Valkey 7.2 exactly as to Redis OSS |
 | Task → EFS | `transit_encryption = "ENABLED"` on the mount |
 | Task → S3 | Bucket policy denies any request where `aws:SecureTransport = false`, independent of the client's own `MARGINCE_BLOBSTORE_USE_SSL` setting |
 
@@ -330,7 +339,12 @@ scoped to in-VPC traffic plus the specific external ports the product
 genuinely calls out on (443 HTTPS, 25/465/587 SMTP) rather than every
 port/protocol to anywhere; VPC endpoints (S3 Gateway + Interface endpoints
 for ECR/SSM/KMS/CloudWatch Logs, `vpc-endpoints.tf`) keep that
-AWS-internal traffic off the NAT/public path entirely; the `web` ECS task
+AWS-internal traffic off the NAT/public path entirely; the `web` ECS
+service has its own security group (`aws_security_group.web`, `network.tf`)
+separate from api/worker's `ecs_tasks`: ingress 8080 from the ALB only,
+egress 443 only to the interface endpoints SG (ECR, CloudWatch Logs) and the
+S3 gateway endpoint's prefix list (ECR image layers), so it has no path to
+RDS, ElastiCache, EFS or the internet; the `web` ECS task
 uses its own execution role with no SSM parameter access, since it reads
 no secrets — only `api` and `worker`'s shared execution role can, and
 neither execution role carries the `AmazonECSTaskExecutionRolePolicy`
@@ -365,6 +379,14 @@ mounts nothing and calls no other AWS API.
 filesystem — otherwise a new EFS filesystem defaults to none, and the
 operator-provisioned `margince.yaml` (step 4) would be unrecoverable from
 anything but redoing that step by hand.
+
+**Bucket names**: S3 bucket names are global across all AWS accounts, so
+both buckets carry an account+region suffix:
+`<name_prefix>-blobstore-<account_id>-<aws_region>` and
+`<name_prefix>-alb-logs-<account_id>-<aws_region>` (read the real names from
+`terraform output s3_blobstore_bucket` / `alb_access_log_bucket`).
+`name_prefix` is validated so the longer one stays within S3's 63-character
+limit.
 
 **ALB**: access logging is on by default, to a dedicated same-region,
 SSE-S3-only bucket (`aws_s3_bucket.alb_logs` — Elastic Load Balancing does not
@@ -516,8 +538,12 @@ second bucket standing up to hold nothing but a different prefix.
   verify it before relying on it, not just before applying it.
 
 **Cache engine**: `elasticache.tf` runs Valkey (`engine = "valkey"`,
-`engine_version = "8.2"`, parameter group family `valkey8`), not Redis OSS —
-this is a fresh create, not an in-place engine conversion, so none of the
+`engine_version = var.cache_engine_version`, default `"7.2"`, parameter
+group family `valkey7`), not Redis OSS. 7.2 rather than the newest Valkey
+keeps every environment on the Redis 7.2 protocol series: dev runs
+`redis:7.2` and the Azure stacks run Redis 7.2, and ElastiCache offers no
+Redis OSS 7.2 (it stops at 7.1), while Valkey 7.2 is the Redis 7.2 fork.
+Valkey is a fresh create, not an in-place engine conversion, so none of the
 harder Redis-to-Valkey upgrade-path issues apply. AWS's own new ElastiCache
 capability (vector search, durability modes) lands on Valkey going forward;
 Redis OSS 7.1 is the last version on a shared roadmap. Every "redis" name

@@ -1,14 +1,15 @@
 # Three EC2 instances, not one: edge (nginx + built frontend, public-facing
-# via CloudFront), app (api + a natively-installed valkey), worker. No ASG,
+# via CloudFront), app (api + redis in a Docker container), worker. No ASG,
 # no launch template — a replacement means re-running `terraform apply`
 # (or, for an in-place rebuild, `terraform taint aws_instance.<role>` and
 # applying) rather than traffic shifting to a healthy peer, because there is
 # no peer. See this stack's README for what that tradeoff costs.
 #
-# No containers anywhere in this file: each instance compiles its own piece
-# from source at boot (templates/user_data-*.sh.tpl) using the native Go/
-# Node toolchain, not docker buildx — see build.tf for where the shared
-# source archive comes from.
+# Margince itself is never containerized here: each instance compiles its
+# own piece from source at boot (templates/user_data-*.sh.tpl) using the
+# native Go/Node toolchain, not docker buildx — see build.tf for where the
+# shared source archive comes from. The one container is redis on app
+# (var.redis_image), pinned by digest to the same image as dev.
 
 data "aws_ssm_parameter" "al2023_ami" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-${var.cpu_architecture}"
@@ -53,14 +54,18 @@ locals {
     blobstore_bucket  = aws_s3_bucket.blobstore.bucket
     source_object_key = aws_s3_object.source.key
     image_tag         = var.image_tag
+    source_sha        = local.source_sha
   }
 
   edge_user_data = templatefile("${path.module}/templates/user_data-edge.sh.tpl", merge(local.common_build_vars, {
+    binary_key     = local.binary_cache_keys.edge
     nginx_conf_b64 = base64encode(local.nginx_conf)
     log_group      = aws_cloudwatch_log_group.edge.name
   }))
 
   app_user_data = templatefile("${path.module}/templates/user_data-app.sh.tpl", merge(local.common_build_vars, {
+    binary_key       = local.binary_cache_keys.app
+    redis_image      = var.redis_image
     public_base_url  = var.public_base_url
     redis_host       = "127.0.0.1"
     blobstore_bucket = aws_s3_bucket.blobstore.bucket
@@ -70,6 +75,7 @@ locals {
   }))
 
   worker_user_data = templatefile("${path.module}/templates/user_data-worker.sh.tpl", merge(local.common_build_vars, {
+    binary_key      = local.binary_cache_keys.worker
     public_base_url = var.public_base_url
     redis_host      = local.redis_host
     secrets         = local.worker_secrets

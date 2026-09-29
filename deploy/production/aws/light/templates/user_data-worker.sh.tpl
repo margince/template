@@ -1,7 +1,8 @@
 #!/bin/bash
 # Boot-time provisioning for the worker instance: margince-worker only — no
 # ingress from anywhere (network.tf), connects out to the app instance's
-# valkey and to RDS. Runs once, at first boot (cloud-init), as root.
+# redis and to RDS. Runs once, at first boot (cloud-init), as root.
+# Source archive sha: ${source_sha}
 set -euo pipefail
 
 ARCH="$(uname -m)"
@@ -11,8 +12,8 @@ case "$ARCH" in
   *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
-dnf install -y postgresql15 awscli2 unzip tar gzip amazon-cloudwatch-agent
-# postgresql15 (client only) — worker itself runs no migrations, but the
+dnf install -y postgresql16 awscli2 unzip tar gzip amazon-cloudwatch-agent
+# postgresql16 (client only, same major as RDS) — worker itself runs no migrations, but the
 # same CA bundle below is what its DSN's sslrootcert points at.
 
 mkdir -p /app/config /opt/margince/bin
@@ -64,24 +65,29 @@ chmod 700 /opt/margince/fetch-secrets.sh
 /opt/margince/fetch-secrets.sh
 
 # ---- Build-if-missing: worker binary -----------------------------------------
-BINARY_KEY="binaries/worker-${image_tag}.tar.gz"
+# Keyed by tag AND source hash (build.tf), so never reused across source changes.
+BINARY_KEY="${binary_key}"
 if aws s3 cp "s3://${blobstore_bucket}/$BINARY_KEY" /tmp/worker-artifact.tar.gz --region "${aws_region}"; then
-  echo "worker binary for tag ${image_tag} already published, skipping build"
+  echo "worker binary for tag ${image_tag} (source ${source_sha}) already published, skipping build"
   tar -xzf /tmp/worker-artifact.tar.gz -C /opt/margince/bin
   rm /tmp/worker-artifact.tar.gz
 else
-  echo "worker binary for tag ${image_tag} not yet published, building from source"
-
-  GO_VERSION=1.26.6
-  curl -fsSL "https://go.dev/dl/go$${GO_VERSION}.linux-$${GOARCH}.tar.gz" -o /tmp/go.tar.gz
-  tar -C /usr/local -xzf /tmp/go.tar.gz
-  rm /tmp/go.tar.gz
-  export PATH=$PATH:/usr/local/go/bin
+  echo "worker binary for tag ${image_tag} (source ${source_sha}) not yet published, building from source"
 
   mkdir -p /opt/margince/src
   aws s3 cp "s3://${blobstore_bucket}/${source_object_key}" /tmp/source.zip --region "${aws_region}"
   unzip -q /tmp/source.zip -d /opt/margince/src
   rm /tmp/source.zip
+
+  # Go at the version the source's go.work pins, checksum-verified.
+  GO_VERSION="$(awk '$1 == "go" { print $2; exit }' /opt/margince/src/go.work)"
+  GO_TGZ="go$${GO_VERSION}.linux-$${GOARCH}.tar.gz"
+  curl -fsSL "https://dl.google.com/go/$GO_TGZ" -o "/tmp/$GO_TGZ"
+  echo "$(curl -fsSL "https://dl.google.com/go/$GO_TGZ.sha256")  /tmp/$GO_TGZ" | sha256sum -c -
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "/tmp/$GO_TGZ"
+  rm -f "/tmp/$GO_TGZ"
+  export PATH=$PATH:/usr/local/go/bin
 
   (cd /opt/margince/src/backend && GOWORK=/opt/margince/src/go.work go run ./tools/gen-composition)
 

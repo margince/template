@@ -189,6 +189,23 @@ variable "db_final_snapshot_generation" {
   default     = 1
 }
 
+variable "db_deletion_protection" {
+  description = "RDS deletion protection. On by default: `terraform destroy` (or a replacement) of the database fails until this is set to false and applied first. A final snapshot is taken either way (rds.tf)."
+  type        = bool
+  default     = true
+}
+
+variable "redis_image" {
+  description = "Redis container image run by Docker on the app instance. Pinned by digest; the default is the same image and digest as Margince's docker-compose.dev.yml and the Azure standard stack (7.2 is the newest Redis the product supports)."
+  type        = string
+  default     = "docker.io/library/redis:7.2@sha256:6461ca4ac0c5c9d81d53685c3bf76aa81f464a9de6cf3a97b80a1da8d1bb1de4"
+
+  validation {
+    condition     = can(regex("@sha256:[0-9a-f]{64}$", var.redis_image))
+    error_message = "redis_image must be pinned by digest (<image>@sha256:<64 hex>)."
+  }
+}
+
 # ---- Observability -----------------------------------------------------------
 
 variable "log_retention_days" {

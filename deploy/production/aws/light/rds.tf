@@ -118,11 +118,14 @@ resource "aws_db_instance" "this" {
   # stack ships with instead.
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
-  # deletion_protection false and skip_final_snapshot false: an operator
-  # tearing down a light/dev-shaped stack should be able to `terraform
-  # destroy` without a separate console step to disable protection first,
-  # while still keeping one final snapshot as the last recovery point.
-  deletion_protection       = false
+  # Deletion protection on by default (var.db_deletion_protection): a stray
+  # `terraform destroy` or a forced replacement must not take the database
+  # with it. To tear down on purpose, set db_deletion_protection = false and
+  # apply first. A final snapshot is always taken, and automated backups are
+  # kept after deletion (retained until their retention period expires) so
+  # a point-in-time restore is still possible after a mistaken delete.
+  deletion_protection       = var.db_deletion_protection
+  delete_automated_backups  = false
   skip_final_snapshot       = false
   final_snapshot_identifier = "${var.name_prefix}-db-final-${random_id.final_snapshot.hex}"
 

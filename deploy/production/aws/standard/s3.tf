@@ -6,8 +6,17 @@
 # satisfy MARGINCE_BLOBSTORE_ACCESS_KEY/SECRET_KEY here, not a design choice
 # this stack could avoid by preferring a role.
 
+# S3 bucket names are global across every AWS account, so a bare
+# "<name_prefix>-blobstore" collides with anyone else who picked the same
+# prefix. local.bucket_suffix (account id + region) makes it unique per
+# account and region; var.name_prefix's validation (variables.tf) keeps the
+# result inside S3's 63-character limit.
+locals {
+  bucket_suffix = "${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+}
+
 resource "aws_s3_bucket" "blobstore" {
-  bucket = "${var.name_prefix}-blobstore"
+  bucket = "${var.name_prefix}-blobstore-${local.bucket_suffix}"
   tags   = { Name = "${var.name_prefix}-blobstore", Component = "storage" }
 
   # S3 already refuses to delete a non-empty bucket, and versioning (below)
@@ -17,6 +26,11 @@ resource "aws_s3_bucket" "blobstore" {
   # only backstop.
   lifecycle {
     prevent_destroy = true
+
+    precondition {
+      condition     = length("${var.name_prefix}-blobstore-${local.bucket_suffix}") <= 63
+      error_message = "Blobstore bucket name exceeds S3's 63-character limit; shorten name_prefix."
+    }
   }
 }
 

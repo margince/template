@@ -47,3 +47,18 @@ resource "aws_s3_object" "source" {
 
   tags = { Name = "${var.name_prefix}-source-${var.image_tag}", Component = "compute" }
 }
+
+locals {
+  # The archive's content hash, not just image_tag, keys everything built
+  # from it: it is a template var of every instance's user_data (so changed
+  # source under an unchanged tag replaces the instances,
+  # user_data_replace_on_change) and part of every S3 binary cache key (so
+  # a boot never reuses binaries built from older source under the same
+  # tag). 16 hex chars (64 bits) is plenty to tell two archives apart.
+  source_sha = substr(data.archive_file.source.output_sha256, 0, 16)
+
+  binary_cache_keys = {
+    for role in ["edge", "app", "worker"] :
+    role => "binaries/${role}-${var.image_tag}-${local.source_sha}.tar.gz"
+  }
+}

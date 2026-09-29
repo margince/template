@@ -475,8 +475,9 @@ resource "aws_ecs_service" "web" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.ecs_tasks.id]
+    subnets = aws_subnet.private[*].id
+    # Own SG (network.tf): no path to RDS, Redis, EFS or the internet.
+    security_groups  = [aws_security_group.web.id]
     assign_public_ip = false
   }
 

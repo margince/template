@@ -5,9 +5,19 @@ variable "aws_region" {
 }
 
 variable "name_prefix" {
-  description = "Short prefix for every resource name (e.g. \"margince-prod\")."
+  description = "Short prefix for every resource name (e.g. \"margince-prod\"). Lowercase letters, digits and hyphens: it also starts the S3 bucket names (<name_prefix>-blobstore-<account_id>-<region>), which must stay within 63 characters."
   type        = string
   default     = "margince"
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]*[a-z0-9]$", var.name_prefix))
+    error_message = "name_prefix must be lowercase letters, digits and hyphens, starting and ending with a letter or digit (it is part of the S3 bucket names)."
+  }
+  validation {
+    # Longest bucket name: "<name_prefix>-blobstore-" (11 extra chars) + the
+    # 12-digit account id + "-" + the region.
+    condition     = length(var.name_prefix) + 24 + length(var.aws_region) <= 63
+    error_message = "name_prefix is too long: <name_prefix>-blobstore-<12-digit account id>-<aws_region> must fit S3's 63-character bucket name limit."
+  }
 }
 
 variable "environment" {
@@ -223,6 +233,23 @@ variable "db_final_snapshot_generation" {
 variable "redis_node_type" {
   type    = string
   default = "cache.t4g.small"
+}
+
+variable "cache_engine_version" {
+  description = <<-EOT
+    ElastiCache Valkey engine version. "7.2" keeps the Redis 7.2 protocol
+    series every other Margince stack runs: the dev compose file uses
+    redis:7.2 and the Azure stacks run Redis 7.2. ElastiCache offers no Redis
+    OSS 7.2 (Redis OSS stops at 7.1 there), and Valkey 7.2 is the
+    wire-compatible fork of Redis 7.2. The parameter group family
+    (elasticache.tf) is derived from the major version.
+  EOT
+  type        = string
+  default     = "7.2"
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+$", var.cache_engine_version))
+    error_message = "cache_engine_version must be major.minor, e.g. \"7.2\"."
+  }
 }
 
 # ---- Routing ------------------------------------------------------------------

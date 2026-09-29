@@ -1,6 +1,7 @@
 #!/bin/bash
 # Boot-time provisioning for the edge instance: nginx (reverse proxy + the
 # built frontend). Runs once, at first boot (cloud-init), as root.
+# Source archive sha: ${source_sha}
 set -euo pipefail
 
 ARCH="$(uname -m)"
@@ -43,39 +44,48 @@ EOF
 # ---- Build-if-missing: this tag's built frontend, from the S3 artifact
 # cache (iam.tf's ReadWriteOwnBinaryCache), or from source if this is the
 # first boot to ask for this tag ----------------------------------------------
-BINARY_KEY="binaries/edge-${image_tag}.tar.gz"
+# Keyed by tag AND source hash (build.tf), so never reused across source changes.
+BINARY_KEY="${binary_key}"
 if aws s3 cp "s3://${blobstore_bucket}/$BINARY_KEY" /tmp/edge-artifact.tar.gz --region "${aws_region}"; then
-  echo "frontend for tag ${image_tag} already published, skipping build"
+  echo "frontend for tag ${image_tag} (source ${source_sha}) already published, skipping build"
   tar -xzf /tmp/edge-artifact.tar.gz -C /opt/margince/frontend/dist
   rm /tmp/edge-artifact.tar.gz
 else
-  echo "frontend for tag ${image_tag} not yet published, building from source"
-
-  # Go: only to run the composition codegen step below (gen-composition),
-  # never to build a Go binary of its own — AL2023's dnf golang package is
-  # far older than go.work's pin, so this is the same pinned-tarball
-  # treatment as Node below.
-  GO_VERSION=1.26.6
-  curl -fsSL "https://go.dev/dl/go$${GO_VERSION}.linux-$${GOARCH}.tar.gz" -o /tmp/go.tar.gz
-  tar -C /usr/local -xzf /tmp/go.tar.gz
-  rm /tmp/go.tar.gz
-  export PATH=$PATH:/usr/local/go/bin
-
-  # Node: AL2023's own nodejs dnf package is 18.x; the frontend build needs
-  # 24. Pinned tarball, same reasoning as Go above.
-  NODE_VERSION=24.7.0
-  NODE_ARCH="$([ "$GOARCH" = "arm64" ] && echo arm64 || echo x64)"
-  curl -fsSL "https://nodejs.org/dist/v$${NODE_VERSION}/node-v$${NODE_VERSION}-linux-$${NODE_ARCH}.tar.xz" -o /tmp/node.tar.xz
-  mkdir -p /usr/local/node
-  tar -C /usr/local/node --strip-components=1 -xJf /tmp/node.tar.xz
-  rm /tmp/node.tar.xz
-  export PATH=/usr/local/node/bin:$PATH
-  corepack enable
+  echo "frontend for tag ${image_tag} (source ${source_sha}) not yet published, building from source"
 
   mkdir -p /opt/margince/src
   aws s3 cp "s3://${blobstore_bucket}/${source_object_key}" /tmp/source.zip --region "${aws_region}"
   unzip -q /tmp/source.zip -d /opt/margince/src
   rm /tmp/source.zip
+
+  # Go: only to run the composition codegen step below (gen-composition).
+  # AL2023's dnf golang is older than go.work's pin, so the official tarball
+  # at exactly that version, checksum-verified.
+  GO_VERSION="$(awk '$1 == "go" { print $2; exit }' /opt/margince/src/go.work)"
+  GO_TGZ="go$${GO_VERSION}.linux-$${GOARCH}.tar.gz"
+  curl -fsSL "https://dl.google.com/go/$GO_TGZ" -o "/tmp/$GO_TGZ"
+  echo "$(curl -fsSL "https://dl.google.com/go/$GO_TGZ.sha256")  /tmp/$GO_TGZ" | sha256sum -c -
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "/tmp/$GO_TGZ"
+  rm -f "/tmp/$GO_TGZ"
+  export PATH=$PATH:/usr/local/go/bin
+
+  # Node: the major of the Dockerfile's node base image (AL2023's dnf nodejs
+  # is older), latest patch of that major, checked against SHASUMS256.txt.
+  NODE_MAJOR="$(sed -nE 's/^FROM .*node:([0-9]+).*/\1/p' /opt/margince/src/Dockerfile | head -n1)"
+  NODE_MAJOR="$${NODE_MAJOR:-24}"
+  NODE_ARCH="$([ "$GOARCH" = "arm64" ] && echo arm64 || echo x64)"
+  NODE_BASE="https://nodejs.org/dist/latest-v$${NODE_MAJOR}.x"
+  NODE_SUMS="$(curl -fsSL "$NODE_BASE/SHASUMS256.txt")"
+  NODE_FILE="$(awk -v want="linux-$NODE_ARCH.tar.xz" 'substr($2, length($2) - length(want) + 1) == want { print $2; exit }' <<<"$NODE_SUMS")"
+  curl -fsSL "$NODE_BASE/$NODE_FILE" -o "/tmp/$NODE_FILE"
+  (cd /tmp && grep " $NODE_FILE\$" <<<"$NODE_SUMS" | sha256sum -c -)
+  rm -rf /usr/local/node
+  mkdir -p /usr/local/node
+  tar -C /usr/local/node --strip-components=1 -xJf "/tmp/$NODE_FILE"
+  rm -f "/tmp/$NODE_FILE"
+  export PATH=/usr/local/node/bin:$PATH
+  corepack enable
 
   # gen-composition materializes build/composition/frontend/, which the
   # frontend build below consumes — must run before it, and needs the

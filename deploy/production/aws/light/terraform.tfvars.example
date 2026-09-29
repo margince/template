@@ -30,6 +30,7 @@ image_tag = "2026.09.01"
 # db_allocated_storage_gb         = 20
 # db_engine_version               = "16"
 # db_backup_retention_days        = 3
+# db_deletion_protection          = true   # set false and apply before an intentional destroy of RDS
 # log_retention_days              = 14
 # license_token                   = ""
 # enable_alarms                   = true   # SNS topic + EC2 status/recover/CPU and RDS storage/CPU/connections alarms (alarms.tf)
