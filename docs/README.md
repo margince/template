@@ -1,43 +1,55 @@
 # Documentation
 
-## Design
+The guides for creating, developing, releasing, and deploying a Margince
+instance. Start with the [README](../README.md) for the requirements, the quick
+start, and the command overview. Each topic has one guide; the other guides
+link to it.
+
+## Getting started
+
+| Guide | Purpose |
+|---|---|
+| [Create an instance](create-an-instance.md) | Create a client instance, receive template changes, upgrade core, and add instance-only `make` targets. |
+| [Adding an extension](adding-an-extension.md) | Create, compose, and test a unit in `extensions/`. |
+
+## Day to day
+
+| Guide | Purpose |
+|---|---|
+| [Desktop build](desktop-build.md) | Build, install, run, and seed the macOS desktop folder. |
+| [Contributing to core](contributing-to-core.md) | Change `core/` on a contribution branch and open a pull request to `margince/margince`. |
+| [Troubleshooting](troubleshooting.md) | Known error messages, their causes, and their fixes. |
+
+## Release and deploy
+
+| Guide | Purpose |
+|---|---|
+| [Release](release.md) | Cut a release with `make release`, and what `release.yml` builds, tests, and publishes. Image names, `make package`, and `make smoke`. |
+| [Deploy](deploy.md) | The deployment contract, `make deploy-init`, the `host` adapter, the `hook` adapter, and `deploy.yml`. |
+| [License](license.md) | Obtain a trial or production license with `make license`, and the license service API. |
+| [Trial](trial.md) | Build a trial desktop bundle with a trial license with `make trial`. |
+
+## Reference
+
+| Guide | Purpose |
+|---|---|
+| [Glossary](glossary.md) | The terms this repository uses. |
+
+## Design and plans
 
 | Document | Content |
 |---|---|
-| [Client instance template — design](superpowers/specs/2026-09-24-client-instance-template-design.md) | Goals, repository responsibilities, structure, script reuse, workflows, versioning, and implementation status (Section 13). Status: approved design; implemented. |
-
-## Directory layout
-
-| Directory | Content |
-|---|---|
-| `docs/superpowers/specs/` | Design specifications. One file per design, named `YYYY-MM-DD-<topic>-design.md`. |
-| `docs/superpowers/plans/` | The [issue breakdown](superpowers/plans/2026-09-24-issue-breakdown.md) and the implementation plans below. |
-| `docs/client/` | Instance-owned. Client-specific documentation in a client fork. Empty in the template. |
-
-## Plans
-
-| Plan | Content |
-|---|---|
-| [Issue breakdown](superpowers/plans/2026-09-24-issue-breakdown.md) | Every issue (T1–T16), its scope, its completion criterion, its dependencies, and its status. |
+| [Client instance template: design](superpowers/specs/2026-09-24-client-instance-template-design.md) | Goals, repository responsibilities, path ownership, workflows, versioning, and implementation status (Section 13). |
+| [Issue breakdown](superpowers/plans/2026-09-24-issue-breakdown.md) | Every issue, its scope, its completion criterion, and its status. |
 | [Template foundation (T1, T2)](superpowers/plans/2026-09-24-template-foundation.md) | Tooling import, `instance.yaml`, and the Go CLI. |
-| [Instance basics (T3–T6, T11)](superpowers/plans/2026-09-25-instance-basics.md) | Neutral scripts, `instance.mk`, core pin by tag, drift check, `make new-instance`. |
-| [Deploy (T9)](superpowers/plans/2026-09-25-deploy.md) | The four-step deployment contract and the `hook` adapter. |
-| [Lifecycle CI (T10 part 1)](superpowers/plans/2026-09-25-lifecycle-ci.md) | `make test-lifecycle` and `lifecycle.yml`. |
-| [Public template (T13, T16, T7, T15, T8, T10 part 2, T12)](superpowers/plans/2026-09-28-public-template.md) | Making the template public-ready and completing release, licensing, trial, the `host` adapter, the lifecycle test, and these guides. |
-| [Default setup (T17)](superpowers/plans/2026-09-29-default-setup.md) | Generated instance keys and admin password, persistent file storage, the license check, `make deploy-init`, `make local-up`/`local-down`/`local-admin-password`, and the webhook key in the desktop kit and `make smoke`. |
-| [Default VM deployment (T18)](superpowers/plans/2026-09-29-default-vm.md) | The template ships a default `production` environment (`deploy/production/`, the `host` adapter) so every new instance can deploy after filling in three values. |
+| [Instance basics (T3 to T6, T11)](superpowers/plans/2026-09-25-instance-basics.md) | Neutral scripts, `instance.mk`, the core pin by tag, the drift check, `make new-instance`. |
+| [Deploy (T9)](superpowers/plans/2026-09-25-deploy.md) | The deployment contract and the `hook` adapter. |
+| [Lifecycle CI (T10, part 1)](superpowers/plans/2026-09-25-lifecycle-ci.md) | `make test-lifecycle` and `lifecycle.yml`. |
+| [Public template (T7, T8, T10 part 2, T12, T13, T15, T16)](superpowers/plans/2026-09-28-public-template.md) | The public-only rule, release, licensing, trial, the `host` adapter, and the guides. |
+| [Default setup (T17)](superpowers/plans/2026-09-29-default-setup.md) | Generated instance keys and admin password, file storage, the license check, `make deploy-init`, and the local stack. |
+| [Default VM deployment (T18)](superpowers/plans/2026-09-29-default-vm.md) | The default `production` environment in `deploy/production/`. |
 
-## Guides
-
-| Guide | Content |
-|---|---|
-| [Create an instance](create-an-instance.md) | Create a client instance from this template, keep it current with the template and with core, and deploy it. |
-| [Adding an extension](adding-an-extension.md) | Create and test a unit. |
-| [Contributing to core](contributing-to-core.md) | Send a change to `margince/margince`. |
-| [Desktop build](desktop-build.md) | Build and run the desktop bundle. |
-| [Release](release.md) | Cutting a release: `make release`, `release.yml`, `make smoke`. |
-| [Deploy](deploy.md) | The deployment contract, `make deploy-init`, the `hook` adapter, and the `host` adapter end to end on a Linux server: generated instance keys, file storage, the license check, `make host-admin-password`. |
-| [License](license.md) | Obtaining a license: `make license`, the license service API contract. |
-| [Trial](trial.md) | Building a laptop trial bundle: `make trial`. |
-| [Troubleshooting](troubleshooting.md) | Known problems and fixes. |
-| [Glossary](glossary.md) | Terms. |
+`docs/superpowers/` holds the design history: `specs/` has one file per design
+(`YYYY-MM-DD-<topic>-design.md`) and `plans/` has the issue breakdown and the
+implementation plans. `docs/client/` is instance-owned and holds a client's own
+documentation; the template has none.

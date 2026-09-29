@@ -1,137 +1,195 @@
 # margince-template
 
-The standard template for Margince client instances.
+The template that every Margince client instance is created from. An instance
+is the Margince core product ([`margince/margince`](https://github.com/margince/margince))
+plus a client's extension units, configuration, demo data reference, and
+deployment definition. This repository defines the directory structure, the
+`make` targets, the CI workflows, and the deployment adapters that every
+instance uses. Without extensions, the template is itself a working instance,
+named **Margince Default**.
 
-A Margince client runs an *instance*: the upstream core product
-([`margince/margince`](https://github.com/margince/margince)) plus the client's
-extensions, configuration, data, and deployment definition. This repository
-defines the directory structure and tooling that every instance uses.
+This README is for developers who create, develop, release, or deploy an
+instance. Contributors to the template itself also read [AGENTS.md](AGENTS.md).
 
-Without extensions, the template is itself a working instance, referred to as
-**Margince Default**.
+## Requirements
 
-## Status
+| Tool | Version | Needed for | Checked by |
+|---|---|---|---|
+| git | any | everything | `make preflight` |
+| Go | the `go` line of `core/backend/go.mod` (1.26.6 at core `v0.0.2`) | the backend, the gates, `scripts/cli` | `make preflight` (installed only) |
+| Node.js | 24, the version CI uses | the frontend lanes | `make preflight` (installed only) |
+| pnpm | the major version of `packageManager` in `core/package.json` (11) | the frontend lanes | `make toolcheck` (major version) |
+| Docker, with a running daemon and `docker buildx` | current | the database, `make package`, `make smoke`, `make local-up` | `make preflight`; `make package` checks buildx |
+| GitHub CLI (`gh`) | any | `make new-instance PUSH=1`, `make core-pr` | optional |
+| fswatch | any | `make watch` | optional |
+| python3, curl | any | `make config-check`, `make license`, `make trial`, `make smoke`, `make local-up` | not checked |
+| ssh, scp, ssh-keyscan | any | the `host` adapter | not checked |
 
-**Complete.** The template works as Margince Default: an instance can be
-created, developed, trialled, released, and deployed (to a `hook` target or
-to a single Linux server through the built-in `host` adapter) using only this
-public template. See the [design specification](docs/superpowers/specs/2026-09-24-client-instance-template-design.md)
-(Section 13) and the [issue breakdown](docs/superpowers/plans/2026-09-24-issue-breakdown.md)
-for implementation status.
+`make install` runs `make preflight` first and names every missing tool.
+`make install INSTALL_TOOLS=1` installs the missing tools that Homebrew can
+install.
 
 ## Quick start
 
-Try Margince Default on this machine, with generated instance keys and a
-generated admin password, no deployment target needed:
+### Run Margince Default on your computer
 
 ```sh
 make install
 make package VERSION=v0.1.0-rc.1
 make local-up VERSION=v0.1.0-rc.1
-# open https://localhost (your browser warns about the local certificate)
 make local-admin-password
 ```
 
-`make local-down` stops it; `make local-down WIPE=1` also removes its data.
-Delete `.local/` only with `make local-down WIPE=1`; deleting it by hand
-leaves the data volumes, and the next `local-up` generates new database
-passwords that the old database rejects.
+1. Open `https://localhost` and accept the browser warning about the local
+   certificate.
+2. Sign in as `admin@localhost` with the password that
+   `make local-admin-password` prints.
 
-Deploy a new instance to one Linux virtual machine (for example AWS EC2):
-every instance created with `make new-instance` already has a default
-`production` environment (`deploy/production/`, the built-in `host` adapter).
-Fill in three values, then bootstrap and deploy:
+`VERSION` can be any release version string; it does not need a git tag.
+`make package` refuses a working tree with uncommitted changes (`ALLOW_DIRTY=1`
+overrides this). Without `MARGINCE_LICENSE` in the environment the stack runs
+with `MARGINCE_ENV=test`. `make local-down` stops the stack;
+`make local-down WIPE=1` also removes its data and `.local/`. Do not delete
+`.local/` by hand: the data volumes stay, and the next `make local-up`
+generates database passwords that the old database rejects.
+
+### Create a client instance
 
 ```sh
 make new-instance NAME=acme DISPLAY_NAME="Acme"
 cd ../margince-acme
-# fill in deploy/production/host.env (HOST_SSH, HOST_DOMAIN) and the admin
-# email in deploy/production/config/margince.yaml
-HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host>)" \
-  make host-bootstrap ENV=production
-# <v> is a release built and pushed with `make release` (see docs/release.md)
-HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host>)" MARGINCE_LICENSE=<license> \
-  make deploy ENV=production VERSION=<v>
+make install
+make dev
 ```
 
-`HOST_KNOWN_HOSTS` is required — `ssh-keyscan` does not verify anything by
-itself, so check the printed fingerprint against the instance's console
-output before trusting it.
+`PUSH=1 OWNER=<github-owner>` also creates a private GitHub repository and
+pushes the instance. See [docs/create-an-instance.md](docs/create-an-instance.md).
 
-See [docs/deploy.md](docs/deploy.md) for the full `host` adapter walkthrough
-and [docs/create-an-instance.md](docs/create-an-instance.md) for creating the
-instance.
+### Deploy an instance to a Linux server
 
-## How instances use this template
+Every new instance has a `production` environment in `deploy/production/` that
+uses the built-in `host` adapter. Before you start, you need:
 
-- Each client instance is a **fork** of this repository.
-- The instance adds its own extensions, configuration, data, and deployment
-  definition in instance-owned paths.
-- Template changes reach an instance through `git merge template/main`.
-- Core upgrades use `make update-core REF=<tag>`. Instances pin core by tag.
+- the instance on GitHub, with the repository variable `REGISTRY` and, for a
+  private registry, the secrets `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`
+  ([docs/release.md](docs/release.md#5-repository-settings));
+- a server with Ubuntu 22.04, Ubuntu 24.04, or Amazon Linux 2023, ports 22, 80,
+  and 443 open, a DNS record for its domain, and an SSH user with
+  passwordless `sudo`;
+- a production license ([docs/license.md](docs/license.md)).
 
-## Structure
+Run these commands in the instance:
 
+```sh
+# 1. Fill in HOST_SSH and HOST_DOMAIN in deploy/production/host.env and
+#    bootstrap_admin.email in deploy/production/config/margince.yaml.
+git commit -am "deploy: configure production" && git push
+# 2. Compare the printed key fingerprint with the server's before you use it.
+export HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host>)"
+make host-bootstrap ENV=production
+# 3. make release runs make check, then tags the release. release.yml
+#    builds, tests, and pushes the images.
+make release VERSION=v0.1.0
+# 4. When release.yml has finished:
+REGISTRY=<registry> MARGINCE_LICENSE="$(cat <license-file>)" \
+  make deploy ENV=production VERSION=v0.1.0
+make host-admin-password ENV=production
 ```
-core/            git submodule, pinned to a core tag
-instance.yaml    instance metadata: name, core version, units, deployment
-instance.mk      optional client-specific make targets
-extensions/      client extension units (empty in the template)
-config/          margince.yaml and per-environment overlays
-data/            seed and demo dataset references
-deploy/          one directory per environment
-docs/client/     client-specific documentation
-Makefile         lifecycle targets (template-owned)
-scripts/         lifecycle scripts and tests (template-owned)
-```
 
-Each path is owned by either the template or the instance, never both. See
-Section 6 of the design.
+See [docs/deploy.md](docs/deploy.md) for every step, the `hook` adapter, and
+deployment from GitHub Actions.
 
 ## Commands
 
-Run `make help` for the full list.
+`make help` lists every target, including the individual gates, the frontend
+and infrastructure lanes, and the desktop lanes.
 
-| Command | Function |
-|---|---|
-| `make install` | Check prerequisites, check out core, install dependencies, hooks, and configuration. |
-| `make dev` | Run the development stack with the instance units. |
-| `make new-unit NAME=<n>` | Create an extension unit from `scripts/unit-skeleton/`. |
-| `make u NAME=<n>` | Run one unit's tests and the policy gates. |
-| `make check` | Run the full quality gate. |
-| `make ci` | Run `make check` plus the database and submodule lanes. |
-| `make new-instance NAME=<n> DISPLAY_NAME=<d>` | Create a client instance repository from this template. |
-| `make template-sync` | Merge this template's changes into an instance and record them. |
-| `make check-template` | Verify an instance has not drifted from the template. |
-| `make check-public` | Confirm no tracked or staged file names a private repository, host, organization, or service (template only; `make check` runs it there). |
-| `make update-core REF=<tag>` | Move the core pin to a core release tag. |
-| `make package VERSION=<v>` | Build the `api`, `web`, and `worker` images. |
-| `make smoke VERSION=<v>` | Run the built images with a temporary database and check them. |
-| `make release VERSION=<v>` | Tag and push a release; `release.yml` builds and publishes it. |
-| `make license OUT=<file>` | Obtain a production license into a file. |
-| `make trial VERSION=<v>` | Build a trial desktop bundle with a trial license. |
-| `make deploy-init ENV=<env> [ADAPTER=host\|hook] [DOMAIN=<host>] [SSH=<user@host>]` | Scaffold `deploy/<env>/` and register it under `deploy:` in `instance.yaml`. |
-| `make deploy ENV=<env> VERSION=<v>` | Deploy the instance's images to an environment defined in `instance.yaml` (`deploy:`), with the `hook` or built-in `host` adapter. |
-| `make host-bootstrap ENV=<env>` | Install Docker and Compose on a new server for a `host` environment. |
-| `make host-admin-password ENV=<env>` | Print a `host` environment's generated first admin password. |
-| `make local-up VERSION=<v>` | Run a built release on `https://localhost` (Caddy, PostgreSQL, Redis, the generated keys and admin password); state is kept in `.local/`. |
-| `make local-down [WIPE=1]` | Stop the local stack; `WIPE=1` also removes its data and `.local/`. |
-| `make local-admin-password` | Print the local stack's generated first admin password. |
-| `make test-lifecycle` | Run the whole instance lifecycle end to end in a scratch instance (slow; installs into the Go module cache, pnpm store, and `$(go env GOPATH)/bin`). |
+| Stage | Command | Function |
+|---|---|---|
+| Setup | `make install` | Check prerequisites, then check out core and install dependencies, hooks, and configuration. |
+| Setup | `make preflight` | Report missing prerequisites without changing anything. |
+| Setup | `make toolcheck` | Verify that the local pnpm major version matches core's CI. |
+| Setup | `make config` | Create `.env.local` and `config/`, stage them into `core/`, and refresh `go.work`. |
+| Setup | `make config-check` | Compare the keys of `.env.local` and `config/margince.yaml` with core's examples. |
+| Development | `make dev` | Run the development stack with the instance's units (`DEV_SLUG=<name>` for an isolated stack). |
+| Development | `make dev-stop` | Stop the development stack (`DROP=1` also drops its database). |
+| Development | `make seed-dev` | Add a demo workspace and records to the running stack. |
+| Development | `make new-unit NAME=<name>` | Create a unit in `extensions/<name>` from `scripts/unit-skeleton/`. |
+| Development | `make u NAME=<unit>` | Run one unit's tests and the policy gates. |
+| Development | `make u-check NAME=<unit>` | Run `make u`, the screen suites, and the composed typecheck. |
+| Development | `make watch` | Stage the units again when a source file changes. |
+| Development | `make fmt` | Format `extensions/` in place. |
+| Gates | `make check` | Run the full gate: core's own gate, then the composed gates. |
+| Gates | `make ci` | Run `make check` plus the database and submodule lanes. |
+| Gates | `make test-scripts` | Run the tests of the template's scripts and CLI. |
+| Gates | `make test-lifecycle` | Run the whole instance lifecycle in a scratch instance (slow; `KEEP=1` keeps it). |
+| Instance | `make new-instance NAME=<name> DISPLAY_NAME=<text>` | Create a client instance repository from this template. |
+| Instance | `make template-sync` | Merge the template's `main` into an instance and record it in `.template-version`. |
+| Instance | `make check-template` | Verify that template-owned paths match the merged template commit. |
+| Instance | `make check-instance` | Verify that `instance.yaml` is valid and names the tag `core/` is at. |
+| Instance | `make update-core REF=<tag>` | Move `core/` to a core release tag and record it in `instance.yaml`. |
+| Release | `make package VERSION=<v>` | Build the `api`, `web`, and `worker` images with the instance's units. |
+| Release | `make smoke VERSION=<v>` | Start the built images with a temporary database and check them. |
+| Release | `make release VERSION=<v>` | Check the preconditions, then tag and push a release; `release.yml` builds it. |
+| Release | `make license OUT=<file>` | Obtain a production license into a file. |
+| Release | `make desktop VERSION=<v>` | Build the macOS desktop folder with the instance's units. |
+| Release | `make trial VERSION=<v>` | Build a trial desktop bundle with a trial license. |
+| Deploy | `make deploy-init ENV=<env>` | Create `deploy/<env>/` and register the environment in `instance.yaml`. |
+| Deploy | `make host-bootstrap ENV=<env>` | Install Docker and Docker Compose on a new server of a `host` environment. |
+| Deploy | `make deploy ENV=<env> VERSION=<v>` | Deploy a release to an environment in `instance.yaml`. |
+| Deploy | `make host-admin-password ENV=<env>` | Print the generated first admin password of a `host` environment. |
+| Local | `make local-up VERSION=<v>` | Run a built release on `https://localhost`. |
+| Local | `make local-down` | Stop the local stack (`WIPE=1` also removes its data and `.local/`). |
+| Local | `make local-admin-password` | Print the generated first admin password of the local stack. |
+| Core | `make core-status` | Show where `core/` is: branch, pinned commit, ahead and behind, changes. |
+| Core | `make core-branch NAME=<type>/<slug>` | Start a core contribution branch in `core/`. |
+| Core | `make core-pr` | Verify the sign-off, push the core branch, and open the pull request. |
+| Core | `make core-restore` | Return `core/` to the commit this repository pins. |
 
-See [docs/release.md](docs/release.md), [docs/deploy.md](docs/deploy.md),
-[docs/license.md](docs/license.md), and [docs/trial.md](docs/trial.md) for
-each of these in detail.
+## Repository layout
 
-## Related repositories
+| Path | Owner | Content |
+|---|---|---|
+| `core/` | pinned | Git submodule of `margince/margince`, pinned to a core release tag. Changed only by `make update-core`. |
+| `Makefile` | template | The lifecycle targets. Includes `instance.mk`. |
+| `scripts/` | template | Lifecycle scripts, deployment adapters, the Go CLI in `scripts/cli`, and their tests. |
+| `.github/workflows/` | template | `ci`, `full-check`, `lifecycle`, `release`, `deploy`, `desktop-macos`, `desktop-windows`. |
+| `.githooks/`, `.gitleaks.toml`, `.gitignore` | template | The pre-push hook, the secret scanner configuration, the ignore rules. |
+| `AGENTS.md`, `CLAUDE.md`, `docs/*.md` | template | Contributor rules and the guides. |
+| `.template-owned` | template | The list of template-owned paths, one git pathspec per line. |
+| `.template-version` | instance | The template commit the instance last merged. Instances only. |
+| `README.md` | instance | This file in the template; `make new-instance` writes a new one. |
+| `instance.yaml` | instance | Name, display name, core tag, optional demo dataset, and deployment environments. |
+| `instance.mk` | instance | Optional instance-only `make` targets. Not in the template. |
+| `extensions/` | instance | Extension units. Empty in the template. |
+| `config/` | instance | Local configuration, created by `make config`. Not tracked in the template. |
+| `data/` | instance | Demo dataset references. Not in the template. |
+| `deploy/` | instance | One directory per environment. The template ships `deploy/production/`. |
+| `docs/client/` | instance | Client documentation. Not in the template. |
 
-| Repository | Role |
+`.template-owned` is the authoritative list; a path that it does not list is
+instance-owned. `make check-template` fails in an instance when a
+template-owned path differs from the merged template commit. See
+[docs/create-an-instance.md](docs/create-an-instance.md#4-what-the-instance-contains).
+
+## Related repositories and services
+
+| Repository or service | Role |
 |---|---|
 | `margince/margince` | Core product, release tags, image and desktop build definitions. |
-| The licensing service | Issues trial and production licenses through the API [docs/license.md](docs/license.md) documents. Not part of this template. |
-| A demo dataset repository (optional, per instance) | Demo datasets, referenced by `data.dataset` in `instance.yaml` and, for the desktop build workflows, by `vars.DATASET_REPOSITORY` / `secrets.DATASET_DEPLOY_KEY`. The template refers to no specific one. |
-| The client's own image registry (optional) | Where `make release` pushes images, set with `REGISTRY`. Nothing is pushed when it is not set. |
+| Margince license service | Issues trial and production licenses through the API in [docs/license.md](docs/license.md). Not part of this template. |
+| A demo dataset repository | Optional, per instance: `data.dataset` in `instance.yaml` and, for the desktop workflows, `vars.DATASET_REPOSITORY` and `secrets.DATASET_DEPLOY_KEY`. |
+| The client's image registry | Optional: `make release` pushes images there when `REGISTRY` is set. |
 
 ## Documentation
 
-Start at [`docs/README.md`](docs/README.md).
+| Guide | Purpose |
+|---|---|
+| [Documentation index](docs/README.md) | Every guide, the design, and the plans. |
+| [Create an instance](docs/create-an-instance.md) | Create an instance and keep it current with the template and with core. |
+| [Adding an extension](docs/adding-an-extension.md) | Create and test a unit. |
+| [Release](docs/release.md) | Cut a release, build and test the images. |
+| [Deploy](docs/deploy.md) | Deploy a release with the `host` or `hook` adapter. |
+| [License](docs/license.md) | Obtain a trial or production license. |
+| [Trial](docs/trial.md) | Build a trial desktop bundle. |
+| [Troubleshooting](docs/troubleshooting.md) | Known errors and their fixes. |
