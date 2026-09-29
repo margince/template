@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.7.0"
+  required_version = ">= 1.10.0"
 
   # Remote state is required: it holds every generated password and the Entra
   # client secret. The values live in backend.hcl (copy backend.hcl.example),

@@ -11,8 +11,13 @@ resource "azurerm_key_vault" "this" {
   tenant_id                  = data.azurerm_client_config.current.tenant_id
   sku_name                   = "standard"
   rbac_authorization_enabled = true
-  purge_protection_enabled   = false
-  soft_delete_retention_days = 7
+  # The vault holds the keys that seal Margince's data (keyvault root key,
+  # webhook and connector-state keys). Purge protection keeps a deleted vault
+  # or secret recoverable for 90 days, even by an administrator. It cannot be
+  # turned off again; the name's random suffix means a rebuilt stack never
+  # collides with a soft-deleted vault.
+  purge_protection_enabled   = true
+  soft_delete_retention_days = 90
 
   # Firewall closed except for the VM (it reaches the vault from its public
   # IP) and the operators running Terraform, which writes and refreshes the

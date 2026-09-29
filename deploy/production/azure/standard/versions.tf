@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.7.0"
+  required_version = ">= 1.10.0"
 
   # Remote state is required: state holds every generated password, the
   # storage key, the Redis password and the Entra client secret. The values live in

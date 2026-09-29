@@ -25,8 +25,10 @@ apt-get update -q
 apt-get install -y -q --no-install-recommends \
   ca-certificates curl git gnupg jq xz-utils openssl nginx certbot postgresql-client
 
-# Redis 7.2.15: the exact version inside the redis:7.2 image digest the
-# standard stack runs and Margince develops against. Ubuntu 24.04 ships 7.0,
+# Redis 7.2.15: the exact version inside the redis:7.2 image digest that
+# Margince's docker-compose.dev.yml, the Azure standard stack and the AWS
+# light stack run. Change this pin and that digest together, so every
+# deployment runs the same Redis. Ubuntu 24.04 ships 7.0,
 # so it comes from Redis's own signed apt repository, pinned.
 REDIS_VERSION="7.2.15"
 if [[ ! -f /usr/share/keyrings/redis-archive-keyring.gpg ]]; then

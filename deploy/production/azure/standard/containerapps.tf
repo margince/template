@@ -186,8 +186,12 @@ resource "azurerm_container_app" "api" {
   dynamic "secret" {
     for_each = local.api_secrets
     content {
-      name                = secret.key
-      key_vault_secret_id = secret.value.id.versionless_id
+      name = secret.key
+      # Versioned id: a new secret version (Entra secret rotation) changes the
+      # app itself, so its new revision starts with the new value. A
+      # versionless id is re-read only on Container Apps' own refresh cycle,
+      # while the same apply already deletes the old Entra password.
+      key_vault_secret_id = secret.value.id.id
       identity            = azurerm_user_assigned_identity.api.id
     }
   }
@@ -288,12 +292,15 @@ resource "azurerm_container_app" "api" {
         value = local.edge_nginx_conf
       }
 
-      # Ready only when cmd/api's dependencies are (Postgres, Redis, key vault,
-      # attachments store); alive as long as nginx itself answers.
+      # Ready when nginx answers and cmd/api's process does (/healthz), not
+      # when every dependency is up (/readyz): Redis is one replica, and a
+      # dependency check here would mark all api replicas unready together on
+      # a Redis restart, leaving ingress nothing to route to. Dependency
+      # health is covered by the alerts (alarms.tf).
       readiness_probe {
         transport = "HTTP"
         port      = local.edge_port
-        path      = "/readyz"
+        path      = "/healthz"
       }
 
       liveness_probe {
@@ -361,8 +368,12 @@ resource "azurerm_container_app" "worker" {
   dynamic "secret" {
     for_each = local.worker_secrets
     content {
-      name                = secret.key
-      key_vault_secret_id = secret.value.id.versionless_id
+      name = secret.key
+      # Versioned id: a new secret version (Entra secret rotation) changes the
+      # app itself, so its new revision starts with the new value. A
+      # versionless id is re-read only on Container Apps' own refresh cycle,
+      # while the same apply already deletes the old Entra password.
+      key_vault_secret_id = secret.value.id.id
       identity            = azurerm_user_assigned_identity.worker.id
     }
   }

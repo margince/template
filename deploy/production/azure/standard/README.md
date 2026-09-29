@@ -49,7 +49,7 @@ unsubscribe), which the app protects with tokens.
 - **Entra ID**: Application Administrator for whoever runs Terraform (or
   `create_entra_app = false`, see step 2). Conditional Access needs Entra ID
   P1.
-- **Tools**: Terraform 1.7 or newer, Azure CLI, `jq`, Docker with buildx
+- **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`, Docker with buildx
   (Colima on a Mac works) if you build images locally.
 - **Margince**: a licence token, and a checkout of the Margince source
   repository at a commit that includes trusted-proxy support
