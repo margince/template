@@ -40,6 +40,8 @@ make local-up VERSION=v0.1.0-rc.1
 make local-admin-password
 ```
 
+Ports 80 and 443 must be free.
+
 1. Open `https://localhost` and accept the browser warning about the local
    certificate.
 2. Sign in as `admin@localhost` with the password that
@@ -54,6 +56,10 @@ with `MARGINCE_ENV=test`. `make local-down` stops the stack;
 generates database passwords that the old database rejects.
 
 ### Create a client instance
+
+Run this in a template checkout on which `make install` has run:
+`make new-instance` checks out `core/` from the template's `core/` and
+validates `instance.yaml` with Go.
 
 ```sh
 make new-instance NAME=acme DISPLAY_NAME="Acme"
@@ -76,7 +82,8 @@ uses the built-in `host` adapter. Before you start, you need:
 - a server with Ubuntu 22.04, Ubuntu 24.04, or Amazon Linux 2023, ports 22, 80,
   and 443 open, a DNS record for its domain, and an SSH user with
   passwordless `sudo`;
-- a production license ([docs/license.md](docs/license.md)).
+- a production license ([docs/license.md](docs/license.md));
+- an SSH key for the server's user, in your SSH agent or in `HOST_SSH_KEY`.
 
 Run these commands in the instance:
 
@@ -95,6 +102,8 @@ REGISTRY=<registry> MARGINCE_LICENSE="$(cat <license-file>)" \
   make deploy ENV=production VERSION=v0.1.0
 make host-admin-password ENV=production
 ```
+
+For a private registry, also set `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`.
 
 See [docs/deploy.md](docs/deploy.md) for every step, the `hook` adapter, and
 deployment from GitHub Actions.
@@ -133,7 +142,7 @@ and infrastructure lanes, and the desktop lanes.
 | Release | `make release VERSION=<v>` | Check the preconditions, then tag and push a release; `release.yml` builds it. |
 | Release | `make license OUT=<file>` | Obtain a production license into a file. |
 | Release | `make desktop VERSION=<v>` | Build the macOS desktop folder with the instance's units. |
-| Release | `make trial VERSION=<v>` | Build a trial desktop bundle with a trial license. |
+| Release | `make trial VERSION=<v>` | Build a trial bundle with a trial license. |
 | Deploy | `make deploy-init ENV=<env>` | Create `deploy/<env>/` and register the environment in `instance.yaml`. |
 | Deploy | `make host-bootstrap ENV=<env>` | Install Docker and Docker Compose on a new server of a `host` environment. |
 | Deploy | `make deploy ENV=<env> VERSION=<v>` | Deploy a release to an environment in `instance.yaml`. |
@@ -191,5 +200,5 @@ template-owned path differs from the merged template commit. See
 | [Release](docs/release.md) | Cut a release, build and test the images. |
 | [Deploy](docs/deploy.md) | Deploy a release with the `host` or `hook` adapter. |
 | [License](docs/license.md) | Obtain a trial or production license. |
-| [Trial](docs/trial.md) | Build a trial desktop bundle. |
+| [Trial](docs/trial.md) | Build a trial bundle. |
 | [Troubleshooting](docs/troubleshooting.md) | Known errors and their fixes. |

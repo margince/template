@@ -33,6 +33,9 @@ make desktop-seed DATASET=<dataset-checkout>   # in a second terminal
 make desktop-logins
 ```
 
+Without `DATASET`, the folder has no demo loader and `make desktop-seed`
+refuses (Section 3.2).
+
 Open the address that `make desktop-logins` prints and sign in with an account
 it lists.
 

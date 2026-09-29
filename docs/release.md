@@ -69,7 +69,8 @@ deletes the local tag.
 
 1. **Version check.** The tag matches the version format and its commit is on
    `main`. A tag with `-rc.N` is marked as a pre-release.
-2. **Full gate.** `full-check.yml`, the gate that `make ci` runs locally.
+2. **Full gate.** `full-check.yml`: the light gate plus the screen suites,
+   the composed typecheck, and the database lanes (Section 9).
 3. **Images.** `make package VERSION=<v>` builds `api`, `web`, and `worker`
    for `linux/amd64` into the runner's local image store.
 4. **Smoke test.** `make smoke VERSION=<v>` (Section 7.2).
@@ -228,7 +229,7 @@ different demo data; the `dataset` line shows which.
 
 | Workflow | Runs on | Content |
 |---|---|---|
-| `ci.yml` | pull requests, pushes to `main` | The light gate: `check-instance`, `check-template`, `check-composition`, `build`, `test-extensions`, `arch`, `ext-imports`, `fe-ds-gates`, `lint`, `drift`, `check-docs`, `test-scripts`, `core-check-pin`, the clean-submodule check, `secret-scan`, and `test-secret-scan`. |
+| `ci.yml` | pull requests, pushes to `main` | The light gate: `check-instance`, `check-template`, `check-composition`, `check-manifests`, `build`, `test-extensions`, `arch`, `ext-imports`, `fe-ds-gates`, `lint`, `drift`, `check-docs`, `test-scripts`, `core-check-pin`, the clean-submodule check, `secret-scan`, and `test-secret-scan`. |
 | `lifecycle.yml` | pull requests, pushes to `main`, by hand | `make test-lifecycle`. In an instance every step after the first check is skipped. |
 | `release.yml` | pushed `v*` tags | Section 4. |
 | `full-check.yml` | called by `release.yml` | The light gate plus `fe-test-ext`, `fe-typecheck-composed`, `check-ext-migrations`, and `test-integration-ext`. |

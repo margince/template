@@ -62,8 +62,9 @@ To add an environment by hand, add its line under `deploy:` and create
 Prerequisites:
 
 - The instance repository on GitHub, with `make install` done in your checkout.
-- A release of the instance whose images are in a registry the server can
-  pull from. See [release.md](release.md).
+- The repository variable `REGISTRY` (and, for a private registry, the
+  secrets) set, so that `release.yml` pushes the images
+  ([release.md](release.md#5-repository-settings)).
 - A server as Section 5.1 describes, and its DNS record.
 - A production license. See [license.md](license.md).
 - An SSH key for the server's user, in your SSH agent or in `HOST_SSH_KEY`.

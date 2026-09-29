@@ -40,6 +40,12 @@ core's `main`.
 Core's code-quality linter. `make lint` runs `craft static --strict` over
 `extensions/`, using the binary that `core/scripts/craft-pin.sh` downloads.
 
+## desktop bundle
+
+Another name for a desktop folder, used for a folder built for distribution:
+the zips of a release ([release.md](release.md#8-desktop-bundles)) and the
+trial bundle. Same concept as desktop folder.
+
 ## desktop folder
 
 The self-contained Margince folder for macOS or Windows that `make desktop`
@@ -75,9 +81,9 @@ runs them.
 
 ## full gate
 
-`make check`, and in CI `full-check.yml`, which `release.yml` calls. `make ci`
-adds the database lane and the submodule checks. See
-[release.md](release.md#9-ci-workflows).
+`make check`, and in CI `full-check.yml`: the light gate plus the screen
+suites, the composed typecheck, and the database lanes. `make ci` adds the
+submodule checks. See [release.md](release.md#9-ci-workflows).
 
 ## gate
 

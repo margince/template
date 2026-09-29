@@ -103,9 +103,9 @@ git -C <dataset-checkout> checkout <ref>
 make trial VERSION=v0.3.0 DATASET=<dataset-checkout>
 ```
 
-When `data.dataset` is set but no `DATASET` was passed, `make trial` prints
-the commands to seed the bundle by hand after its first start, and notes that
-the bundle has no demo loader:
+When `data.dataset` is set, `make trial` prints the commands to seed the
+bundle by hand after its first start. When the bundle has no demo loader, it
+also says so:
 
 ```sh
 git clone <url> "<bundle>/data/demo/dataset"
