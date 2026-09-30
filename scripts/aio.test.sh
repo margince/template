@@ -168,7 +168,9 @@ case "$1 ${2:-}" in
     for m in ${STUB_MISSING:-}; do [ "$3" = "$m" ] && exit 1; done; exit 0 ;;
   "buildx version"|"buildx build") exit 0 ;;
   "context show") echo stubctx; exit 0 ;;
-  "port "*) echo "127.0.0.1:49999"; exit 0 ;;
+  # A random host port changes when the container restarts.
+  "port "*) if [ -f "$STUB_STATE/restarted" ]; then echo "127.0.0.1:49998"; else echo "127.0.0.1:49999"; fi; exit 0 ;;
+  "restart "*) touch "$STUB_STATE/restarted"; exit 0 ;;
   "inspect "*)
     case "$*" in
       *Health*) echo "${STUB_HEALTH:-healthy}" ;;
@@ -191,15 +193,19 @@ printf 'curl %s\n' "$*" >> "$STUB_LOG"
 stdin=""; case "$*" in *"--data-binary @-"*) stdin="$(cat)" ;; esac
 [ -n "$stdin" ] && printf 'curl-stdin %s\n' "$stdin" >> "$STUB_STDIN_LOG"
 case "$*" in
+  *:49999/*) [ -f "$STUB_STATE/restarted" ] && { echo 000; exit 7; } ;;
+esac
+case "$*" in
   *"%{http_code}"*readyz*) echo 404 ;;
   *"%{http_code}"*auth/login*) [ "${STUB_LOGIN_FAIL:-}" = 1 ] && echo 401 || echo 200 ;;
   *) echo '<!doctype html><html><div id="root"></div></html>' ;;
 esac
 EOF
 chmod +x "$STUB_BIN"/*
-export STUB_STDIN_LOG="$TMP/stdin-log"
+export STUB_STDIN_LOG="$TMP/stdin-log" STUB_STATE="$TMP/stub-state"
+mkdir -p "$STUB_STATE"
 
-reset_log; : > "$STUB_STDIN_LOG"
+reset_log; : > "$STUB_STDIN_LOG"; rm -f "$STUB_STATE/restarted"
 if aio smoke v1.0.0 >"$TMP/out" 2>&1; then ok "smoke passes against a healthy image"; else fail "smoke passes against a healthy image"; cat "$TMP/out" >&2; fi
 check "smoke runs the image on a temporary volume, published on 127.0.0.1" bash -c 'grep "^docker run" "$1" | grep -q -- "-p 127.0.0.1::80" && grep "^docker run" "$1" | grep -qE -- "-v margince-aio-smoke-[0-9]+-data:/data acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
 check "smoke restarts the container once" grep -q '^docker restart margince-aio-smoke-' "$STUB_LOG"
@@ -207,7 +213,7 @@ check "smoke removes the container and the volume" bash -c 'grep -q "^docker rm 
 check "smoke never puts the password in an argument" bash -c '! grep -q generated-password "$1"' _ "$STUB_LOG"
 check "smoke sends the password on standard input" grep -q 'generated-password' "$STUB_STDIN_LOG"
 
-reset_log
+reset_log; rm -f "$STUB_STATE/restarted"
 if STUB_LOGIN_FAIL=1 aio smoke v1.0.0 >"$TMP/out" 2>&1; then fail "smoke fails when sign-in fails"; else
   check "smoke fails when sign-in fails, prints the log, and still cleans up" bash -c 'grep -q "stub log line" "$1" && grep -q "^docker rm -f -v" "$2"' _ "$TMP/out" "$STUB_LOG"; fi
 

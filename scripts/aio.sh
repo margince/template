@@ -194,6 +194,9 @@ cmd_smoke() {
   before="$(docker exec "$SMOKE_C" sha256sum /data/secrets.env)"
   docker restart "$SMOKE_C" >/dev/null
   smoke_wait_healthy
+  # A random host port (-p 127.0.0.1::80) changes on every start.
+  port="$(docker port "$SMOKE_C" 80/tcp | head -n1 | sed 's/.*://')"
+  url="http://127.0.0.1:$port"
   after="$(docker exec "$SMOKE_C" sha256sum /data/secrets.env)"
   [ "$before" = "$after" ] || smoke_fail "the restart replaced /data/secrets.env"
   code="$(smoke_login "$url")"
