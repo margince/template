@@ -154,5 +154,62 @@ reset_log
 aio build v1.0.0 >/dev/null 2>&1 || true
 check "without deploy/production the workspace is named after display_name" grep -q 'name: Acme' "$INST/build/aio/margince.yaml"
 
+cat > "$STUB_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'docker %s\n' "$*" >> "$STUB_LOG"
+case "$1 ${2:-}" in
+  "image inspect")
+    for m in ${STUB_MISSING:-}; do [ "$3" = "$m" ] && exit 1; done; exit 0 ;;
+  "buildx version"|"buildx build") exit 0 ;;
+  "port "*) echo "127.0.0.1:49999"; exit 0 ;;
+  "inspect "*)
+    case "$*" in
+      *Health*) echo "${STUB_HEALTH:-healthy}" ;;
+      *State.Status*) echo running ;;
+    esac
+    exit 0 ;;
+  "exec "*)
+    case "$*" in
+      *sha256sum*) echo "abc  /data/secrets.env" ;;
+      *) echo "generated-password" ;;
+    esac
+    exit 0 ;;
+  "logs "*) echo "stub log line"; exit 0 ;;
+esac
+exit 0
+EOF
+cat > "$STUB_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> "$STUB_LOG"
+stdin=""; case "$*" in *"--data-binary @-"*) stdin="$(cat)" ;; esac
+[ -n "$stdin" ] && printf 'curl-stdin %s\n' "$stdin" >> "$STUB_STDIN_LOG"
+case "$*" in
+  *"%{http_code}"*readyz*) echo 404 ;;
+  *"%{http_code}"*auth/login*) [ "${STUB_LOGIN_FAIL:-}" = 1 ] && echo 401 || echo 200 ;;
+  *) echo '<!doctype html><html><div id="root"></div></html>' ;;
+esac
+EOF
+chmod +x "$STUB_BIN"/*
+export STUB_STDIN_LOG="$TMP/stdin-log"
+
+reset_log; : > "$STUB_STDIN_LOG"
+if aio smoke v1.0.0 >"$TMP/out" 2>&1; then ok "smoke passes against a healthy image"; else fail "smoke passes against a healthy image"; cat "$TMP/out" >&2; fi
+check "smoke runs the image on a temporary volume, published on 127.0.0.1" bash -c 'grep "^docker run" "$1" | grep -q -- "-p 127.0.0.1::80" && grep "^docker run" "$1" | grep -qE -- "-v margince-aio-smoke-[0-9]+-data:/data acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
+check "smoke restarts the container once" grep -q '^docker restart margince-aio-smoke-' "$STUB_LOG"
+check "smoke removes the container and the volume" bash -c 'grep -q "^docker rm -f -v margince-aio-smoke-" "$1" && grep -q "^docker volume rm -f margince-aio-smoke-" "$1"' _ "$STUB_LOG"
+check "smoke never puts the password in an argument" bash -c '! grep -q generated-password "$1"' _ "$STUB_LOG"
+check "smoke sends the password on standard input" grep -q 'generated-password' "$STUB_STDIN_LOG"
+
+reset_log
+if STUB_LOGIN_FAIL=1 aio smoke v1.0.0 >"$TMP/out" 2>&1; then fail "smoke fails when sign-in fails"; else
+  check "smoke fails when sign-in fails, prints the log, and still cleans up" bash -c 'grep -q "stub log line" "$1" && grep -q "^docker rm -f -v" "$2"' _ "$TMP/out" "$STUB_LOG"; fi
+
+reset_log
+if STUB_MISSING="acme/all-in-one:v1.0.0" aio smoke v1.0.0 >/dev/null 2>"$TMP/err"; then fail "smoke without the image is refused"; else
+  check "smoke without the image names make aio" grep -q 'make aio VERSION=v1.0.0' "$TMP/err"; fi
+
+reset_log
+if STUB_HEALTH=unhealthy AIO_SMOKE_TIMEOUT=1 aio smoke v1.0.0 >/dev/null 2>&1; then fail "smoke fails when the container never becomes healthy"; else ok "smoke fails when the container never becomes healthy"; fi
+
 if [ "$FAILURES" -gt 0 ]; then printf '\naio.test.sh: %s failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\naio.test.sh: all passed\n'

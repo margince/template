@@ -762,6 +762,9 @@ trial: ## Build a trial desktop bundle with a trial license (VERSION=, FORCE=1)
 aio: ## Build the all-in-one image <repo>/all-in-one:<v> (VERSION=, DATASET=, PUSH=1)
 	@bash scripts/aio.sh build "$(VERSION)"
 
+aio-smoke: ## Run the all-in-one image on a temporary volume and check it (VERSION=, AIO_SMOKE_TIMEOUT=)
+	@bash scripts/aio.sh smoke "$(VERSION)"
+
 # ──────────────────────── using the desktop folder ────────────────────
 #
 # The build produces a folder that cannot run where it was built, whose

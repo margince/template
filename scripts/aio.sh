@@ -120,7 +120,86 @@ cmd_build() {
   say "built $(aio_image "$version")"
 }
 
+# ── smoke ──
+
+SMOKE_C=""
+SMOKE_V=""
+smoke_cleanup() {
+  [ -n "$SMOKE_C" ] || return 0
+  docker rm -f -v "$SMOKE_C" >/dev/null 2>&1 || true
+  docker volume rm -f "$SMOKE_V" >/dev/null 2>&1 || true
+}
+
+smoke_fail() {
+  printf 'aio-smoke: FAIL: %s\n' "$*" >&2
+  printf '\n--- last 100 log lines of %s ---\n' "$SMOKE_C" >&2
+  docker logs --tail 100 "$SMOKE_C" >&2 2>&1 || true
+  exit 1
+}
+
+smoke_wait_healthy() {
+  local timeout="${AIO_SMOKE_TIMEOUT:-600}" i status state
+  for ((i = 0; i < timeout; i += 5)); do
+    status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$SMOKE_C" 2>/dev/null || true)"
+    [ "$status" = healthy ] && return 0
+    state="$(docker inspect -f '{{.State.Status}}' "$SMOKE_C" 2>/dev/null || true)"
+    [ "$state" = exited ] && smoke_fail "the container exited"
+    sleep 5
+  done
+  smoke_fail "the container was not healthy within ${timeout}s (last status: ${status:-none})"
+}
+
+# smoke_login <url> — HTTP status of a sign-in as admin@localhost with the
+# generated password, or the seeded one. The password goes on stdin.
+smoke_login() {
+  local url="$1" password code
+  password="$(docker exec "$SMOKE_C" sed -n 's/^MARGINCE_ADMIN_PASSWORD=//p' /data/secrets.env)"
+  for pw in "$password" demo-password-123; do
+    code="$(printf '{"email":"admin@localhost","password":"%s"}' "$pw" \
+      | curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST \
+          -H 'Content-Type: application/json' --data-binary @- "$url/v1/auth/login")"
+    [ "$code" = 200 ] && { printf '200\n'; return 0; }
+  done
+  printf '%s\n' "$code"
+}
+
+cmd_smoke() {
+  local version="${1:-}" image url port code before after
+  require_version "$version"
+  image="$(aio_image "$version")"
+  docker image inspect "$image" >/dev/null 2>&1 \
+    || die "aio-smoke: no image $image — run make aio VERSION=$version first"
+
+  SMOKE_C="margince-aio-smoke-$$"
+  SMOKE_V="$SMOKE_C-data"
+  trap smoke_cleanup EXIT
+
+  say "smoke: starting $image"
+  docker run -d --name "$SMOKE_C" -p 127.0.0.1::80 -v "$SMOKE_V:/data" "$image" >/dev/null
+  smoke_wait_healthy
+  port="$(docker port "$SMOKE_C" 80/tcp | head -n1 | sed 's/.*://')"
+  url="http://127.0.0.1:$port"
+
+  curl -fsS --max-time 10 "$url/" | grep -qi '<html' || smoke_fail "/ does not serve the web app"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url/readyz")"
+  [ "$code" = 404 ] || smoke_fail "/readyz answered $code through nginx, want 404"
+  code="$(smoke_login "$url")"
+  [ "$code" = 200 ] || smoke_fail "admin@localhost could not sign in (HTTP $code)"
+  say "smoke: $url serves the app, hides /readyz, and admin@localhost signs in"
+
+  before="$(docker exec "$SMOKE_C" sha256sum /data/secrets.env)"
+  docker restart "$SMOKE_C" >/dev/null
+  smoke_wait_healthy
+  after="$(docker exec "$SMOKE_C" sha256sum /data/secrets.env)"
+  [ "$before" = "$after" ] || smoke_fail "the restart replaced /data/secrets.env"
+  code="$(smoke_login "$url")"
+  [ "$code" = 200 ] || smoke_fail "admin@localhost could not sign in after a restart (HTTP $code)"
+  say "smoke: a restart keeps the data"
+  say "smoke: passed"
+}
+
 case "${1:-}" in
   build) shift; cmd_build "$@" ;;
+  smoke) shift; cmd_smoke "$@" ;;
   *) die "usage: bash scripts/aio.sh build|smoke|scripts|up <version> | down|reset|logins|logs" ;;
 esac
