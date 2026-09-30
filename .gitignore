@@ -56,3 +56,19 @@ dist/
 # The local stack of make local-up (scripts/local.sh): generated keys, the
 # admin password and the rendered release files. Never tracked.
 /.local/
+
+# Terraform under deploy/: local state and provider plugins (state holds every
+# generated credential), filled-in tfvars and backend configuration, and
+# provider lock files, which terraform init regenerates. Only the *.example
+# templates are tracked.
+/deploy/**/.terraform/
+/deploy/**/.terraform.tfstate.lock.info
+/deploy/**/*.tfstate
+/deploy/**/*.tfstate.*
+/deploy/**/crash.log
+/deploy/**/crash.*.log
+/deploy/**/*.tfvars
+/deploy/**/*.tfvars.json
+!/deploy/**/*.tfvars.example
+/deploy/**/backend.hcl
+/deploy/**/.terraform.lock.hcl

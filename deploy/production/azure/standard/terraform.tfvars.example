@@ -1,0 +1,48 @@
+# Copy to terraform.tfvars and fill in.
+
+# ---- Required ----------------------------------------------------------------
+
+# MARGINCE_PUBLIC_BASE_URL: the canonical external scheme and host.
+public_base_url = "https://crm.example.com"
+
+# The release to deploy: the VERSION of `make release` (docs/release.md).
+release_version = "v0.3.0"
+
+# Licence token issued for this installation.
+license_token = "<licence token>"
+
+# MARGINCE_ADMIN_PASSWORD for the first boot. Set include_bootstrap_admin =
+# false once the first admin has signed in (README.md, step 6).
+admin_bootstrap_password = "change-me-before-first-boot"
+
+# SSH public key for the jumpbox: ssh-keygen -t ed25519 (RSA also works).
+jumpbox_ssh_public_key = "ssh-ed25519 AAAA... you@example.com"
+
+# ---- Usually set ---------------------------------------------------------------
+
+# false on the first apply; true once images, database, margince.yaml and the
+# public certificate exist (README.md, step 5).
+deploy_apps = false
+
+# Your public IP while you set up or push images from a laptop
+# (curl -s https://api.ipify.org). Set back to [] afterwards.
+operator_ip_allowlist = ["203.0.113.20"]
+
+# Key Vault Administrator for these Entra object IDs, ideally one group with
+# every operator and the CI identity. Empty: whoever runs terraform apply.
+# key_vault_admin_principal_ids = ["00000000-0000-0000-0000-000000000000"]
+
+# alert_email = "ops@example.com"
+
+# ---- Optional, shown with their defaults -----------------------------------------
+
+# azure_region            = "westeurope"
+# name_prefix             = "margince"          # also the resource group name
+# instance_name           = "margince-default"  # instance.yaml's name
+# db_sku_name             = "B_Standard_B2s"    # "GP_Standard_D2ds_v5": Microsoft's production recommendation
+# db_zone_redundant_ha    = false               # true needs a GP_ or MO_ SKU
+# api_min_replicas        = 3
+# api_max_replicas        = 6
+# waf_mode                = "count"             # "block" after about a week of reviewing the WAF logs
+# include_bootstrap_admin = true                # false after the first admin login
+# enable_resource_locks   = true                # set false and apply before terraform destroy

@@ -13,6 +13,8 @@
 #   release/.env                  mode 600; read by the api and worker
 #                                 containers (compose `format: raw`)
 #   release/compose.env           the compose interpolation variables; no secret
+#   release/nginx/default.conf.template  copied from scripts/deploy/host/
+#                                 nginx.conf.template; routing and rate limits
 #   shared/db-init.sh             copied from scripts/deploy/host/ (mode 755)
 #   shared/gen-env.sh             copied from scripts/deploy/host/ (mode 755);
 #                                 apply runs it to create data.env and
@@ -33,7 +35,7 @@
 #   - MARGINCE_BLOBSTORE_PATH=/app/data/blobs (the default file store), unless
 #     secrets lists it or MARGINCE_BLOBSTORE_ENDPOINT;
 #   - INSTANCE_NAME, IMAGE_API, IMAGE_WEB, IMAGE_WORKER, HOST_DOMAIN,
-#     API_REPLICAS, WORKER_REPLICAS, COMPOSE_PROFILES.
+#     API_REPLICAS, WORKER_REPLICAS, AUTH_RATE_LIMIT_PER_MINUTE, COMPOSE_PROFILES.
 # compose.env holds the last group only.
 #
 # release/compose.yaml is the template unchanged, except when secrets lists
@@ -46,8 +48,8 @@
 #
 # COMPOSE_PROFILES is `local-data` (the compose file's postgres and redis
 # services) unless MARGINCE_DSN and MARGINCE_REDIS are both set; then it is
-# empty. HOST_DOMAIN, API_REPLICAS and WORKER_REPLICAS come from
-# DEPLOY_DIR/host.env (replicas default 1).
+# empty. HOST_DOMAIN, API_REPLICAS, WORKER_REPLICAS and AUTH_RATE_LIMIT_PER_MINUTE come from
+# DEPLOY_DIR/host.env (replicas default 1, the rate limit 30 per minute).
 #
 # A listed name without a value, or a value with a newline or a carriage
 # return, exits 1 naming the
@@ -64,7 +66,7 @@ BOOTSTRAP_SQL="$CORE/scripts/deploy/db-bootstrap.sql"
 
 # The names render.sh writes itself. A secret of the same name would be
 # written twice, and the later line would silently win.
-GENERATED="INSTANCE_NAME IMAGE_API IMAGE_WEB IMAGE_WORKER HOST_DOMAIN API_REPLICAS WORKER_REPLICAS COMPOSE_PROFILES"
+GENERATED="INSTANCE_NAME IMAGE_API IMAGE_WEB IMAGE_WORKER HOST_DOMAIN API_REPLICAS WORKER_REPLICAS AUTH_RATE_LIMIT_PER_MINUTE COMPOSE_PROFILES"
 
 out="${1:-}"
 [ -n "$out" ] || die "render: pass the output directory: bash scripts/deploy/host/render.sh <out-dir>"
@@ -92,6 +94,8 @@ api_replicas="$(host_env_get API_REPLICAS 1)"
 worker_replicas="$(host_env_get WORKER_REPLICAS 1)"
 [[ "$api_replicas" =~ ^[1-9][0-9]*$ ]] || die "render: API_REPLICAS in $DEPLOY_DIR/host.env must be a positive number"
 [[ "$worker_replicas" =~ ^[1-9][0-9]*$ ]] || die "render: WORKER_REPLICAS in $DEPLOY_DIR/host.env must be a positive number"
+auth_rate="$(host_env_get AUTH_RATE_LIMIT_PER_MINUTE 30)"
+[[ "$auth_rate" =~ ^[1-9][0-9]*$ ]] || die "render: AUTH_RATE_LIMIT_PER_MINUTE in $DEPLOY_DIR/host.env must be a positive number"
 
 external=0
 if [ -n "${MARGINCE_DSN:-}" ] && [ -n "${MARGINCE_REDIS:-}" ]; then
@@ -154,8 +158,8 @@ cleanup() {
 trap cleanup EXIT
 rel="$out/release"
 shr="$out/shared"
-mkdir -p "$rel/config" "$shr/caddy"
-chmod 755 "$out" "$rel" "$rel/config" "$shr" "$shr/caddy"
+mkdir -p "$rel/config" "$rel/nginx" "$shr/caddy"
+chmod 755 "$out" "$rel" "$rel/config" "$rel/nginx" "$shr" "$shr/caddy"
 
 # generated_lines — the variables render.sh sets itself, NAME=value.
 generated_lines() {
@@ -167,6 +171,7 @@ generated_lines() {
     HOST_DOMAIN "$domain" \
     API_REPLICAS "$api_replicas" \
     WORKER_REPLICAS "$worker_replicas" \
+    AUTH_RATE_LIMIT_PER_MINUTE "$auth_rate" \
     COMPOSE_PROFILES "$profiles"
 }
 
@@ -197,6 +202,8 @@ else
 fi
 cp "$DEPLOY_DIR/config/margince.yaml" "$rel/config/margince.yaml"
 cp "$HOST_FILES/Caddyfile" "$shr/caddy/Caddyfile"
+cp "$HOST_FILES/nginx.conf.template" "$rel/nginx/default.conf.template"
+chmod 644 "$rel/nginx/default.conf.template"
 cp "$HOST_FILES/db-init.sh" "$shr/db-init.sh"
 cp "$HOST_FILES/gen-env.sh" "$shr/gen-env.sh"
 cp "$BOOTSTRAP_SQL" "$shr/db-bootstrap.sql"

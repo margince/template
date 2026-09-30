@@ -1,0 +1,183 @@
+# Complete nginx config for the `edge` container, rendered by Terraform
+# (containerapps.tf) and written to /tmp/nginx.conf at container start.
+#
+# edge runs INSIDE the api app, beside the api container, from the web image
+# (which carries the built SPA). It is the app's ingress target: it serves the
+# SPA exactly as frontend/nginx.conf does and forwards every api-owned path to
+# the api container on localhost with the public host as the Host header. Keep
+# the SPA locations in step with frontend/nginx.conf.
+
+worker_processes auto;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+    server_tokens off;
+    # Access log without query strings, and with the capability tokens in
+    # public links redacted: those paths are credentials (the api redacts them
+    # the same way, backend/internal/platform/httpserver/capabilitypath.go).
+    map $uri $log_path {
+        ~^(?<cap>/v1/public/(preferences|confirm|booking|rooms))/  "$cap/[redacted]";
+        default                                                     $uri;
+    }
+    log_format edge '$remote_addr "$request_method $log_path" $status '
+                    '$body_bytes_sent $request_time "$http_user_agent"';
+    access_log /dev/stdout edge;
+
+    # The image runs as uid 101, which can only write under /tmp.
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path       /tmp/proxy_temp;
+    fastcgi_temp_path     /tmp/fastcgi_temp;
+    uwsgi_temp_path       /tmp/uwsgi_temp;
+    scgi_temp_path        /tmp/scgi_temp;
+
+    # Real client address. The Application Gateway (appgw.tf) replaces
+    # X-Forwarded-For with the client address alone (its rewrite rule, no
+    # port and no client-supplied entries). Container Apps' ingress then
+    # appends the gateway instance it received the request from as the
+    # rightmost entry. Trusted sources: the replica itself, the
+    # infrastructure subnet, the ranges a workload profiles environment
+    # reserves (100.100.0.0/17 and three /19s inside 100.100.0.0/16) and the
+    # gateway subnet. The rightmost untrusted entry is the client.
+    set_real_ip_from 127.0.0.1;
+    set_real_ip_from ${envoy_cidr};
+    set_real_ip_from 100.100.0.0/16;
+    set_real_ip_from ${appgw_cidr};
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    # Per-client limit on the credential endpoints below. Password login is
+    # open from any address; this and the gateway's WAF protect it.
+    limit_req_zone $binary_remote_addr zone=auth:10m rate=${auth_rate}r/m;
+    limit_req_status 429;
+
+    upstream margince_api {
+        server 127.0.0.1:${api_port};
+        keepalive 16;
+    }
+
+    server {
+        listen ${edge_port};
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        client_max_body_size 50m;
+
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        # Report-only until the SPA has been checked against it; switch the
+        # header name to Content-Security-Policy to enforce.
+        add_header Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+        gzip on;
+        gzip_types text/css application/javascript application/json image/svg+xml;
+        gzip_min_length 1024;
+        gzip_vary on;
+
+        # The api builds OAuth discovery URLs, the MCP challenge and webhook
+        # signature bases from Host and X-Forwarded-Proto, so both carry what
+        # the client used. The gateway sends the app's internal FQDN as Host
+        # (its backend setting picks the host name from the backend), so Host
+        # is set to the public host here. X-Real-IP is the client address
+        # resolved above, for the api's logs; core keys its own limits on the
+        # direct peer (127.0.0.1) and reads no forwarded header, so the
+        # per-client limits are this file's limit_req and the gateway's WAF.
+        # X-Forwarded-For is overwritten, never appended, so no
+        # client-supplied entry reaches the api.
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host ${public_host};
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_read_timeout 120s;
+
+        # ---- api paths -----------------------------------------------------
+
+        location = /v1/auth/login {
+            limit_req zone=auth burst=${auth_rate} nodelay;
+            proxy_pass http://margince_api;
+        }
+        # Microsoft or Google sign-in (/v1/auth/oidc/*) is not limited here:
+        # the identity provider protects its own side, and staff behind one
+        # office address would otherwise share one bucket at 9:00.
+        location ~ ^/v1/auth/(forgot-password|reset-password) {
+            limit_req zone=auth burst=${auth_rate} nodelay;
+            proxy_pass http://margince_api;
+        }
+        location = /oauth/token {
+            limit_req zone=auth burst=${auth_rate} nodelay;
+            proxy_pass http://margince_api;
+        }
+        location /setup/ {
+            limit_req zone=auth burst=${auth_rate} nodelay;
+            proxy_pass http://margince_api;
+        }
+
+        location /v1/          { proxy_pass http://margince_api; }
+        location /webhooks/    { proxy_pass http://margince_api; }
+        location /oauth/       { proxy_pass http://margince_api; }
+        location /.well-known/oauth- { proxy_pass http://margince_api; }
+        location = /healthz    { proxy_pass http://margince_api; }
+        location = /readyz     { proxy_pass http://margince_api; }
+
+        # MCP answers with a single-event text/event-stream; do not buffer it.
+        location /mcp {
+            proxy_buffering off;
+            proxy_pass http://margince_api;
+        }
+
+        # Prometheus metrics stay inside the app.
+        location = /metrics { return 404; }
+
+        # Liveness of nginx itself, independent of cmd/api.
+        location = /livez {
+            access_log off;
+            return 200 "ok\n";
+        }
+
+        # ---- SPA (same as frontend/nginx.conf) -----------------------------
+
+        location /assets/ {
+            try_files $uri =404;
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            add_header Referrer-Policy "no-referrer" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+            add_header X-Content-Type-Options "nosniff" always;
+        }
+
+        # A location with its own add_header drops the server-level ones, so
+        # the app shell repeats every security header.
+        location = /index.html {
+            add_header Cache-Control "no-cache";
+            add_header Referrer-Policy "no-referrer" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+        }
+
+        location /mcp-apps/ {
+            try_files $uri =404;
+            add_header Cache-Control "no-cache";
+            add_header Referrer-Policy "no-referrer" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+            add_header X-Content-Type-Options "nosniff" always;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+}

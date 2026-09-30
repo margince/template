@@ -1,0 +1,18 @@
+# Copy to backend.hcl (git-ignored) and fill in. Create the state storage
+# account once, outside this stack, in the same tenant:
+#
+#   az group create -n <state-rg> -l westeurope
+#   az storage account create -n <statestorage> -g <state-rg> -l westeurope \
+#     --sku Standard_ZRS --min-tls-version TLS1_2 --allow-blob-public-access false
+#   az storage account blob-service-properties update -n <statestorage> -g <state-rg> \
+#     --enable-versioning true --enable-delete-retention true --delete-retention-days 30
+#   az storage container create -n margince-azure-light --account-name <statestorage> --auth-mode login
+#   # grant each operator "Storage Blob Data Contributor" on the container
+#
+# Keep the state account's network access limited to operator IPs.
+
+resource_group_name  = "<state-rg>"
+storage_account_name = "<statestorage>"
+container_name       = "margince-azure-light"
+key                  = "margince-light.tfstate"
+use_azuread_auth     = true

@@ -179,7 +179,7 @@ make smoke VERSION=v0.3.0
 `make package` has loaded:
 
 1. Creates a private Docker network with PostgreSQL
-   (`pgvector/pgvector:pg16`) and Redis (`redis:7`), with random passwords
+   (the images the host adapter pins in `scripts/deploy/host/compose.yaml`, which match core's `docker-compose.dev.yml`), with random passwords
    and keys that never appear on a command line.
 2. Runs `core/scripts/deploy/db-bootstrap.sql` once as the superuser.
 3. Starts `api` and waits until `/readyz` answers.
