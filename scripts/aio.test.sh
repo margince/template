@@ -37,6 +37,9 @@ check "nginx answers 404 for /healthz, /readyz and /metrics" \
   grep -qE 'location ~ \^/\(healthz\|readyz\|metrics\)\(/\|\$\) \{ return 404; \}' "$AIO/nginx.conf"
 check "nginx listens on 80 only" bash -c '[ "$(grep -cE "^[[:space:]]*listen " "$1")" = 1 ] && grep -qE "^[[:space:]]*listen 80;" "$1"' _ "$AIO/nginx.conf"
 check "nginx proxies to the api on 127.0.0.1:8080" grep -q 'server 127.0.0.1:8080;' "$AIO/nginx.conf"
+# The image serves plain HTTP on 127.0.0.1 only; a Secure cookie there is
+# dropped by browsers that do not treat http://localhost as secure (Safari).
+check "nginx removes the Secure flag from the api's cookies" grep -qE '^[[:space:]]*proxy_cookie_flags ~ nosecure;' "$AIO/nginx.conf"
 
 # ── static: margince-init ──
 init="$AIO/margince-init"
