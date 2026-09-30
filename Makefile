@@ -34,6 +34,7 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 	desktop-install desktop-run desktop-connect desktop-seed \
 	desktop-verify desktop-status desktop-logins desktop-psql desktop-dsn \
 	desktop-clean trial \
+	aio aio-up aio-down aio-reset aio-logins aio-logs aio-smoke aio-scripts \
 	update-core clean
 
 help: ## Show the lanes
@@ -752,6 +753,14 @@ desktop-win-kit: compose ## Stamp the loader into a Windows desktop folder (DIR=
 ## replaces an existing one.
 trial: ## Build a trial desktop bundle with a trial license (VERSION=, FORCE=1)
 	@bash scripts/trial.sh "$(VERSION)"
+
+# ─────────────────────────── all-in-one image ─────────────────────────
+
+## aio — one image with all of Margince, for non-technical testers (design
+## docs/superpowers/specs/2026-09-30-all-in-one-image-design.md). Built from
+## the role images of VERSION; runs `make package` when one is missing.
+aio: ## Build the all-in-one image <repo>/all-in-one:<v> (VERSION=, DATASET=, PUSH=1)
+	@bash scripts/aio.sh build "$(VERSION)"
 
 # ──────────────────────── using the desktop folder ────────────────────
 #

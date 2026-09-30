@@ -665,6 +665,12 @@ build_seeder() {
       ( cd "$src" && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOWORK=off go build -o "$out" . ) \
         || die "kit: the seeder in $src did not build"
       ;;
+    linux-amd64|linux-arm64)
+      # The all-in-one image (scripts/aio.sh). Pure Go, like the Windows
+      # build, so it cross-builds from any host.
+      ( cd "$src" && CGO_ENABLED=0 GOOS=linux GOARCH="${goos#linux-}" GOWORK=off go build -o "$out" . ) \
+        || die "kit: the seeder in $src did not build"
+      ;;
     *) die "kit: unknown target os: $goos" ;;
   esac
   rm -rf "$build_dir"

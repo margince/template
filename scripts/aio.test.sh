@@ -56,5 +56,103 @@ for f in margince-init margince-seed margince-logins; do
   check "$f passes bash -n" bash -n "$AIO/$f"
 done
 
+# ── scratch instance ──
+INST="$TMP/inst"
+mkdir -p "$INST/core/scripts/deploy" "$INST/core/backend" "$INST/deploy/production/config"
+cp -R "$SCRIPT_DIR" "$INST/scripts"
+printf 'name: acme\ndisplay_name: Acme\ncore: v0.0.2\n' > "$INST/instance.yaml"
+printf -- '-- stand-in bootstrap\nSELECT 1;\n' > "$INST/core/scripts/deploy/db-bootstrap.sql"
+printf 'version: 1\nworkspace:\n  name: Acme\n  base_currency: EUR\n  timezone: UTC\n' \
+  > "$INST/deploy/production/config/margince.yaml"
+git -C "$INST" init -q && git -C "$INST" add -A && git -C "$INST" commit -qm init
+git -C "$INST/core" init -q && git -C "$INST/core" commit -q --allow-empty -m core
+
+STUB_BIN="$TMP/stub-bin"
+mkdir -p "$STUB_BIN"
+export STUB_LOG="$TMP/log"
+
+# docker: `image inspect` fails for refs listed in $STUB_MISSING (space-separated).
+cat > "$STUB_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'docker %s\n' "$*" >> "$STUB_LOG"
+case "$1 ${2:-}" in
+  "image inspect")
+    for m in ${STUB_MISSING:-}; do [ "$3" = "$m" ] && exit 1; done; exit 0 ;;
+  "buildx version") exit 0 ;;
+  "buildx build") exit 0 ;;
+esac
+exit 0
+EOF
+cat > "$STUB_BIN/make" <<'EOF'
+#!/usr/bin/env bash
+printf 'make %s\n' "$*" >> "$STUB_LOG"
+EOF
+# go: `go run` is the real CLI (cli_run needs it); `go build -o <f>` and
+# `go mod edit` are recorded and faked.
+REAL_GO="$(command -v go)"
+cat > "$STUB_BIN/go" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  build) printf 'go %s GOOS=%s GOARCH=%s CGO_ENABLED=%s\n' "\$*" "\${GOOS:-}" "\${GOARCH:-}" "\${CGO_ENABLED:-}" >> "\$STUB_LOG"
+         prev=""; for a in "\$@"; do [ "\$prev" = -o ] && : > "\$a"; prev="\$a"; done; exit 0 ;;
+  mod)   exit 0 ;;
+esac
+exec "$REAL_GO" "\$@"
+EOF
+chmod +x "$STUB_BIN"/*
+
+aio() { (cd "$INST" && PATH="$STUB_BIN:$PATH" bash scripts/aio.sh "$@"); }
+reset_log() { : > "$STUB_LOG"; }
+
+reset_log
+if aio build 1.0 >/dev/null 2>"$TMP/err"; then fail "build refuses a non-release version"; else
+  check "build refuses a non-release version, naming VERSION" grep -q 'VERSION=<release version>' "$TMP/err"; fi
+
+reset_log
+aio build v1.0.0 >/dev/null 2>&1 || true
+check "build with all role images present does not run make package" bash -c '! grep -q "^make .*package" "$1"' _ "$STUB_LOG"
+check "build passes the three role images" grep -q -- '--build-arg API_IMAGE=acme/api:v1.0.0 --build-arg WORKER_IMAGE=acme/worker:v1.0.0 --build-arg WEB_IMAGE=acme/web:v1.0.0' "$STUB_LOG"
+check "build tags acme/all-in-one:v1.0.0 and loads it" bash -c 'grep "buildx build" "$1" | grep -q -- "--load" && grep "buildx build" "$1" | grep -q -- "-t acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
+check "build labels the image with the instance and core" bash -c 'grep "buildx build" "$1" | grep -q "com.margince.instance.name=acme" && grep "buildx build" "$1" | grep -q "com.margince.core.version=v0.0.2"' _ "$STUB_LOG"
+check "the context holds the scripts, the configuration and db-bootstrap.sql" bash -c 'for f in Dockerfile nginx.conf margince-init margince-seed margince-logins margince.yaml db-bootstrap.sql; do [ -f "$1/build/aio/$f" ] || exit 1; done' _ "$INST"
+check "the context's configuration signs in as admin@localhost" grep -q 'admin@localhost' "$INST/build/aio/margince.yaml"
+check "without DATASET the context has no seeder and no dataset" bash -c '[ -z "$(ls -A "$1/build/aio/seed")" ] && [ -z "$(ls -A "$1/build/aio/demo")" ]' _ "$INST"
+
+reset_log
+STUB_MISSING="acme/web:v1.0.0" aio build v1.0.0 >/dev/null 2>&1 || true
+check "a missing role image runs make package VERSION=v1.0.0" grep -q '^make -C .* package VERSION=v1.0.0$' "$STUB_LOG"
+
+reset_log
+if (export PUSH=1; aio build v1.0.0) >/dev/null 2>"$TMP/err"; then fail "PUSH=1 without REGISTRY is refused"; else
+  check "PUSH=1 without REGISTRY is refused" grep -q 'requires REGISTRY' "$TMP/err"; fi
+
+reset_log
+(export PUSH=1 REGISTRY=registry.example.test/acme; aio build v1.0.0) >/dev/null 2>&1 || true
+check "PUSH=1 pushes both platforms under the registry" bash -c 'grep "buildx build" "$1" | grep -q -- "--push --platform linux/amd64,linux/arm64" && grep "buildx build" "$1" | grep -q -- "-t registry.example.test/acme/acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
+check "PUSH=1 does not look for local role images" bash -c '! grep -q "image inspect" "$1"' _ "$STUB_LOG"
+
+# A dataset checkout with the seeder's source.
+DS="$TMP/dataset"
+mkdir -p "$DS/datasets/v1" "$DS/tools/seed-demo" "$DS/.git"
+printf '{}\n' > "$DS/datasets/v1/demo.json"
+printf 'module x\n' > "$DS/tools/seed-demo/go.mod"
+
+reset_log
+DATASET="$DS" aio build v1.0.0 >/dev/null 2>&1 || true
+check "DATASET builds the seeder for linux/amd64 and linux/arm64 without cgo" bash -c 'grep -q "GOOS=linux GOARCH=amd64 CGO_ENABLED=0" "$1" && grep -q "GOOS=linux GOARCH=arm64 CGO_ENABLED=0" "$1"' _ "$STUB_LOG"
+check "DATASET puts both seeders in the context" bash -c '[ -f "$1/build/aio/seed/seed-demo-amd64" ] && [ -f "$1/build/aio/seed/seed-demo-arm64" ]' _ "$INST"
+check "DATASET copies the dataset without .git and tools" bash -c '[ -f "$1/build/aio/demo/datasets/v1/demo.json" ] && [ ! -e "$1/build/aio/demo/.git" ] && [ ! -e "$1/build/aio/demo/tools" ]' _ "$INST"
+
+sed -i.bak 's/EUR/USD/' "$INST/deploy/production/config/margince.yaml"
+reset_log
+DATASET="$DS" aio build v1.0.0 >"$TMP/out" 2>&1 || true
+check "a non-EUR workspace gets a notice and no dataset" bash -c 'grep -q "euro-based" "$1" && [ -z "$(ls -A "$2/build/aio/demo")" ]' _ "$TMP/out" "$INST"
+mv "$INST/deploy/production/config/margince.yaml.bak" "$INST/deploy/production/config/margince.yaml"
+
+rm -rf "$INST/deploy"
+reset_log
+aio build v1.0.0 >/dev/null 2>&1 || true
+check "without deploy/production the workspace is named after display_name" grep -q 'name: Acme' "$INST/build/aio/margince.yaml"
+
 if [ "$FAILURES" -gt 0 ]; then printf '\naio.test.sh: %s failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\naio.test.sh: all passed\n'

@@ -46,6 +46,9 @@
 # rather than inherit a blanket rule. Same reasoning core's own file gives.
 /build/desktop/
 
+# The all-in-one image's build context, assembled by scripts/aio.sh.
+/build/aio/
+
 # Trial bundles written by `make trial` (scripts/trial.sh). Each one holds a
 # license in its margince.env, so none is ever tracked.
 dist/
