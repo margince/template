@@ -53,20 +53,17 @@ variable "az_count" {
 
 variable "cpu_architecture" {
   description = <<-EOT
-    Fargate runtime_platform.cpu_architecture for all three task definitions
-    — "X86_64" or "ARM64". Defaults to ARM64 (Graviton): RDS (db.t4g.medium)
-    and ElastiCache (cache.t4g.small) already default to Graviton instance
-    families, the product's own release pipeline already builds and
-    smoke-tests every image on real arm64 GitHub runners
-    (.github/workflows/release.yml) and pushes multi-arch
-    (linux/amd64,linux/arm64) images, the backend has zero cgo, and the
-    Dockerfile cross-compiles via TARGETARCH already — Fargate on Graviton
-    also runs meaningfully cheaper than x86_64 at the same vCPU/memory. Set
-    to X86_64 if your own build/push step (README.md step 3) only produces
-    an amd64 image.
+    Fargate runtime_platform.cpu_architecture for all three task definitions:
+    "X86_64" or "ARM64". Defaults to X86_64 because release.yml and
+    `make package` build linux/amd64 unless the repository variable
+    PLATFORMS adds another platform (docs/release.md, Section 5), and the
+    Azure standard stack runs the same amd64 images. ARM64 (Graviton) is
+    cheaper per vCPU; set it only after setting
+    PLATFORMS = "linux/amd64,linux/arm64", so the pushed images carry an
+    arm64 variant.
   EOT
   type        = string
-  default     = "ARM64"
+  default     = "X86_64"
   validation {
     condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
     error_message = "cpu_architecture must be \"X86_64\" or \"ARM64\"."
@@ -74,30 +71,35 @@ variable "cpu_architecture" {
 }
 
 # ---- Images -------------------------------------------------------------
+# The images are the ones `make release VERSION=<v>` (release.yml) or
+# `make package VERSION=<v>` builds from core's Dockerfile, named
+# <REGISTRY>/<instance_name>/<role>:<v> (docs/release.md, Section 6). Here
+# REGISTRY is this account's ECR registry (the registry output), and the ECR
+# repositories are named <instance_name>/api|web|worker (ecs.tf).
 
-variable "image_tag" {
+variable "instance_name" {
+  description = "The instance's name from instance.yaml (`name`). It is the image namespace and the ECR repository prefix: <registry>/<instance_name>/api|web|worker."
+  type        = string
+  default     = "margince-default"
+  validation {
+    condition     = can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.instance_name))
+    error_message = "instance_name must match instance.yaml's name format: lowercase letters and digits, separated by single hyphens."
+  }
+}
+
+variable "release_version" {
   description = <<-EOT
-    Tag to deploy for all three roles (api, worker, web) — a real release
-    version (e.g. a git SHA or MARGINCE_RELEASE_VERSION), never "latest".
-    The ECR repos are image_tag_mutability = IMMUTABLE (ecs.tf), so a tag can
-    only ever be pushed once; "latest" would work for exactly one release and
-    then refuse every push after it, which is the immutability doing its job
-    rather than a bug. Push the tag to the ECR repos this stack creates
-    before the first `terraform apply` that references it — ECS refuses to
-    start a task against a tag that does not exist yet. No default: picking a
-    floating tag is an operator decision this stack should not make silently.
+    The release to deploy for all three roles (api, worker, web): the
+    VERSION of `make release` or `make package`, which is also the image tag
+    (docs/release.md, Section 2). The ECR repositories are IMMUTABLE
+    (ecs.tf), so a released tag is pushed once and never changes. Push the
+    release before the `terraform apply` that references it. No default:
+    choosing a release is an operator decision.
   EOT
   type        = string
   validation {
-    # An empty or whitespace image_tag builds "repo:" — no tag at all — which
-    # ECS rejects rather than defaulting to anything, so this fails fast at
-    # plan time with a message that names the actual problem. "latest" is
-    # deliberately still admitted: it is valid for exactly one push to an
-    # IMMUTABLE repo (see the description above), which is a release-policy
-    # violation this stack warns about elsewhere, not a value that breaks
-    # the deployment outright.
-    condition     = length(trimspace(var.image_tag)) > 0
-    error_message = "image_tag must not be empty or whitespace — ECS needs repository:tag, not repository:."
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
+    error_message = "release_version must be a release version such as v0.3.0 or v1.3.0-rc.1 (docs/release.md, Section 2)."
   }
 }
 
@@ -439,5 +441,15 @@ variable "enable_deep_monitoring" {
   validation {
     condition     = var.enable_deep_monitoring == null
     error_message = "enable_deep_monitoring was removed: renamed to enable_alarms (default true). Delete it from terraform.tfvars."
+  }
+}
+
+variable "image_tag" {
+  description = "Removed: replaced by release_version."
+  type        = any
+  default     = null
+  validation {
+    condition     = var.image_tag == null
+    error_message = "image_tag was removed: set release_version to the VERSION of `make release` (for example v0.3.0). Delete image_tag from terraform.tfvars."
   }
 }

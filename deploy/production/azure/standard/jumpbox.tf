@@ -1,11 +1,12 @@
 # Operator jumpbox: one small Linux VM inside the VNet, for everything that
 # must reach the private endpoints (Postgres has no public endpoint at all):
 #
-#   - the "cloud" image build (scripts/build-images.sh cloud): builds
-#     linux/amd64 images natively and pushes them to the registry over its
-#     private endpoint, using the VM's managed identity (AcrPush);
 #   - the one-time database bootstrap (README.md step 3);
-#   - writing margince.yaml onto the config share (step 5).
+#   - writing margince.yaml onto the config share (step 5);
+#   - terraform apply once operator_ip_allowlist is empty (step 7).
+#
+# It builds no images: releases are built by `make release` (release.yml) or
+# `make package` and pushed to the registry (README.md, "Releases").
 #
 # No public IP. Reach it through Azure Bastion's free Developer tier (browser
 # SSH from the portal) or `az vm run-command invoke` from any machine logged
@@ -23,7 +24,7 @@ resource "azurerm_subnet" "ops" {
   address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 6)]
 }
 
-# Outbound through the same NAT (apt, GitHub, Docker Hub) from the same fixed
+# Outbound through the same NAT (apt, GitHub) from the same fixed
 # address as the apps.
 resource "azurerm_subnet_nat_gateway_association" "ops" {
   count          = local.jumpbox_enabled
@@ -122,7 +123,7 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
   os_disk {
     caching              = "ReadWrite"
     storage_account_type = "StandardSSD_LRS"
-    disk_size_gb         = 64 # room for the Docker build cache
+    disk_size_gb         = 64
   }
 
   source_image_reference {
@@ -141,17 +142,9 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
       condition     = length(trimspace(var.jumpbox_ssh_public_key)) > 0
       error_message = "enable_jumpbox = true needs jumpbox_ssh_public_key."
     }
-    # A new image version must not replace a jumpbox holding a build cache.
+    # A new image version or cloud-init change must not replace the jumpbox.
     ignore_changes = [custom_data, source_image_reference]
   }
-}
-
-# The cloud build pushes with the VM's own identity; it holds nothing else.
-resource "azurerm_role_assignment" "jumpbox_acr_push" {
-  count                = local.jumpbox_enabled
-  scope                = azurerm_container_registry.this.id
-  role_definition_name = "AcrPush"
-  principal_id         = azurerm_linux_virtual_machine.jumpbox[0].identity[0].principal_id
 }
 
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "jumpbox" {

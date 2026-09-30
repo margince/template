@@ -1,10 +1,9 @@
-# One VNet, two subnets: the VM (public IP, NSG) and Postgres (delegated,
-# VNet-integrated, no public endpoint). No NAT gateway: the VM's static public
-# IP is also its egress address.
+# One VNet with one subnet for the VM. No NAT gateway: the static public IP
+# is also the egress address (Docker pulls, ACME, Graph).
 
 resource "azurerm_resource_group" "this" {
   name     = var.resource_group_name
-  location = var.azure_region
+  location = var.region
   tags     = local.common_tags
 }
 
@@ -23,21 +22,9 @@ resource "azurerm_subnet" "vm" {
   address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 0)]
 }
 
-resource "azurerm_subnet" "postgres" {
-  name                 = "${var.name_prefix}-postgres"
-  resource_group_name  = azurerm_resource_group.this.name
-  virtual_network_name = azurerm_virtual_network.this.name
-  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 1)]
-
-  delegation {
-    name = "postgres-flexible"
-    service_delegation {
-      name    = "Microsoft.DBforPostgreSQL/flexibleServers"
-      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
-    }
-  }
-}
-
+# Inbound: 80 and 443 from the internet (Caddy: certificate challenge,
+# redirect, the application), 22 from ssh_allowed_cidrs only. Outbound stays
+# open (the NSG default rules).
 resource "azurerm_network_security_group" "vm" {
   name                = "${var.name_prefix}-vm"
   location            = azurerm_resource_group.this.location
@@ -56,17 +43,15 @@ resource "azurerm_network_security_group" "vm" {
     destination_address_prefix = "*"
   }
 
-  # Bastion Developer reaches the VM's private IP from Azure's platform
-  # address 168.63.129.16. Nothing else may open SSH.
   security_rule {
-    name                       = "AllowBastionDeveloperSsh"
+    name                       = "AllowSshFromAllowedCidrs"
     priority                   = 110
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "22"
-    source_address_prefix      = "168.63.129.16"
+    source_address_prefixes    = var.ssh_allowed_cidrs
     destination_address_prefix = "*"
   }
 
@@ -94,18 +79,5 @@ resource "azurerm_public_ip" "vm" {
   resource_group_name = azurerm_resource_group.this.name
   allocation_method   = "Static"
   sku                 = "Standard"
-  domain_name_label   = local.dns_label
-  tags                = local.common_tags
-}
-
-# Free tier: browser SSH from the portal to VMs in this VNet, without a
-# public IP or subnet of its own.
-resource "azurerm_bastion_host" "developer" {
-  count               = var.enable_bastion_developer ? 1 : 0
-  name                = "${var.name_prefix}-bastion"
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
-  sku                 = "Developer"
-  virtual_network_id  = azurerm_virtual_network.this.id
   tags                = local.common_tags
 }

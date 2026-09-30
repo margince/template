@@ -1,13 +1,13 @@
 terraform {
   required_version = ">= 1.10.0"
 
-  # Remote state is required: state holds every generated credential from
-  # secrets.tf in plain text (the SSM parameter values are in state too), so
-  # it must live in a protected S3 bucket that only deployment identities
-  # can reach, never on a laptop. The values come
-  # from backend.hcl (copy backend.hcl.example; git-ignored):
+  # Remote state is required: it holds the license (secrets.tf). The values
+  # come from backend.hcl (copy backend.hcl.example; git-ignored):
   #   terraform init -backend-config=backend.hcl
   # use_lockfile (S3 native locking) is why the CLI floor is 1.10.
+  #
+  # For a local `terraform validate` or `terraform test` without AWS access:
+  #   terraform init -backend=false
   backend "s3" {}
 
   required_providers {
@@ -15,39 +15,16 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.60"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
-    archive = {
-      source  = "hashicorp/archive"
-      version = "~> 2.4"
-    }
   }
 }
 
 provider "aws" {
-  region = var.aws_region
+  region = var.region
 
   default_tags {
     tags = {
       Project     = "margince"
-      ManagedBy   = "terraform"
-      Environment = var.environment
-    }
-  }
-}
-
-# CloudFront's own ACM certificate (cloudfront.tf) is a CloudFront-scoped
-# resource: the AWS API requires it to be created against us-east-1
-# regardless of where the rest of this stack (and CloudFront's origin) actually lives.
-provider "aws" {
-  alias  = "us_east_1"
-  region = "us-east-1"
-
-  default_tags {
-    tags = {
-      Project     = "margince"
+      Flavour     = "light"
       ManagedBy   = "terraform"
       Environment = var.environment
     }

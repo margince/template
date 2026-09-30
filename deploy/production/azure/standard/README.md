@@ -1,22 +1,24 @@
 # Margince on Azure
 
 Terraform root module that deploys Margince into your own Azure subscription
-and Entra ID tenant, sized for a small team (about 40 users). The application
-images are built from the Margince source repository; this stack deploys them.
+and Entra ID tenant, sized for a small team (about 40 users). It deploys the
+images that the template's `make release` builds (Section 4), the same flow as
+the AWS standard stack.
 
 ## What it creates
 
 | Area | Resources |
 |---|---|
-| Compute | Container Apps environment (workload profiles, Consumption profile, zone-redundant). **api** app (3 to 6 replicas, CPU and HTTP scale rules): `cmd/api` plus an **edge** nginx container that serves the SPA and is the only public entry. **worker** app: no ingress. **redis** app: Redis 7.2, one replica, internal TCP only. |
+| Edge | Application Gateway WAF v2 with a static public IP: the only public entry. TLS with the Key Vault certificate `public_certificate_name`, HTTP to HTTPS redirect, WAF policy (Microsoft Default Rule Set 2.1, Bot Manager 1.1, per-IP rate limits, optional geo allow-list), `waf_mode` count or block. See "WAF rollout". |
+| Compute | Container Apps environment (internal: private IP only, workload profiles, Consumption profile, zone-redundant). **api** app (3 to 6 replicas, CPU and HTTP scale rules): `cmd/api` plus an **edge** nginx container that serves the SPA; its ingress is reachable only from the gateway. **worker** app: no ingress. **redis** app: Redis 7.2, one replica, internal TCP only. |
 | Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
 | Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, registry, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
 | Identity | Entra app registration (single tenant, assignment required, your security group), managed identities for api, worker, Dataverse and customer-managed keys |
-| Delivery | Container Registry Premium, optional jumpbox VM with Azure Bastion Developer, build scripts for Mac or jumpbox |
+| Delivery | Container Registry Premium (images from `make release`), optional jumpbox VM with Azure Bastion Developer |
 | Protection | Share soft delete and daily Azure Backup (attachments, redis), delete locks on the stateful resources, diagnostic settings on every resource that has them, metric alerts, Log Analytics (90 days) |
 
 ```
-Internet ──HTTPS──> api app ingress ──> edge (nginx :8081) ──localhost──> cmd/api (:8080)
+Internet ──HTTPS──> Application Gateway WAF v2 ──HTTPS──> api app ingress (private) ──> edge (nginx :8081) ──localhost──> cmd/api (:8080)
                                          │  serves the SPA                  │
                                          │  403 on password login           ├─> Postgres (VNet)
                                          │  outside break_glass_cidrs       ├─> redis app (TCP 6379, in the environment)
@@ -49,12 +51,14 @@ unsubscribe), which the app protects with tokens.
 - **Entra ID**: Application Administrator for whoever runs Terraform (or
   `create_entra_app = false`, see step 2). Conditional Access needs Entra ID
   P1.
-- **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`, Docker with buildx
-  (Colima on a Mac works) if you build images locally.
-- **Margince**: a licence token, and a checkout of the Margince source
-  repository at a commit that includes trusted-proxy support
-  (`MARGINCE_TRUSTED_PROXIES`). Point `MARGINCE_REPO`
-  at it for local image builds: `export MARGINCE_REPO=~/src/margince`.
+- **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`; Docker with buildx for
+  a manual image push (Section 4).
+- **Margince**: a licence token, and this instance repository with its `core/`
+  submodule checked out (`git submodule update --init`). The images come from
+  `make release`; the bootstrap SQL and `margince.example.yaml` come from
+  `core/`, so every stack deploys the core version `instance.yaml` pins.
+- **TLS certificate** for the host in `public_base_url`, as a PFX file, to
+  import into Key Vault in step 6.
 - **Remote state**: state holds every generated password and the Entra
   client secret. Create a state storage account first (`backend.hcl.example`)
   and never keep state on a laptop.
@@ -62,14 +66,14 @@ unsubscribe), which the app protects with tokens.
 ## 1. Provision (apps off)
 
 ```bash
-cd standard
+cd deploy/production/azure/standard
 cp backend.hcl.example backend.hcl            # fill in
 cp terraform.tfvars.example terraform.tfvars  # fill in
 terraform init -backend-config=backend.hcl
 terraform apply                               # deploy_apps = false
 ```
 
-`terraform.tfvars` needs at least `image_tag`, `public_base_url`,
+`terraform.tfvars` needs at least `release_version`, `public_base_url`,
 `admin_bootstrap_password`, `license_token`, `entra_access_group_object_id`,
 `break_glass_cidrs`, `operator_ip_allowlist` (your public IP, from
 `curl -s https://api.ipify.org`) and `jumpbox_ssh_public_key`
@@ -104,17 +108,17 @@ key), then:
 ```bash
 az login
 gh auth login                                 # or read-only deploy keys
-git clone <margince repository URL> /opt/margince          # source: cloud builds, bootstrap SQL
-git clone <instance repository URL> /opt/margince-instance
+git clone --recurse-submodules <instance repository URL> /opt/margince-instance
 cd /opt/margince-instance/deploy/production/azure/standard
 cp backend.hcl.example backend.hcl            # same values as on your machine
 terraform init -backend-config=backend.hcl
 
-scripts/bootstrap-db.sh                       # default SQL: /opt/margince/scripts/deploy/db-bootstrap.sql
+scripts/bootstrap-db.sh                       # default SQL: core/scripts/deploy/db-bootstrap.sql
 ```
 
-`scripts/bootstrap-db.sh` runs the Margince repository's
-`scripts/deploy/db-bootstrap.sql` as `pgadmin` over verified TLS, with the
+`scripts/bootstrap-db.sh` runs core's `scripts/deploy/db-bootstrap.sql` (the
+instance repository's `core/` submodule, at the pinned core version) as
+`pgadmin` over verified TLS, with the
 role passwords passed on stdin rather than the command line. Running the SQL
 directly with `psql` fails on Flexible Server: `pgadmin` is not a superuser,
 so PostgreSQL refuses `ALTER ROLE ... NOSUPERUSER NOBYPASSRLS`, and on
@@ -129,35 +133,74 @@ later, from the api's entrypoint, with the owner role.
 
 ## 4. Build and push the images
 
-`<tag>` must equal `image_tag`. Both ways lock the pushed tags read-only and
-print their digests; paste them into `image_digests` to deploy by digest.
+The AWS standard stack uses the same flow. The images are the ones
+`make release` (the `release.yml` workflow) or `make package` builds from
+core's `Dockerfile`, named `<REGISTRY>/<instance_name>/<role>:<VERSION>`
+(the instance repository's `docs/release.md`, Section 6). This stack deploys
+`<registry>/<instance_name>/<role>:<release_version>`
+(`terraform output image_refs`). Container Apps runs `linux/amd64` images
+only, the platform `release.yml` builds by default.
 
-**On your Mac** (your IP must be in `operator_ip_allowlist`):
+1. Set the image registry. `REGISTRY` is this stack's ACR login server:
 
-```bash
-export MARGINCE_REPO=~/src/margince   # your Margince source checkout
-colima start
-scripts/build-images.sh local <tag>    # asks: 1) x86 (amd64)  2) ARM (arm64)
-```
+   ```sh
+   terraform output -raw registry   # <acr_name>.azurecr.io
+   ```
 
-Choose **x86 (amd64)** for Azure: Container Apps runs `linux/amd64` images
-only. **ARM (arm64)** builds native images for running on the Mac, tagged
-`margince/<role>:<tag>-arm64`, never used by the deployment. `--arch amd64`
-skips the question.
+   For `release.yml`, set it as the repository variable `REGISTRY`. For a
+   manual push, export it in your shell. `instance_name` must equal `name`
+   in `instance.yaml`.
 
-**On the jumpbox**, from your Mac (no allowlist needed; starts the VM if
-stopped; fails if the remote build fails):
+2. Log in to the registry. The registry accepts pushes only from
+   `operator_ip_allowlist` and the VNet (the jumpbox). GitHub-hosted runners
+   are neither, so `release.yml` can push here only from a self-hosted runner
+   in the VNet or with the runner's address added to `operator_ip_allowlist`
+   for the release. `release.yml` logs in with the repository secrets
+   `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`: create a repository-scoped
+   token with push rights for them:
 
-```bash
-scripts/build-images.sh cloud <tag> [git_ref]
-```
+   ```sh
+   ACR="$(terraform output -raw acr_name)"
+   az acr token create -r "$ACR" -n release --repository "<instance_name>/api" content/write content/read \
+     --repository "<instance_name>/web" content/write content/read \
+     --repository "<instance_name>/worker" content/write content/read
+   # use the token name as REGISTRY_USERNAME and one of its passwords as REGISTRY_PASSWORD
+   ```
+
+   For a manual push from an allowlisted machine or the jumpbox:
+
+   ```sh
+   az acr login -n "$(terraform output -raw acr_name)"
+   ```
+
+3. Build and push the release, one of:
+
+   ```sh
+   make release VERSION=v0.3.0                      # release.yml builds, tests and pushes
+   make package VERSION=v0.3.0 && for role in api web worker; do
+     docker push "$REGISTRY/<instance_name>/$role:v0.3.0"
+   done                                             # manual push
+   ```
+
+4. Lock the pushed tags, the counterpart of the AWS stack's `IMMUTABLE`
+   repositories, so a release is never overwritten:
+
+   ```sh
+   for role in api web worker; do
+     az acr repository update -n "$ACR" --image "<instance_name>/$role:v0.3.0" --write-enabled false
+   done
+   ```
+
+5. Set `release_version = "v0.3.0"` in `terraform.tfvars` and run
+   `terraform apply` (step 6 the first time). api and worker roll together;
+   the api startup probe allows five minutes for migrations.
 
 ## 5. Upload `margince.yaml` (once)
 
 ```bash
 ACCOUNT="$(terraform output -raw storage_account_name)"
 KEY="$(az storage account keys list --account-name "$ACCOUNT" --query '[0].value' -o tsv)"
-cp "$MARGINCE_REPO/config/margince.example.yaml" margince.yaml
+cp ../../../../core/config/margince.example.yaml margince.yaml
 # edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
 # seeds.ai_routing for your LLM provider
 az storage file upload --account-name "$ACCOUNT" --account-key "$KEY" \
@@ -165,31 +208,33 @@ az storage file upload --account-name "$ACCOUNT" --account-key "$KEY" \
 rm margince.yaml
 ```
 
-## 6. Start the apps, bind the domain
+## 6. Start the apps and the gateway
 
 ```bash
+# DNS, in your zone: an A record for the host in public_base_url
+#   crm.example.com  A  $(terraform output -raw public_ip_address)
+
+# The gateway serves the Key Vault certificate public_certificate_name (default
+# public-tls). Import it once, from an operator_ip_allowlist address; renewals
+# are new versions of the same certificate, which the gateway picks up within
+# four hours without an apply.
+az keyvault certificate import --vault-name "$(terraform output -raw key_vault_name)" \
+  -n public-tls -f crm.example.com.pfx --password '<pfx password>'
+
 terraform apply -var deploy_apps=true        # then set it in terraform.tfvars
-
-# DNS, in your zone:
-#   CNAME  crm.example.com        -> $(terraform output -raw public_default_fqdn)
-#   TXT    asuid.crm.example.com  -> $(terraform output -raw custom_domain_verification_id)
-# Zone apex: A record to environment_static_ip, TXT on "asuid".
-# A CAA record, if present, must allow: 0 issue digicert.com
-
-terraform apply -var deploy_apps=true -var bind_custom_domain=true
-# Issues the free managed certificate and binds it. azurerm 4.x has a managed
-# certificate resource, but Azure issues one only for a hostname already on
-# an app, and the binding cannot switch to it in place.
-az containerapp hostname bind -g "$(terraform output -raw resource_group_name)" \
-  -n <name_prefix>-api --hostname crm.example.com \
-  --environment <name_prefix>-env --validation-method CNAME   # HTTP for an apex
 ```
+
+The first apply with `deploy_apps = true` creates the Container Apps, the
+Application Gateway and its WAF diagnostics. The Container Apps environment
+is internal: the api app has no public endpoint, and the gateway reaches it
+over the VNet through a private DNS zone for the environment's domain.
 
 Check the entry point:
 
 ```bash
 curl -s https://crm.example.com/readyz                        # 200 when dependencies are healthy
 curl -s -o /dev/null -w '%{http_code}\n' https://crm.example.com/metrics                   # 404
+curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                          # 301 to HTTPS
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://crm.example.com/v1/auth/login     # 403 outside break-glass
 ```
 
@@ -209,9 +254,40 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://crm.example.com/v1/auth
 
 ## 8. Releases
 
-Build with either path in step 4, set `image_tag` (and optionally
-`image_digests`), `terraform apply` from the jumpbox. api and worker roll
-together; the api startup probe allows five minutes for migrations.
+Follow Section 4 for each new version: `make release VERSION=<v>` (or
+`make package` and a manual push), lock the tags, set `release_version` and
+run `terraform apply` from the jumpbox or an allowlisted machine.
+
+## WAF rollout
+
+`appgw.tf`'s WAF policy, the counterpart of the AWS standard stack's web ACL
+with the same variable names: optional geo allow-list
+(`waf_allowed_country_codes`, default off; the provider webhook paths are
+always exempt), a per-IP rate limit on the credential endpoints
+(`waf_auth_paths`, `waf_auth_rate_limit_per_ip` per 5 minutes), a global
+per-IP rate limit (`waf_rate_limit_per_ip` per 5 minutes) that excludes
+`/webhooks/gmail|graph|hubspot` (HMAC-verified provider traffic from shared
+provider IPs), then the managed rule sets Microsoft Default Rule Set 2.1
+(OWASP-based) and Bot Manager 1.1. Request bodies are inspected up to 2000 KB;
+file uploads are allowed up to 50 MB.
+
+`waf_mode` defaults to `"count"`: the policy runs in Detection mode and the
+custom rules only log. Run like that for about a week of real traffic, then
+review what would have been blocked (Log Analytics):
+
+```kusto
+AGWFirewallLogs
+| where TimeGenerated > ago(7d)
+| where Action in ("Matched", "Detected", "Blocked")
+| summarize hits = count() by RuleId, Message, RequestUri
+| order by hits desc
+```
+
+Add an exclusion or a rule override in `appgw.tf` for each false positive
+(the commented example there), then set `waf_mode = "block"` (Prevention
+mode, custom rules block) and apply. The blocked-requests alert
+(`alarms.tf`) reports spikes in either mode. Diagnostics send the firewall
+and access logs to Log Analytics for `waf_log_retention_days`.
 
 ## Dataverse (optional)
 
@@ -226,9 +302,9 @@ together; the api startup probe allows five minutes for migrations.
 
 ## Redis
 
-Margince needs Redis 7.0 to 7.2. Azure Cache for Redis Basic and Standard
-offer only Redis 6 (and retire on 30 September 2028), so the stack runs the
-same `redis:7.2` image Margince develops against, pinned by digest, as a
+Core pins Redis 7.2 (`redis:7.2@sha256:6461…` in its `docker-compose.dev.yml`).
+Azure Cache for Redis Basic and Standard offer only Redis 6 (and retire on
+30 September 2028), so the stack runs that exact image, as a
 single-replica container app: internal TCP ingress on 6379, password from Key
 Vault, `noeviction` with a `maxmemory` cap, AOF every second on the `redis`
 Azure Files share (soft delete and daily backup). AOF on an SMB share is fine
@@ -241,6 +317,7 @@ Rough list prices in West Europe, per month, before usage-based traffic:
 
 | Item | EUR |
 |---|---|
+| Application Gateway WAF v2 (fixed charge, autoscale from `appgw_min_capacity`) | 250-350 |
 | Container Apps: api (3 replicas), worker, redis | 170-260 |
 | Postgres B_Standard_B2s, 64 GiB, backups | 65 |
 | Container Registry Premium | 45 |
@@ -249,7 +326,7 @@ Rough list prices in West Europe, per month, before usage-based traffic:
 | Log Analytics, flow logs, traffic analytics | 30-50 |
 | Storage (ZRS), Backup, Key Vault | 25-35 |
 | Jumpbox (runs on demand), Bastion Developer (free) | 10-25 |
-| **Total** | **about 410-545** |
+| **Total** | **about 660-895** |
 
 Microsoft recommends General Purpose for production Postgres:
 `db_sku_name = "GP_Standard_D2ds_v5"` adds about EUR 75, and
@@ -259,6 +336,13 @@ Standard C1 (about EUR 87) and its private endpoint (about EUR 7), and the
 third api replica adds about EUR 55.
 
 ## Upgrading an existing deployment
+
+From the version without the gateway: the Container Apps environment becomes
+internal, which Azure applies by replacing the environment and every app in
+it, including the redis app (let the worker drain the outbox first). Import
+the certificate (step 6) and move the DNS record to `public_ip_address` in
+the same window. `image_tag` is now `release_version`, and `bind_custom_domain`
+is removed; a plan that still sets either fails with a message.
 
 This version uses azurerm 4.x. On a stack applied with the 3.x version,
 read the plan before applying: the file shares and blob container now use
@@ -270,13 +354,13 @@ Resource Manager ID; the storage lock also refuses the delete.
 
 ## Security notes
 
-- **Public surface**: the api app's ingress only, served by the edge
-  container. `cmd/api` is reached on localhost; the worker, Redis (internal
+- **Public surface**: the Application Gateway only (WAF v2). The api app's
+  ingress is private, in the internal environment. `cmd/api` is reached on localhost; the worker, Redis (internal
   TCP ingress), Postgres, Key Vault, storage and registry have no public
   endpoint once `operator_ip_allowlist` is empty.
 - **Sign-in**: password login is refused outside `break_glass_cidrs`; the
-  client address comes from Container Apps' rightmost `X-Forwarded-For` entry,
-  so clients cannot spoof it. The edge passes it to `cmd/api` as `X-Real-IP`,
+  client address comes from the rightmost `X-Forwarded-For` entry, which the
+  gateway and Container Apps append, so clients cannot spoof it. The edge passes it to `cmd/api` as `X-Real-IP`,
   which the api trusts only from `127.0.0.1` (`MARGINCE_TRUSTED_PROXIES`).
 - **Secrets**: each app identity may read only the Key Vault secrets its
   process uses. The api app's identities are also available to its edge
@@ -301,23 +385,20 @@ Resource Manager ID; the storage lock also refuses the delete.
 - **Locks**: `CanNotDelete` locks on Postgres, storage, Key Vault, the
   Recovery Services vault and the registry (`enable_resource_locks`). Set it
   to `false` and apply before `terraform destroy`.
-- **Images**: build scripts lock pushed tags; `image_digests` pins releases.
-  Limit who can run commands on the jumpbox VM.
+- **Images**: `make release` images, tags locked after the push (Section 4);
+  `image_digests` pins releases. Limit who can run commands on the jumpbox VM.
 - **Storage key**: Azure Files SMB mounts need the account key, which is in
   state and in the environment's storage configuration. Rotate it with the
   secondary key on a schedule.
 
 ## Known limitations
 
-- **No managed WAF rule set.** Add Azure Front Door in front of the api app
-  if edge DDoS absorption, country filtering or managed OWASP rules become a
-  requirement.
 - **Attachments on Azure Files.** Margince stores attachments with its
   filesystem store on the `attachments` share until a native Azure Blob
   adapter exists. Upload and read back one attachment after the first
   deploy.
 - **nginx config is a copy.** `templates/edge-nginx.conf.tftpl`
-  replaces the web image's `frontend/nginx.conf` (Margince repository); keep
+  replaces the web image's `frontend/nginx.conf` (core); keep
   their SPA locations in step.
 - **Content-Security-Policy is report-only** until the SPA has been checked
   against it.
@@ -348,7 +429,7 @@ Resource Manager ID; the storage lock also refuses the delete.
 ## Tests
 
 ```bash
-cd standard
+cd deploy/production/azure/standard
 terraform init -backend=false
 terraform validate
 terraform test          # offline plan checks with mocked providers (tests/)

@@ -6,14 +6,16 @@ resource "azurerm_container_app_environment" "this" {
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
   infrastructure_subnet_id   = azurerm_subnet.containerapps.id
 
-  # External: the environment gets a public load balancer, but only apps with
-  # external_enabled ingress are reachable through it, and that is the api app
-  # alone, through its edge (nginx) container. worker has no ingress. There is
-  # no gateway in front (templates/edge-nginx.conf.tftpl).
+  # Internal: the environment's load balancer has a private IP in the
+  # containerapps subnet and no public endpoint. The Application Gateway
+  # (appgw.tf) is the only public entry; it reaches the api app's ingress
+  # over the VNet, and appgw.tf's private DNS zone resolves the
+  # environment's default domain to that IP. worker has no ingress.
   #
-  # This setting cannot change in place: changing it replaces the
-  # environment and both apps.
-  internal_load_balancer_enabled = false
+  # This setting cannot change in place: changing it from false (earlier
+  # versions of this stack) replaces the environment and every app in it
+  # (README.md, "Upgrading an existing deployment").
+  internal_load_balancer_enabled = true
 
   # Zone redundancy needs the environment's subnet at creation time
   # (network.tf's azurerm_subnet.containerapps, /23).
@@ -142,10 +144,10 @@ locals {
     edge_port         = local.edge_port
     api_port          = local.api_port
     envoy_cidr        = azurerm_subnet.containerapps.address_prefixes[0]
+    appgw_cidr        = azurerm_subnet.appgw.address_prefixes[0]
     break_glass_cidrs = var.break_glass_cidrs
     auth_rate         = var.auth_rate_limit_per_minute
     public_host       = local.public_host
-    redirect_default  = var.bind_custom_domain
   })
 }
 
@@ -196,10 +198,12 @@ resource "azurerm_container_app" "api" {
     }
   }
 
-  # The one public ingress in the stack. It targets the edge container, never
+  # The Application Gateway's backend (appgw.tf). external_enabled makes the
+  # ingress reachable from the VNet; the environment is internal, so nothing
+  # outside the VNet reaches it. It targets the edge container, never
   # cmd/api directly: edge serves the SPA, applies the break-glass and rate
-  # rules, and forwards api paths to cmd/api on localhost. TLS ends at the
-  # environment's edge; HTTP is redirected to HTTPS.
+  # rules, and forwards api paths to cmd/api on localhost. The gateway
+  # connects over HTTPS; HTTP is redirected to HTTPS.
   ingress {
     external_enabled           = true
     target_port                = local.edge_port
@@ -477,21 +481,4 @@ resource "azurerm_container_app" "worker" {
     azurerm_private_dns_zone_virtual_network_link.storage_file,
     azurerm_postgresql_flexible_server_configuration.azure_extensions,
   ]
-}
-
-# public_base_url's host on the api app (the public ingress). Two-phase
-# (variables.tf, bind_custom_domain): the DNS records must exist first. The
-# managed certificate is issued by `az containerapp hostname bind`
-# (README.md). azurerm 4.x has a managed certificate resource, but Azure only
-# issues one for a hostname already added to an app, and this resource cannot
-# switch to the certificate in place, so doing it in Terraform takes a third
-# apply that replaces the binding. The certificate fields are ignored here.
-resource "azurerm_container_app_custom_domain" "public" {
-  count            = var.deploy_apps && var.bind_custom_domain ? 1 : 0
-  name             = local.public_host
-  container_app_id = azurerm_container_app.api[0].id
-
-  lifecycle {
-    ignore_changes = [certificate_binding_type, container_app_environment_certificate_id]
-  }
 }

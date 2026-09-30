@@ -9,6 +9,9 @@ mock_provider "azurerm" {
   }
 
   # Resource IDs in the shape the provider validates, for the mocked apply.
+  mock_resource "azurerm_resource_group" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light" }
+  }
   mock_resource "azurerm_virtual_network" {
     defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Network/virtualNetworks/vnet" }
   }
@@ -24,14 +27,8 @@ mock_provider "azurerm" {
   mock_resource "azurerm_network_interface" {
     defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Network/networkInterfaces/nic" }
   }
-  mock_resource "azurerm_private_dns_zone" {
-    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Network/privateDnsZones/margince.postgres.database.azure.com" }
-  }
   mock_resource "azurerm_linux_virtual_machine" {
-    defaults = {
-      id       = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Compute/virtualMachines/vm"
-      identity = { principal_id = "00000000-0000-0000-0000-000000000004", tenant_id = "00000000-0000-0000-0000-000000000001" }
-    }
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Compute/virtualMachines/vm" }
   }
   mock_resource "azurerm_managed_disk" {
     defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Compute/disks/data" }
@@ -45,11 +42,8 @@ mock_provider "azurerm" {
   mock_resource "azurerm_backup_policy_vm" {
     defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.RecoveryServices/vaults/rsv/backupPolicies/daily" }
   }
-  mock_resource "azurerm_postgresql_flexible_server" {
-    defaults = {
-      id   = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.DBforPostgreSQL/flexibleServers/db"
-      fqdn = "margince-abcde-db.postgres.database.azure.com"
-    }
+  mock_resource "azurerm_monitor_action_group" {
+    defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Insights/actionGroups/alerts" }
   }
 }
 mock_provider "azuread" {
@@ -94,63 +88,192 @@ mock_provider "random" {}
 mock_provider "time" {}
 
 variables {
-  bootstrap_admin_email        = "admin@example.com"
+  domain                       = "crm.example.com"
   license_token                = "test-licence"
   entra_access_group_object_id = "00000000-0000-0000-0000-0000000000aa"
   admin_ssh_public_key         = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/vUmkEV7lfFP7t36rOoMbvwoNzx4r0gfQKltPmyKTIC6WILJaitH79JH2yJXHb8ePibRalweus+EV/EPKn0oUrOzjVsjVzMef9Rz5CoAovRnDe6z2+y84XnjlIeN5b58NkeBaliOlFv36enIfMluv/sOMHTjfBwbCooF+ChwYnz9p20V5y0DFe/axStpcKcmHW7RfRuijO+vxC+te9mhCbLdN1sJm6qC9pSeADHSDH/swyDK6l1526/+NJqHfryRbhuQ8uPDL7pT14Z02AFnvIMvYhvSomi4Kag9aFQLFmm2Jd1Yz6lERFj4i6+51WvD/ZPmC7OER6N09qlUdXo3qx8Amf472GAQl9VhVHtolycBNtKehQomHLNuBffSIiarnOH5hYwLQEBD3ixah4xbXlmDAb9p+Ub31ppEv9ZLA2YebcRPzUfy/bvBLxysWAJTSwrnTvP0/bJW4Egqa37prx8MQRQkB/yRiET3I3DHFlLDsSnKQnEYSEBmvvLvxE6s= test"
-  break_glass_cidrs            = ["203.0.113.10/32"]
-  operator_ip_allowlist        = ["203.0.113.20"]
+  ssh_allowed_cidrs            = ["203.0.113.10/32", "198.51.100.0/24"]
 }
 
-run "first_plan" {
+run "single_ubuntu_vm" {
   command = plan
   assert {
-    condition     = length(azurerm_bastion_host.developer) == 1
-    error_message = "Bastion Developer is on by default."
+    condition = (
+      azurerm_linux_virtual_machine.this.source_image_reference[0].publisher == "Canonical" &&
+      azurerm_linux_virtual_machine.this.source_image_reference[0].offer == "ubuntu-24_04-lts" &&
+      azurerm_linux_virtual_machine.this.source_image_reference[0].sku == "server"
+    )
+    error_message = "The VM runs Canonical Ubuntu 24.04 LTS server."
   }
   assert {
-    condition     = contains(keys(local.kv_secrets), "margince-license") && local.secret_env["MARGINCE_LICENSE"] == "margince-license"
-    error_message = "A licence token is stored and passed to the services."
+    condition     = azurerm_linux_virtual_machine.this.size == "Standard_B2ms" && azurerm_linux_virtual_machine.this.admin_username == "azureadmin" && azurerm_linux_virtual_machine.this.disable_password_authentication
+    error_message = "One Standard_B2ms VM, admin user azureadmin, key login only."
   }
-  assert {
-    condition     = local.app_env["MARGINCE_REDIS"] == "127.0.0.1:6379" && local.app_env["MARGINCE_TRUSTED_PROXIES"] == "127.0.0.1/32" && !contains(keys(local.app_env), "MARGINCE_ENV")
-    error_message = "Loopback Redis, trusted loopback proxy, production posture."
-  }
-  assert {
-    condition     = azurerm_postgresql_flexible_server.this.public_network_access_enabled == false && azurerm_postgresql_flexible_server.this.sku_name == "B_Standard_B1ms"
-    error_message = "Postgres is VNet-only and on the cheapest SKU."
-  }
-}
-
-run "platform_hardening" {
-  command = plan
   assert {
     condition     = azurerm_linux_virtual_machine.this.secure_boot_enabled && azurerm_linux_virtual_machine.this.vtpm_enabled && azurerm_linux_virtual_machine.this.encryption_at_host_enabled
     error_message = "Trusted Launch and encryption at host are on."
   }
   assert {
-    condition     = azurerm_linux_virtual_machine.this.patch_mode == "AutomaticByPlatform" && azurerm_linux_virtual_machine.this.reboot_setting == "IfRequired"
-    error_message = "Azure orchestrates guest patching."
-  }
-  assert {
-    condition     = azurerm_key_vault.this.rbac_authorization_enabled && azurerm_key_vault.this.network_acls[0].default_action == "Deny"
-    error_message = "Key Vault is RBAC-only and its firewall denies by default."
-  }
-  assert {
-    condition     = azurerm_postgresql_flexible_server.this.auto_grow_enabled && azurerm_postgresql_flexible_server_configuration.connection_throttle.value == "on" && azurerm_postgresql_flexible_server_configuration.ssl_min_protocol_version.value == "TLSv1.2"
-    error_message = "Postgres auto-grows storage, throttles failed logins and requires TLS 1.2+."
-  }
-  assert {
-    condition     = length(azurerm_recovery_services_vault.this) == 1
-    error_message = "VM backup is on by default: the data disk has no other copy."
-  }
-  assert {
-    condition     = azurerm_linux_virtual_machine.this.admin_username != "margince"
-    error_message = "The SSH admin is not the service user margince."
+    condition     = azurerm_public_ip.vm.allocation_method == "Static" && azurerm_public_ip.vm.sku == "Standard"
+    error_message = "The public IP is static."
   }
 }
 
-run "admin_cannot_be_service_user" {
+run "firewall" {
+  command = plan
+  assert {
+    condition = one([
+      for r in azurerm_network_security_group.vm.security_rule : r
+      if r.access == "Allow" && r.destination_port_range == "22"
+    ]).source_address_prefixes == toset(["203.0.113.10/32", "198.51.100.0/24"])
+    error_message = "SSH is allowed from ssh_allowed_cidrs only."
+  }
+  assert {
+    condition = one([
+      for r in azurerm_network_security_group.vm.security_rule : r
+      if r.name == "AllowHttpHttpsFromInternet"
+    ]).destination_port_ranges == toset(["80", "443"]) && one([for r in azurerm_network_security_group.vm.security_rule : r if r.name == "AllowHttpHttpsFromInternet"]).source_address_prefix == "Internet"
+    error_message = "80 and 443 are open to the internet."
+  }
+  assert {
+    condition     = anytrue([for r in azurerm_network_security_group.vm.security_rule : r.access == "Deny" && r.destination_port_range == "22" && r.source_address_prefix == "*"])
+    error_message = "Every other SSH source is denied."
+  }
+  assert {
+    condition     = azurerm_key_vault.this.network_acls[0].default_action == "Deny" && toset(azurerm_key_vault.this.network_acls[0].ip_rules) == toset(["203.0.113.10", "198.51.100.0/24"])
+    error_message = "The Key Vault firewall admits ssh_allowed_cidrs only, /32 as a single address."
+  }
+}
+
+run "data_disk" {
+  command = plan
+  assert {
+    condition     = azurerm_managed_disk.data.disk_size_gb == 64 && azurerm_virtual_machine_data_disk_attachment.data.lun == 0
+    error_message = "A 64 GB data disk on LUN 0."
+  }
+  assert {
+    condition     = strcontains(regex("resource \"azurerm_managed_disk\" \"data\" \\{((?s:.*?))\\n\\}", file("${path.module}/vm.tf"))[0], "prevent_destroy = true")
+    error_message = "The data disk has prevent_destroy."
+  }
+  assert {
+    condition = alltrue([
+      strcontains(local.cloud_init, "mount_point=/var/lib/docker"),
+      strcontains(local.cloud_init, "/dev/disk/azure/scsi1/lun0"),
+      strcontains(local.cloud_init, "nofail"),
+      strcontains(local.cloud_init, "UUID=$uuid"),
+      strcontains(local.cloud_init, "RequiresMountsFor=/var/lib/docker"),
+      strcontains(local.cloud_init, "$host_src $host_root none bind,nofail"),
+      strcontains(local.cloud_init, "host_root=/opt/margince"),
+      strcontains(local.cloud_init, "admin_user=\"azureadmin\""),
+      !strcontains(local.cloud_init, "docker-ce"),
+      !strcontains(local.cloud_init, "nginx"),
+      !strcontains(local.cloud_init, "git clone"),
+    ])
+    error_message = "cloud-init only mounts the data disk at /var/lib/docker by UUID with nofail."
+  }
+  assert {
+    condition     = azurerm_linux_virtual_machine.this.custom_data == base64encode(local.cloud_init)
+    error_message = "The VM boots with the cloud-init document."
+  }
+}
+
+run "backup_and_alarms_default_on" {
+  command = plan
+  assert {
+    condition     = length(azurerm_backup_protected_vm.this) == 1 && azurerm_backup_policy_vm.daily[0].retention_daily[0].count == 7
+    error_message = "Daily backup with 7-day retention is on by default."
+  }
+  assert {
+    condition     = length(azurerm_monitor_metric_alert.vm_unavailable) == 1 && length(azurerm_monitor_metric_alert.cpu_high) == 1
+    error_message = "The alerts are on by default."
+  }
+  assert {
+    condition     = azurerm_monitor_metric_alert.cpu_high[0].criteria[0].threshold == 90 && azurerm_monitor_metric_alert.cpu_high[0].window_size == "PT15M"
+    error_message = "CPU alert: over 90% for 15 minutes."
+  }
+  assert {
+    condition     = azurerm_monitor_metric_alert.vm_unavailable[0].criteria[0].metric_name == "VmAvailabilityMetric" && azurerm_monitor_metric_alert.vm_unavailable[0].window_size == "PT5M"
+    error_message = "Availability alert: unavailable for 5 minutes."
+  }
+}
+
+run "backup_and_alarms_off" {
+  command = plan
+  variables {
+    enable_backup = false
+    enable_alarms = false
+  }
+  assert {
+    condition     = length(azurerm_recovery_services_vault.this) == 0 && length(azurerm_monitor_action_group.alerts) == 0
+    error_message = "enable_backup and enable_alarms turn the resources off."
+  }
+}
+
+run "outputs" {
+  command = apply
+  assert {
+    condition     = output.host_env == "HOST_SSH=azureadmin@198.51.100.7\nHOST_DOMAIN=crm.example.com\n"
+    error_message = "host_env holds HOST_SSH and HOST_DOMAIN."
+  }
+  assert {
+    condition     = output.dns_record == "crm.example.com A 198.51.100.7" && output.public_ip == "198.51.100.7"
+    error_message = "dns_record points domain at the public IP."
+  }
+  assert {
+    condition     = strcontains(output.ssh_known_hosts_hint, "ssh-keyscan -t ed25519 198.51.100.7") && strcontains(output.ssh_known_hosts_hint, "HOST_KNOWN_HOSTS")
+    error_message = "ssh_known_hosts_hint reads the host key of the public IP."
+  }
+  assert {
+    condition     = output.secret_names == tolist(["MARGINCE_GRAPH_CLIENT_ID", "MARGINCE_GRAPH_CLIENT_SECRET", "MARGINCE_GRAPH_TENANT", "MARGINCE_LICENSE", "MARGINCE_MICROSOFT_SIGNIN_TENANT"])
+    error_message = "secret_names lists the Entra values and the license."
+  }
+  assert {
+    condition     = contains(keys(azurerm_key_vault_secret.this), "margince-license") && contains(keys(azurerm_key_vault_secret.this), "margince-entra-client-secret")
+    error_message = "Key Vault holds the license and the Entra client secret."
+  }
+}
+
+run "no_license" {
+  command = plan
+  variables {
+    license_token = ""
+  }
+  assert {
+    condition     = !contains(keys(local.kv_secrets), "margince-license") && !contains(output.secret_names, "MARGINCE_LICENSE")
+    error_message = "Without a license no license secret is stored or listed."
+  }
+}
+
+run "empty_ssh_allowed_cidrs_refused" {
+  command = plan
+  variables {
+    ssh_allowed_cidrs = []
+  }
+  expect_failures = [var.ssh_allowed_cidrs]
+}
+
+run "ssh_from_anywhere_refused" {
+  command = plan
+  variables {
+    ssh_allowed_cidrs = ["0.0.0.0/0"]
+  }
+  expect_failures = [var.ssh_allowed_cidrs]
+}
+
+run "ssh_from_anywhere_explicit" {
+  command = plan
+  variables {
+    ssh_allowed_cidrs       = ["0.0.0.0/0"]
+    allow_ssh_from_anywhere = true
+    key_vault_allowed_cidrs = ["203.0.113.10/32"]
+  }
+  assert {
+    condition     = azurerm_key_vault.this.network_acls[0].ip_rules == toset(["203.0.113.10"])
+    error_message = "0.0.0.0/0 never reaches the Key Vault firewall."
+  }
+}
+
+run "admin_user_not_margince" {
   command = plan
   variables {
     admin_username = "margince"
@@ -158,109 +281,36 @@ run "admin_cannot_be_service_user" {
   expect_failures = [var.admin_username]
 }
 
-run "vm_backup" {
+run "removed_variables_refused" {
   command = plan
   variables {
-    enable_vm_backup = true
+    enable_vm_backup         = true
+    azure_region             = "westeurope"
+    operator_ip_allowlist    = ["203.0.113.20"]
+    public_hostname          = "crm.example.com"
+    margince_git_ref         = "main"
+    bootstrap_admin_email    = "admin@example.com"
+    environment_posture      = "production"
+    enable_bastion_developer = true
+    db_sku_name              = "B_Standard_B1ms"
   }
-  assert {
-    condition     = azurerm_backup_policy_vm.daily[0].policy_type == "V2" && azurerm_backup_policy_vm.daily[0].retention_daily[0].count == 7
-    error_message = "Trusted Launch needs an Enhanced (V2) policy; daily, 7 days."
-  }
-  assert {
-    condition     = length(azurerm_backup_protected_vm.this) == 1
-    error_message = "The VM is protected."
-  }
+  expect_failures = [
+    var.enable_vm_backup,
+    var.azure_region,
+    var.operator_ip_allowlist,
+    var.public_hostname,
+    var.margince_git_ref,
+    var.bootstrap_admin_email,
+    var.environment_posture,
+    var.enable_bastion_developer,
+    var.db_sku_name,
+  ]
 }
 
-run "empty_operator_allowlist_is_refused" {
+run "entra_group_required" {
   command = plan
   variables {
-    operator_ip_allowlist = []
+    entra_access_group_object_id = ""
   }
-  expect_failures = [var.operator_ip_allowlist]
-}
-
-run "nginx_renders_break_glass_rule" {
-  command = plan
-  assert {
-    condition     = strcontains(local.nginx_conf, "203.0.113.10/32 1;") && strcontains(local.nginx_conf, "if ($block_password_login) { return 403; }")
-    error_message = "Password login is limited to break_glass_cidrs."
-  }
-  assert {
-    condition     = strcontains(local.nginx_conf, "location = /metrics { return 404; }") && strcontains(local.nginx_conf, "proxy_set_header X-Forwarded-For $remote_addr;")
-    error_message = "/metrics is hidden and X-Forwarded-For is overwritten."
-  }
-  assert {
-    condition     = strcontains(local.nginx_conf, "rate=30r/m")
-    error_message = "Auth paths are rate limited."
-  }
-  assert {
-    condition     = strcontains(local.nginx_conf, "ssl_protocols TLSv1.2 TLSv1.3;") && strcontains(local.nginx_conf, "ssl_session_tickets off;") && strcontains(local.nginx_conf, "ECDHE-ECDSA-AES128-GCM-SHA256:")
-    error_message = "TLS follows Mozilla intermediate."
-  }
-}
-
-run "custom_hostname" {
-  command = plan
-  variables {
-    public_hostname = "crm.example.com"
-  }
-  assert {
-    condition     = local.public_base_url == "https://crm.example.com" && contains(local.entra_redirect_uris, "https://crm.example.com/v1/auth/oidc/microsoft/callback")
-    error_message = "public_hostname drives the base URL and the Entra redirect URIs."
-  }
-}
-
-run "production_without_licence_is_refused" {
-  command = plan
-  variables {
-    license_token = ""
-  }
-  expect_failures = [terraform_data.posture]
-}
-
-run "development_posture_boots_unlicensed" {
-  command = plan
-  variables {
-    license_token       = ""
-    environment_posture = "development"
-  }
-  assert {
-    condition     = local.app_env["MARGINCE_ENV"] == "dev" && !contains(keys(local.kv_secrets), "margince-license")
-    error_message = "Development posture sets MARGINCE_ENV=dev and stores no empty licence."
-  }
-}
-
-run "ed25519_key_is_accepted" {
-  command = plan
-  variables {
-    admin_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl test"
-  }
-}
-
-run "ecdsa_key_is_refused" {
-  command = plan
-  variables {
-    admin_ssh_public_key = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY= test"
-  }
-  expect_failures = [var.admin_ssh_public_key]
-}
-
-# Mocked apply, so every value is known: custom_data stays under Azure's
-# 64 KB limit.
-run "custom_data_fits" {
-  command = apply
-  assert {
-    condition     = length(base64encode(local.cloud_init)) < 65535
-    error_message = "custom_data exceeds 64 KB."
-  }
-  assert {
-    condition     = length(yamldecode(local.cloud_init).write_files) == length(local.vm_files)
-    error_message = "cloud-init renders as valid YAML with every file."
-  }
-  assert {
-    condition     = azurerm_key_vault.this.network_acls[0].ip_rules == toset(["203.0.113.20", "198.51.100.7"])
-    error_message = "Only the operators and the VM's public IP pass the Key Vault firewall."
-  }
+  expect_failures = [terraform_data.entra_inputs]
 }

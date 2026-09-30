@@ -11,7 +11,10 @@
 #                     (/v1/auth/oidc/microsoft/*), pinned to this tenant by
 #                     MARGINCE_MICROSOFT_SIGNIN_TENANT.
 #   Mailbox capture   the Graph connector, same app and secret
-#                     (MARGINCE_GRAPH_CLIENT_ID/SECRET, cmd/api/config.go).
+#                     (MARGINCE_GRAPH_CLIENT_ID/SECRET).
+#
+# make deploy passes the four values to the api and worker: list their names
+# in deploy/production/secrets (outputs secret_names and secret_exports).
 #
 # Dataverse server-to-server access is out of scope for this stack.
 
@@ -129,9 +132,8 @@ resource "azuread_application_password" "margince" {
     rotation = time_rotating.entra_secret[0].id
   }
 
-  # The new secret exists before the old one is removed. The VM reads it
-  # from Key Vault when its services restart (README.md, "Entra secret
-  # rotation").
+  # The new secret exists before the old one is removed. Run make deploy
+  # with the new value (README.md, "Entra secret rotation").
   lifecycle {
     create_before_destroy = true
   }

@@ -1,44 +1,17 @@
-# One Ubuntu 24.04 VM runs everything: nginx (TLS, SPA, reverse proxy),
-# margince-api, margince-worker and Redis, all native under systemd. Margince
-# is built from source at first boot (modules/vm-config/templates/scripts/margince-build.sh).
+# One Ubuntu 24.04 VM. Terraform creates the machine only; the host adapter
+# deploys Margince to it (make host-bootstrap, make deploy). cloud-init only
+# mounts the data disk at /var/lib/docker (templates/cloud-init.yaml.tftpl).
 #
-# Changing anything rendered into custom_data (nginx rules, workspace
-# settings, git ref) replaces the VM. The data disk, public IP, Key Vault and
-# Postgres stay; the new VM rebuilds and reattaches in about 20 minutes. To
-# upgrade Margince without replacing the VM, run `sudo margince-build <ref>`.
-
-module "vm_config" {
-  source = "./modules/vm-config"
-
-  key_vault_name             = azurerm_key_vault.this.name
-  pg_host                    = azurerm_postgresql_flexible_server.this.fqdn
-  public_host                = local.public_host
-  public_base_url            = local.public_base_url
-  azure_fqdn                 = local.azure_fqdn
-  git_url                    = var.margince_git_url
-  git_ref                    = var.margince_git_ref
-  acme_email                 = var.acme_email
-  workspace_name             = var.workspace_name
-  workspace_base_currency    = var.workspace_base_currency
-  workspace_base_language    = var.workspace_base_language
-  workspace_timezone         = var.workspace_timezone
-  admin_email                = var.bootstrap_admin_email
-  admin_display_name         = var.bootstrap_admin_display_name
-  entra_client_id            = local.entra_client_id
-  entra_tenant_id            = local.entra_tenant_id
-  environment_posture        = var.environment_posture
-  include_bootstrap_admin    = var.include_bootstrap_admin
-  license_present            = nonsensitive(length(var.license_token) > 0)
-  break_glass_cidrs          = var.break_glass_cidrs
-  auth_rate_limit_per_minute = var.auth_rate_limit_per_minute
-}
+# A change of custom_data replaces the VM. The data disk and the public IP
+# stay; run make host-bootstrap and make deploy again afterwards.
 
 locals {
-  cloud_init = module.vm_config.cloud_init
-  nginx_conf = module.vm_config.nginx_conf
-  app_env    = module.vm_config.app_env
-  secret_env = module.vm_config.secret_env
-  vm_files   = module.vm_config.vm_files
+  # Azure's udev rules name the data disk by LUN: the first path on images
+  # with azure-vm-utils (NVMe and SCSI), the second on older images.
+  cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
+    disk_paths = "/dev/disk/azure/data/by-lun/0 /dev/disk/azure/scsi1/lun0"
+    admin_user = var.admin_username
+  })
 }
 
 resource "azurerm_network_interface" "vm" {
@@ -70,12 +43,13 @@ resource "azurerm_linux_virtual_machine" "this" {
   secure_boot_enabled = true
   vtpm_enabled        = true
 
-  # Temp disk and OS/data disk caches encrypted on the host; needs the
-  # EncryptionAtHost feature registered on the subscription (README.md).
+  # Temp disk and disk caches encrypted on the host; needs the
+  # EncryptionAtHost feature on the subscription (README.md).
   encryption_at_host_enabled = var.encryption_at_host
 
   # Azure-orchestrated guest patching: critical and security updates outside
-  # peak hours, reboot only when an update needs one.
+  # peak hours, reboot only when an update needs one. The containers restart
+  # after a reboot (restart: unless-stopped).
   patch_mode            = "AutomaticByPlatform"
   patch_assessment_mode = "AutomaticByPlatform"
   reboot_setting        = "IfRequired"
@@ -98,30 +72,9 @@ resource "azurerm_linux_virtual_machine" "this" {
     version   = "latest"
   }
 
-  identity {
-    type = "SystemAssigned"
-  }
-
-  # Managed boot diagnostics: serial console and boot screenshots.
+  # Managed boot diagnostics: serial console, boot log (the SSH host key
+  # fingerprints, see the ssh_known_hosts_hint output).
   boot_diagnostics {}
-
-  # First boot reads the secrets and bootstraps the database, so both must
-  # exist. The Key Vault role assignment needs the VM's identity and follows
-  # it; margince-setup waits for it to take effect.
-  depends_on = [
-    azurerm_key_vault_secret.this,
-    azurerm_postgresql_flexible_server_configuration.azure_extensions,
-    azurerm_postgresql_flexible_server_configuration.require_secure_transport,
-    azurerm_postgresql_flexible_server_configuration.ssl_min_protocol_version,
-    azurerm_postgresql_flexible_server_configuration.connection_throttle,
-  ]
-
-  lifecycle {
-    precondition {
-      condition     = length(base64encode(local.cloud_init)) <= 65535
-      error_message = "custom_data exceeds Azure's 64 KB limit."
-    }
-  }
 }
 
 resource "azurerm_managed_disk" "data" {
@@ -134,8 +87,8 @@ resource "azurerm_managed_disk" "data" {
   tags                 = local.common_tags
 
   lifecycle {
-    # Holds attachments, margince.yaml, certificates and the Redis AOF.
-    # Remove this line on purpose to allow a replacement.
+    # Holds /var/lib/docker: the database, Redis, the files and the
+    # certificates. Remove this line on purpose to allow a replacement.
     prevent_destroy = true
   }
 }

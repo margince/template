@@ -1,0 +1,80 @@
+#cloud-config
+# The only first-boot task: format (when empty) and mount the data disk at
+# /var/lib/docker, before `make host-bootstrap` installs Docker. Every Docker
+# volume (postgres, redis, blobs, caddy) then lives on the data disk and
+# survives a replacement of the virtual machine. /opt/margince, the parent of
+# the host adapter's default HOST_DIR (shared/instance.env, shared/data.env),
+# is a bind mount of a directory on the same disk, owned by the SSH user.
+# The same file serves the Azure and the AWS light stack; only the disk paths
+# and the user differ.
+write_files:
+  - path: /usr/local/sbin/margince-data-disk
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Idempotent. Formats the data disk only when it has no filesystem and
+      # no partition table, and mounts it by UUID with nofail.
+      set -eu
+      mount_point=/var/lib/docker
+      host_root=/opt/margince
+      host_src=/var/lib/docker/margince-host
+      admin_user="${admin_user}"
+      candidates="${disk_paths}"
+      dev=""
+      tries=0
+      # The disk is attached after the machine is created: wait up to 10 minutes.
+      while [ -z "$dev" ] && [ "$tries" -lt 120 ]; do
+        for c in $candidates; do
+          if [ -b "$c" ]; then
+            dev="$(readlink -f "$c")"
+            break
+          fi
+        done
+        if [ -z "$dev" ]; then
+          tries=$((tries + 1))
+          sleep 5
+        fi
+      done
+      if [ -z "$dev" ]; then
+        echo "margince-data-disk: no data disk at $candidates after 10 minutes" >&2
+        exit 1
+      fi
+      fstype="$(blkid -o value -s TYPE "$dev" || true)"
+      pttype="$(blkid -o value -s PTTYPE "$dev" || true)"
+      if [ -z "$fstype" ] && [ -n "$pttype" ]; then
+        echo "margince-data-disk: $dev has a partition table and no filesystem; not formatting it" >&2
+        exit 1
+      fi
+      if [ -z "$fstype" ]; then
+        mkfs.ext4 -q -L margince-data "$dev"
+        fstype=ext4
+      fi
+      uuid="$(blkid -o value -s UUID "$dev")"
+      if ! mountpoint -q "$mount_point"; then
+        if [ -d "$mount_point" ] && [ -n "$(ls -A "$mount_point")" ]; then
+          echo "margince-data-disk: $mount_point is not empty; Docker was installed before the data disk was mounted" >&2
+          exit 1
+        fi
+        mkdir -p "$mount_point"
+      fi
+      awk -v m="$mount_point" -v h="$host_root" '$2 != m && $2 != h' /etc/fstab > /etc/fstab.margince
+      echo "UUID=$uuid $mount_point $fstype defaults,nofail,x-systemd.device-timeout=60s 0 2" >> /etc/fstab.margince
+      echo "$host_src $host_root none bind,nofail,x-systemd.requires-mounts-for=$mount_point 0 0" >> /etc/fstab.margince
+      cat /etc/fstab.margince > /etc/fstab
+      rm -f /etc/fstab.margince
+      systemctl daemon-reload
+      mountpoint -q "$mount_point" || mount "$mount_point"
+      mkdir -p "$host_src" "$host_root"
+      chown "$admin_user:" "$host_src"
+      chmod 750 "$host_src"
+      mountpoint -q "$host_root" || mount "$host_root"
+      echo "margince-data-disk: $dev ($uuid) mounted at $mount_point, $host_src at $host_root"
+  # Docker starts only when /var/lib/docker is mounted, so it never writes
+  # to the OS disk when the data disk is missing.
+  - path: /etc/systemd/system/docker.service.d/10-margince-data-disk.conf
+    permissions: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor=/var/lib/docker
+runcmd:
+  - [/usr/local/sbin/margince-data-disk]

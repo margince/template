@@ -13,13 +13,11 @@ locals {
   flat_prefix   = replace(var.name_prefix, "-", "")
   global_prefix = "${var.name_prefix}-${local.suffix}"
 
-  # Images by digest when image_digests names one (immutable), otherwise by
-  # image_tag (locked read-only by the build scripts after push).
+  # The images `make release VERSION=<release_version>` pushes with REGISTRY
+  # set to this registry's login server (docs/release.md, Section 6).
+  # README.md, "Releases", locks each released tag read-only.
   images = {
-    for role in ["api", "worker", "web"] : role => (
-      lookup(var.image_digests, role, "") != ""
-      ? "${azurerm_container_registry.this.login_server}/${role}@${var.image_digests[role]}"
-      : "${azurerm_container_registry.this.login_server}/${role}:${var.image_tag}"
-    )
+    for role in ["api", "worker", "web"] :
+    role => "${azurerm_container_registry.this.login_server}/${var.instance_name}/${role}:${var.release_version}"
   }
 }

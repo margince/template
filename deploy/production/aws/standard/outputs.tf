@@ -18,6 +18,16 @@ output "ecr_web_repository_url" {
   value = aws_ecr_repository.web.repository_url
 }
 
+output "registry" {
+  description = "The REGISTRY value for `make release` and `make package` (docs/release.md, Section 5): this account's ECR registry host."
+  value       = split("/", aws_ecr_repository.api.repository_url)[0]
+}
+
+output "image_refs" {
+  description = "The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>."
+  value       = local.images
+}
+
 output "rds_endpoint" {
   value = aws_db_instance.this.address
 }

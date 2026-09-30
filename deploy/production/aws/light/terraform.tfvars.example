@@ -1,38 +1,27 @@
-# Copy to terraform.tfvars and fill in the values with no default below.
+# Copy to terraform.tfvars (git-ignored) and fill in.
 
-# ---- Required, no default ----------------------------------------------------
+# ---- Required -------------------------------------------------------------------
 
-# MARGINCE_PUBLIC_BASE_URL. DNS for this host eventually CNAMEs to
-# cloudfront_domain_name (see README) — ACM's own DNS validation
-# (cloudfront.tf) is a separate, earlier manual step.
-public_base_url = "https://crm.example.com"
+# The public host name. Create its A record for the public_ip output.
+domain = "crm.example.com"
 
-# MARGINCE_ADMIN_PASSWORD for the first boot. Rotate/remove per
-# docs/deployment.md once the organization exists.
-admin_bootstrap_password = "change-me-before-first-boot"
+# ssh-keygen -t ed25519 (RSA is also accepted).
+admin_ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 
-# A real release version — a git SHA, MARGINCE_RELEASE_VERSION, anything but
-# "latest". No default on purpose: picking a floating tag is an operator
-# decision this stack should not make silently.
-image_tag = "2026.09.01"
+# The addresses that run make host-bootstrap and make deploy.
+ssh_allowed_cidrs = ["203.0.113.10/32"]
 
-# ---- Optional — shown with their defaults ------------------------------------
+# ---- Optional, shown with their defaults ------------------------------------------
 
-# aws_region                    = "eu-central-1"
-# name_prefix                   = "margince-light"
-# environment                   = "production"  # stamped as the Environment tag on every resource
-# vpc_cidr                      = "10.30.0.0/16"
-# az_count                      = 2
-# cpu_architecture               = "arm64"  # or "x86_64" if you're not on Graviton
-# instance_type                  = "t4g.small"  # shared across edge/app/worker
-# root_volume_gb                 = 40           # shared across edge/app/worker
-# db_instance_class               = "db.t4g.micro"
-# db_allocated_storage_gb         = 20
-# db_engine_version               = "16"
-# db_backup_retention_days        = 3
-# db_deletion_protection          = true   # set false and apply before an intentional destroy of RDS
-# log_retention_days              = 14
-# license_token                   = ""
-# enable_alarms                   = true   # SNS topic + EC2 status/recover/CPU and RDS storage/CPU/connections alarms (alarms.tf)
-# alert_email                     = ""     # e.g. "ops@example.com"; confirm the email AWS sends before alerts arrive
-# db_max_connections_alarm_threshold = 70
+# region                  = "eu-central-1"
+# name_prefix             = "margince-light"
+# environment             = "production"
+# instance_type           = "t3.large"   # t4g.large with cpu_architecture = "arm64"
+# cpu_architecture        = "x86_64"     # arm64 needs arm64 release images
+# os_disk_gb              = 30
+# data_disk_gb            = 64
+# enable_backup           = true   # daily EBS snapshots of both volumes, 7 kept
+# enable_alarms           = true   # status checks with auto-recover, CPU over 90%
+# alert_email             = ""     # for example "ops@example.com"
+# license_token           = ""     # MARGINCE_LICENSE, stored in SSM Parameter Store
+# allow_ssh_from_anywhere = false

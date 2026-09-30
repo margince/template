@@ -25,18 +25,18 @@ see `docs/diagrams/README.md`.*
 | Terraform CLI | >= 1.10 (S3 backend native locking, `versions.tf`) |
 | PostgreSQL (RDS) | 16 (`db_engine_version`, major only) |
 | Cache (ElastiCache) | Valkey 7.2 (`cache_engine_version`): Redis 7.2 protocol, the same series as dev's `redis:7.2` and the Azure stacks |
-| api / worker / web images | Built from the Margince repository's `Dockerfile` (step 3), tagged `image_tag` |
+| api / worker / web images | Built by `make release` or `make package` from core's `Dockerfile`, named `<registry>/<instance_name>/<role>:<release_version>` (see [Releases](#6-releases)) |
 
 ## 1. Provision
 
 ```bash
 cd deploy/production/aws/standard
 cp backend.hcl.example backend.hcl             # your protected state bucket
-cp terraform.tfvars.example terraform.tfvars   # fill in acm_certificate_arn, public_base_url, admin_bootstrap_password, image_tag
+cp terraform.tfvars.example terraform.tfvars   # fill in acm_certificate_arn, public_base_url, admin_bootstrap_password, instance_name, release_version
 terraform init -backend-config=backend.hcl
 terraform plan
 
-# Everything EXCEPT the 3 ECS services first — they reference image_tag,
+# Everything EXCEPT the 3 ECS services first — they reference release_version,
 # and nothing has pushed it yet. A plain `terraform apply` here creates the
 # services anyway, pointed at a tag ECR does not have, and they sit
 # unhealthy until you catch up with steps 2-4 below and re-apply. Targeting
@@ -106,7 +106,7 @@ MASTER_PW="$(ssm_get rds_master_password)"
 
 psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432/margince?hostaddr=127.0.0.1&sslmode=verify-full&sslrootcert=/tmp/rds-ca-bundle.pem" \
   -v owner_pw="$OWNER_PW" -v app_pw="$APP_PW" \
-  -f "$MARGINCE_REPO/scripts/deploy/db-bootstrap.sql"
+  -f ../../../../core/scripts/deploy/db-bootstrap.sql   # core's SQL, at the pinned core version
 ```
 
 (`aws rds describe-db-instances` never returns the master password; it only
@@ -114,33 +114,12 @@ exists as this Terraform-generated value, copied into the
 `/<name_prefix>/rds-master-password` parameter for exactly this step. No ECS
 task or execution role can read that parameter.)
 
-## 3. Push the three images
+## 3. Push the first release
 
-```bash
-MARGINCE_REPO=~/src/margince   # your Margince source checkout
-IMAGE_TAG="<the same value you set for image_tag in terraform.tfvars>"
-PLATFORM="linux/arm64"   # match cpu_architecture in terraform.tfvars — "linux/amd64" if you left it X86_64
-
-aws ecr get-login-password --region "$(terraform output -raw ecr_api_repository_url | cut -d. -f4)" \
-  | docker login --username AWS --password-stdin "$(terraform output -raw ecr_api_repository_url | cut -d/ -f1)"
-
-for role in api worker web; do
-  docker buildx build --platform "$PLATFORM" --target "$role" \
-    -t "$(terraform output -raw ecr_${role}_repository_url):${IMAGE_TAG}" \
-    -f "$MARGINCE_REPO/Dockerfile" --push "$MARGINCE_REPO"
-done
-```
-
-A plain `docker build` produces an image matching your OWN machine's
-architecture, not necessarily the one `cpu_architecture` names — `buildx
---platform` is what actually cross-compiles to it (the Dockerfile already
-supports this via `TARGETARCH`; nothing here needs to change).
-
-`IMAGE_TAG` must equal `var.image_tag` exactly. The three ECR repos are
-`image_tag_mutability = IMMUTABLE`, so pick a real release identifier (a git
-SHA, `MARGINCE_RELEASE_VERSION`) rather than `latest` — a tag can be pushed
-exactly once; re-pushing it (the usual `latest` workflow) is refused by
-design, not a bug.
+The ECR repositories from step 1 are named `<instance_name>/api`,
+`<instance_name>/web` and `<instance_name>/worker`, the names `make release`
+gives the images. Push the release that `release_version` names as described
+in [Releases](#6-releases), steps 1 to 3.
 
 ## 4. Mount `margince.yaml` onto EFS (once)
 
@@ -158,9 +137,9 @@ sudo mount -t efs -o tls,iam,accesspoint=<efs_config_access_point_id> \
   <efs_file_system_id>:/ /mnt/margince-config
 # The two ids are `terraform output -raw efs_config_access_point_id` and
 # `terraform output -raw efs_file_system_id` on your machine.
-sudo cp ./margince.yaml /mnt/margince-config/margince.yaml   # from margince.example.yaml in the Margince repository
+sudo cp ./margince.yaml /mnt/margince-config/margince.yaml   # from core/config/margince.example.yaml
 # edit /mnt/margince-config/margince.yaml — set password_file to
-# secrets/admin-password (the api's working dir is /app) per the Margince repository's docs/deployment.md
+# secrets/admin-password (the api's working dir is /app) per core/docs/deployment.md
 
 # The api and worker DSNs (secrets.tf) name this file at
 # /app/config/rds-ca-bundle.pem — the same mount, so it goes on beside
@@ -182,7 +161,7 @@ Point `public_base_url`'s host at `terraform output -raw alb_dns_name` (a CNAME
 or an ALIAS record) and confirm `acm_certificate_arn` covers that host. Once
 the api task can reach a healthy `/healthz` on the target group, it applies
 migrations and bootstraps the organization from `MARGINCE_ADMIN_PASSWORD` —
-after which, per the Margince repository's `docs/deployment.md`, remove `bootstrap_admin` from
+after which, per `core/docs/deployment.md`, remove `bootstrap_admin` from
 `margince.yaml` and overwrite the admin password parameter with something inert
 (`secrets.tf` ignores later changes to its value, so apply will not put the
 bootstrap password back):
@@ -194,14 +173,69 @@ aws ssm put-parameter --overwrite --type SecureString \
   --value "$(openssl rand -base64 32)"
 ```
 
-## 6. Releasing a new version
+## 6. Releases
 
-Build/push new images tagged with the release version, set `image_tag` to
-that version, `terraform apply`. All three ECS services pick up the new task
-definition on the same apply — `docs/deployment.md`'s release-version guard
-means api/worker/web should always move together; applying only one role's
-change (e.g. hand-editing a service's desired count without touching
-`image_tag`) does not trigger a new deployment for the others.
+The Azure standard stack uses the same flow. The images are the ones
+`make release` (the `release.yml` workflow) or `make package` builds from
+core's `Dockerfile`, named `<REGISTRY>/<instance_name>/<role>:<VERSION>`
+(the instance repository's `docs/release.md`, Section 6). This stack
+deploys `<registry>/<instance_name>/<role>:<release_version>`
+(`terraform output image_refs`).
+
+1. Set the image registry. `REGISTRY` is this account's ECR registry host:
+
+   ```sh
+   terraform output -raw registry   # <account>.dkr.ecr.<region>.amazonaws.com
+   ```
+
+   For `release.yml`, set it as the repository variable `REGISTRY`. For a
+   manual push, export it in your shell. `instance_name` must equal `name`
+   in `instance.yaml`.
+
+2. Log in to the registry. `release.yml` logs in with the repository
+   secrets `REGISTRY_USERNAME` (`AWS`) and `REGISTRY_PASSWORD`. An ECR
+   password is a token that expires after 12 hours, so refresh the secret
+   right before each release:
+
+   ```sh
+   aws ecr get-login-password --region <aws_region> | gh secret set REGISTRY_PASSWORD
+   gh secret set REGISTRY_USERNAME --body AWS
+   ```
+
+   For a manual push:
+
+   ```sh
+   aws ecr get-login-password --region <aws_region> \
+     | docker login --username AWS --password-stdin "$REGISTRY"
+   ```
+
+3. Build and push the release, one of:
+
+   ```sh
+   make release VERSION=v0.3.0                      # release.yml builds, tests and pushes
+   make package VERSION=v0.3.0 && for role in api web worker; do
+     docker push "$REGISTRY/<instance_name>/$role:v0.3.0"
+   done                                             # manual push
+   ```
+
+4. Set `release_version = "v0.3.0"` in `terraform.tfvars` and run
+   `terraform apply`. All three ECS services get a new task definition in the
+   same apply; api, worker and web always move together.
+
+The identity that pushes (the one whose token is in `REGISTRY_PASSWORD`, or
+your own) needs `ecr:GetAuthorizationToken` on `*`, and
+`ecr:BatchCheckLayerAvailability`, `ecr:InitiateLayerUpload`,
+`ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage` and
+`ecr:BatchGetImage` on the three repository ARNs, plus `kms:GenerateDataKey`
+and `kms:Decrypt` on the stack key (`kms_key_arn`), because the repositories
+are encrypted with it.
+
+The repositories are `IMMUTABLE`: a pushed tag is never overwritten, and a
+second push of the same release is refused. The lifecycle policy keeps the
+most recent `ecr_tagged_image_retain_count` releases. The ECS tasks run
+`cpu_architecture` (default `X86_64`), the platform `release.yml` builds by
+default. For `ARM64`, set the repository variable
+`PLATFORMS = "linux/amd64,linux/arm64"` first.
 
 ### Turning on the Redis-TLS / S3-SSE-KMS enforcement, safely
 
@@ -294,6 +328,28 @@ records with non-terminating matches.
 
 ## Upgrading an existing deployment
 
+### Moving to `release_version` and the release image names
+
+`image_tag` is replaced by `release_version`, and a plan that still sets
+`image_tag` fails with a message that names the replacement. The ECR
+repositories are renamed from `<name_prefix>/<role>` to
+`<instance_name>/<role>`. ECR cannot rename a repository, so the plan
+replaces all three, and the delete of a repository that holds images fails.
+Before the apply:
+
+1. Push the release to the new names (the repositories are created in the
+   same apply, so run `terraform apply -target=aws_ecr_repository.api
+   -target=aws_ecr_repository.worker -target=aws_ecr_repository.web` first,
+   then [Releases](#6-releases), steps 1 to 3).
+2. Keep the old repositories out of the delete:
+   `terraform state rm` is not possible for the renamed resources, so delete
+   the old images (`aws ecr batch-delete-image`) or the old repositories
+   (`aws ecr delete-repository --force`) once no task runs from them.
+3. `cpu_architecture` now defaults to `X86_64`. Set `ARM64` explicitly to
+   keep Graviton, with multi-platform images (Section 6).
+
+### Moving from the Secrets Manager version
+
 Moving from the Secrets Manager version of this stack, one `terraform apply`:
 
 | Change | Effect |
@@ -355,9 +411,8 @@ so access runs through IAM/bucket policy alone); the api and worker task
 definitions set `stopTimeout = 60` so an in-flight request or job finishes
 draining rather than being cut off at Fargate's 30s default; every task
 definition declares `runtime_platform` explicitly (`var.cpu_architecture`,
-default `ARM64` — RDS and ElastiCache already default to Graviton instance
-families, so this keeps the whole stack on one architecture family by
-default; see the variable's own description).
+default `X86_64`, the platform `release.yml` builds by default; see the
+variable's own description).
 
 **IAM**: every ECS trust policy (`iam.tf`'s `ecs_assume`) carries
 `aws:SourceAccount` and `aws:SourceArn` conditions per AWS's own confused-deputy

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs the Margince repository's scripts/deploy/db-bootstrap.sql against the
+# Runs core's scripts/deploy/db-bootstrap.sql (the core/ submodule) against the
 # Flexible Server as its admin (pgadmin): creates the margince database, the
 # margince_owner and margince_app roles and the extensions. Run it from the
 # jumpbox (the server has no public endpoint), in this stack's directory so
@@ -13,10 +13,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-default_sql=/opt/margince/scripts/deploy/db-bootstrap.sql
-if [[ -n "${MARGINCE_REPO:-}" ]]; then default_sql="$MARGINCE_REPO/scripts/deploy/db-bootstrap.sql"; fi
+# core's bootstrap SQL, from the instance repository's core/ submodule (the
+# core version instance.yaml pins); the working directory is this stack.
+default_sql=../../../../core/scripts/deploy/db-bootstrap.sql
 SQL="${1:-$default_sql}"
-[[ -f "$SQL" ]] || { echo "bootstrap-db: $SQL not found (pass the path or set MARGINCE_REPO)" >&2; exit 1; }
+[[ -f "$SQL" ]] || { echo "bootstrap-db: $SQL not found (run git submodule update --init, or pass the path)" >&2; exit 1; }
 
 # The BOOTSTRAP_* variables override the terraform outputs and TLS settings
 # (for a local test server); unset, they change nothing.

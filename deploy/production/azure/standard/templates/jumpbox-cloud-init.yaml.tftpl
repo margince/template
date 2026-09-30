@@ -1,6 +1,6 @@
 #cloud-config
-# Jumpbox toolchain (jumpbox.tf): Docker with buildx for the cloud image build,
-# Azure CLI, Terraform, psql and cifs-utils for the one-time setup steps.
+# Jumpbox toolchain (jumpbox.tf): Azure CLI, Terraform, psql and cifs-utils
+# for the one-time setup steps. It builds no images.
 package_update: true
 packages:
   - ca-certificates
@@ -11,11 +11,7 @@ packages:
   - unzip
   - postgresql-client
   - cifs-utils
-  - docker.io
-  - docker-buildx
 runcmd:
-  - usermod -aG docker ${admin_username}
-  - systemctl enable --now docker
   - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
   - curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
   - echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(. /etc/os-release && echo $VERSION_CODENAME) main" > /etc/apt/sources.list.d/hashicorp.list

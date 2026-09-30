@@ -28,7 +28,7 @@ override_resource {
 
 variables {
   public_base_url          = "https://crm.example.com"
-  image_tag                = "v0.1.0"
+  release_version          = "v0.1.0"
   admin_bootstrap_password = "test-only-password-not-real"
   acm_certificate_arn      = "arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
 }
@@ -413,4 +413,113 @@ run "removed_variable_is_refused" {
     enable_deep_monitoring = true
   }
   expect_failures = [var.enable_deep_monitoring]
+}
+
+run "images_follow_the_release_naming" {
+  command = plan
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
+  }
+
+  override_resource {
+    target          = aws_ecr_repository.api
+    override_during = plan
+    values = {
+      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/api"
+      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/api"
+    }
+  }
+
+  override_resource {
+    target          = aws_ecr_repository.worker
+    override_during = plan
+    values = {
+      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/worker"
+      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/worker"
+    }
+  }
+
+  override_resource {
+    target          = aws_ecr_repository.web
+    override_during = plan
+    values = {
+      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/web"
+      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/web"
+    }
+  }
+
+  assert {
+    condition     = aws_ecr_repository.api.name == "margince-default/api" && aws_ecr_repository.worker.name == "margince-default/worker" && aws_ecr_repository.web.name == "margince-default/web"
+    error_message = "ECR repositories are named <instance_name>/<role>, as make release names the images."
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [aws_ecr_repository.api, aws_ecr_repository.worker, aws_ecr_repository.web] : r.image_tag_mutability == "IMMUTABLE"
+    ])
+    error_message = "Released tags are immutable."
+  }
+
+  assert {
+    condition = alltrue([
+      for role, ref in local.images : ref == "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/${role}:v0.1.0"
+    ]) && length(local.images) == 3
+    error_message = "Images are <registry>/<instance_name>/<role>:<release_version>."
+  }
+
+  assert {
+    condition     = var.cpu_architecture == "X86_64"
+    error_message = "The default architecture matches the linux/amd64 images make release builds by default."
+  }
+}
+
+run "release_version_must_be_a_release" {
+  command = plan
+  variables {
+    release_version = "latest"
+  }
+  expect_failures = [var.release_version]
+}
+
+run "removed_image_tag_is_refused" {
+  command = plan
+  variables {
+    image_tag = "v0.1.0"
+  }
+  expect_failures = [var.image_tag]
+}
+
+run "security_group_and_iam_descriptions_are_ascii" {
+  command = plan
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
+  }
+
+  # EC2 accepts only a-zA-Z0-9. _-:/()#,@[]+=&;{}!$* in security group and
+  # rule descriptions; IAM role descriptions reject non-ASCII characters.
+  # Inline rules reference security group IDs, which are unknown at plan
+  # time, so only the group and standalone rule descriptions are checked.
+  assert {
+    condition = alltrue([
+      for d in concat(
+        [for sg in [aws_security_group.alb, aws_security_group.ecs_tasks, aws_security_group.web, aws_security_group.db, aws_security_group.redis, aws_security_group.efs, aws_security_group.ops, aws_security_group.vpc_endpoints] : sg.description],
+        [aws_vpc_security_group_ingress_rule.web_from_alb.description, aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.description, aws_vpc_security_group_egress_rule.web_to_s3.description],
+      ) : can(regex("^[a-zA-Z0-9. _:/()#,@\\[\\]+=&;{}!$*-]*$", d))
+    ])
+    error_message = "A security group or rule description uses a character EC2 refuses."
+  }
+
+  assert {
+    condition = alltrue([
+      for d in [aws_iam_role.execution.description, aws_iam_role.execution_web.description, aws_iam_role.task_api.description, aws_iam_role.task_worker.description, aws_iam_role.task_web.description, aws_iam_role.vpc_flow_logs.description, aws_iam_role.ops.description] :
+      can(regex("^[ -~]*$", d))
+    ])
+    error_message = "An IAM role description uses a non-ASCII character."
+  }
 }

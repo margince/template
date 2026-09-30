@@ -1,41 +1,33 @@
 # Copy to terraform.tfvars (git-ignored) and fill in.
 
-azure_region        = "westeurope"
-resource_group_name = "margince-light"
-name_prefix         = "margince"
+# ---- Required -------------------------------------------------------------------
 
-# Leave empty to use <label>.<region>.cloudapp.azure.com (TLS at first boot).
-# With your own name: A record to the public_ip output, then
-# `sudo margince-enable-tls` on the VM.
-public_hostname = ""
-acme_email      = "ops@example.com"
+# The public host name. Create its A record for the public_ip output.
+domain = "crm.example.com"
 
-# Your office/admin address, for the first password login.
-break_glass_cidrs = ["203.0.113.10/32"]
+# ssh-keygen -t ed25519 (RSA is also accepted).
+admin_ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 
-admin_ssh_public_key = "ssh-rsa AAAA... you@laptop" # ssh-keygen -t rsa -b 4096 (ed25519 also accepted)
+# The addresses that run Terraform, make host-bootstrap and make deploy.
+# SSH and the Key Vault firewall admit only these.
+ssh_allowed_cidrs = ["203.0.113.10/32"]
 
-margince_git_ref = "main"
-
-workspace_name          = "Example GmbH"
-workspace_base_currency = "EUR"
-workspace_base_language = "de"
-workspace_timezone      = "Europe/Berlin"
-bootstrap_admin_email   = "admin@example.com"
-
-environment_posture = "production"
-license_token       = "<licence token>"
-
-# The Entra security group that already gates Dataverse.
+# The Entra security group allowed to use Margince.
 entra_access_group_object_id = "00000000-0000-0000-0000-000000000000"
 
-# Required: the public IP(s) you run Terraform from. The Key Vault firewall
-# admits only these and the VM.
-operator_ip_allowlist = ["203.0.113.10"]
+# ---- Optional, shown with their defaults ------------------------------------------
 
-# Needs `az feature register --namespace Microsoft.Compute --name EncryptionAtHost`.
-encryption_at_host = true
-
-# Daily Azure Backup of the VM and data disk, 7-day retention (about EUR 8/month).
-# The data disk has no other copy; set false only for disposable data.
-enable_vm_backup = true
+# region                  = "westeurope"
+# name_prefix             = "margince"
+# environment             = "production"
+# resource_group_name     = "margince-light"
+# vm_size                 = "Standard_B2ms"
+# os_disk_gb              = 30
+# data_disk_gb            = 64
+# enable_backup           = true   # daily Azure Backup of the VM and data disk, 7 days
+# enable_alarms           = true   # VM unavailable, CPU over 90%
+# alert_email             = ""     # for example "ops@example.com"
+# license_token           = ""     # MARGINCE_LICENSE, stored in Key Vault
+# allow_ssh_from_anywhere = false
+# key_vault_allowed_cidrs = []
+# encryption_at_host      = true   # needs the EncryptionAtHost feature (README.md)

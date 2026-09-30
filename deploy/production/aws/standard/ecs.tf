@@ -1,11 +1,12 @@
-# IMMUTABLE: a pushed tag can never be silently overwritten — the only way to
-# ship a new image is a new tag, which is also what makes var.image_tag's "no
-# floating latest" rule (variables.tf) actually enforceable rather than
-# advisory. Each repo's own KMS encryption_configuration is what makes each
+# Named <instance_name>/<role>, so the images `make release` pushes with
+# REGISTRY set to this account's ECR registry land here unchanged
+# (docs/release.md, Section 6). IMMUTABLE: a released tag can never be
+# silently overwritten; the only way to ship a new image is a new
+# release_version. The Azure standard stack locks its ACR tags the same way. Each repo's own KMS encryption_configuration is what makes each
 # execution role's own UseDataKey grant (iam.tf) meaningful — api/worker
 # under the shared execution role's grant, web under execution_web's own.
 resource "aws_ecr_repository" "api" {
-  name                 = "${var.name_prefix}/api"
+  name                 = "${var.instance_name}/api"
   image_tag_mutability = "IMMUTABLE"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration {
@@ -16,7 +17,7 @@ resource "aws_ecr_repository" "api" {
 }
 
 resource "aws_ecr_repository" "worker" {
-  name                 = "${var.name_prefix}/worker"
+  name                 = "${var.instance_name}/worker"
   image_tag_mutability = "IMMUTABLE"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration {
@@ -27,7 +28,7 @@ resource "aws_ecr_repository" "worker" {
 }
 
 resource "aws_ecr_repository" "web" {
-  name                 = "${var.name_prefix}/web"
+  name                 = "${var.instance_name}/web"
   image_tag_mutability = "IMMUTABLE"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration {
@@ -51,8 +52,8 @@ resource "aws_ecr_repository" "web" {
 # cleanup: keep the most recent var.ecr_tagged_image_retain_count releases
 # (rollback material), expire the rest. tagPatternList = ["*"] matches every
 # tag rather than naming release-version tags one at a time, since this
-# stack's own var.image_tag is an open-ended release identifier, not a fixed
-# set of prefixes to enumerate.
+# stack's release_version tags all follow one format, and every tag in these
+# repositories is a release.
 locals {
   untagged_expiry_policy = jsonencode({
     rules = [
@@ -113,9 +114,18 @@ resource "aws_ecr_registry_scanning_configuration" "this" {
   rule {
     scan_frequency = "CONTINUOUS_SCAN"
     repository_filter {
-      filter      = "${var.name_prefix}/*"
+      filter      = "${var.instance_name}/*"
       filter_type = "WILDCARD"
     }
+  }
+}
+
+# The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>.
+locals {
+  images = {
+    api    = "${aws_ecr_repository.api.repository_url}:${var.release_version}"
+    worker = "${aws_ecr_repository.worker.repository_url}:${var.release_version}"
+    web    = "${aws_ecr_repository.web.repository_url}:${var.release_version}"
   }
 }
 
@@ -194,7 +204,7 @@ resource "aws_ecs_task_definition" "api" {
   container_definitions = jsonencode([
     {
       name      = "api"
-      image     = "${aws_ecr_repository.api.repository_url}:${var.image_tag}"
+      image     = local.images.api
       essential = true
       # The image already runs as a non-root user (Dockerfile's `USER app`);
       # this drops every Linux capability the root user itself would have
@@ -259,7 +269,7 @@ resource "aws_ecs_task_definition" "worker" {
   container_definitions = jsonencode([
     {
       name      = "worker"
-      image     = "${aws_ecr_repository.worker.repository_url}:${var.image_tag}"
+      image     = local.images.worker
       essential = true
       # Same reasoning as api's own linuxParameters.
       linuxParameters = { capabilities = { drop = ["ALL"] } }
@@ -316,7 +326,7 @@ resource "aws_ecs_task_definition" "web" {
   container_definitions = jsonencode([
     {
       name      = "web"
-      image     = "${aws_ecr_repository.web.repository_url}:${var.image_tag}"
+      image     = local.images.web
       essential = true
       # Same reasoning as api's own linuxParameters — nginx-unprivileged
       # (Dockerfile's `web` stage) already needs none of the capabilities

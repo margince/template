@@ -1,304 +1,274 @@
 # Offline checks with mocked providers: no AWS credentials, no network.
-# Run with: terraform init -backend=false && terraform test
+#   terraform init -backend=false && terraform test
 
 mock_provider "aws" {
-  mock_data "aws_caller_identity" {
-    defaults = { account_id = "123456789012" }
-  }
   mock_data "aws_availability_zones" {
     defaults = { names = ["eu-central-1a", "eu-central-1b", "eu-central-1c"] }
   }
   mock_data "aws_ssm_parameter" {
     defaults = { value = "ami-0123456789abcdef0" }
   }
-  mock_data "aws_iam_policy_document" {
-    defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  mock_resource "aws_eip" {
+    defaults = { public_ip = "198.51.100.7" }
   }
-}
-
-mock_provider "aws" {
-  alias = "us_east_1"
-  mock_data "aws_iam_policy_document" {
-    defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  mock_resource "aws_instance" {
+    defaults = { id = "i-0123456789abcdef0" }
   }
-}
-
-mock_provider "random" {}
-mock_provider "archive" {
-  mock_data "archive_file" {
-    defaults = {
-      output_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-      output_md5    = "0123456789abcdef0123456789abcdef"
-    }
+  mock_resource "aws_ebs_volume" {
+    defaults = { id = "vol-0123456789abcdef0" }
+  }
+  mock_resource "aws_iam_role" {
+    defaults = { arn = "arn:aws:iam::123456789012:role/margince-light-dlm" }
+  }
+  mock_resource "aws_sns_topic" {
+    defaults = { arn = "arn:aws:sns:eu-central-1:123456789012:margince-light-alerts" }
   }
 }
 
 variables {
-  public_base_url          = "https://crm.example.com"
-  image_tag                = "v0.1.0"
-  admin_bootstrap_password = "test-only-password-not-real"
-  margince_source_dir      = "./tests/fixtures/margince-src"
+  domain               = "crm.example.com"
+  license_token        = "test-licence"
+  admin_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl test"
+  ssh_allowed_cidrs    = ["203.0.113.10/32", "198.51.100.0/24"]
 }
 
-run "fixes_hold" {
+run "single_ubuntu_instance" {
   command = plan
-
-  # Computed values the assertions read, fixed at plan time.
-  override_resource {
-    target          = aws_eip.edge
-    override_during = plan
-    values          = { public_dns = "ec2-203-0-113-10.eu-central-1.compute.amazonaws.com" }
-  }
-  override_resource {
-    target          = random_password.origin_verify
-    override_during = plan
-    values          = { result = "test-origin-secret" }
-  }
-
   assert {
-    condition     = one([for o in aws_cloudfront_distribution.this.origin : o.domain_name]) == aws_eip.edge.public_dns
-    error_message = "CloudFront's origin must be the edge Elastic IP's DNS name, not an IP address."
+    condition     = data.aws_ssm_parameter.ubuntu.name == "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
+    error_message = "The AMI is Canonical Ubuntu 24.04 LTS for amd64."
   }
-
   assert {
-    condition     = aws_instance.app.private_ip == cidrhost(aws_subnet.public.cidr_block, 10)
-    error_message = "The app instance must keep its fixed private IP across replacements."
+    condition     = aws_instance.this.instance_type == "t3.large" && aws_instance.this.metadata_options[0].http_tokens == "required"
+    error_message = "One t3.large instance with IMDSv2 required."
   }
-
   assert {
-    condition     = strcontains(local.worker_user_data, "MARGINCE_BLOBSTORE_BUCKET=${aws_s3_bucket.blobstore.bucket}")
-    error_message = "The worker must receive the blobstore bucket name."
+    condition     = aws_instance.this.root_block_device[0].encrypted && aws_instance.this.root_block_device[0].volume_type == "gp3"
+    error_message = "The root volume is encrypted gp3."
   }
-
   assert {
-    condition     = strcontains(local.nginx_conf, "location = /metrics  { return 404; }")
-    error_message = "nginx must not proxy /metrics to the public internet."
+    condition     = aws_key_pair.admin.public_key == var.admin_ssh_public_key
+    error_message = "The key pair holds admin_ssh_public_key."
   }
-
   assert {
-    condition     = endswith(aws_s3_bucket.blobstore.bucket, "-123456789012")
-    error_message = "The blobstore bucket name must carry the account id so it is globally unique."
+    condition     = aws_eip.this.domain == "vpc"
+    error_message = "An Elastic IP gives the instance a static address."
   }
-
-  # ---- Secrets: SSM Parameter Store, never Secrets Manager -------------------
-
   assert {
-    condition = alltrue([
-      for p in aws_ssm_parameter.secret :
-      p.type == "SecureString" && p.tier == "Standard" && p.key_id == "alias/aws/ssm" && startswith(p.name, "/margince-light/")
-    ])
-    error_message = "Every secret must be a Standard-tier SecureString under /<name_prefix>/ encrypted with alias/aws/ssm."
-  }
-
-  assert {
-    condition     = contains(keys(aws_ssm_parameter.secret), "rds_master_password") && contains(keys(aws_ssm_parameter.secret), "admin_password")
-    error_message = "The RDS master and bootstrap admin passwords must be readable from SSM, not only from Terraform state."
-  }
-
-  assert {
-    condition     = length(local.secret_parameters.rds_master_password.readers) == 0
-    error_message = "No instance role may read the RDS master password."
-  }
-
-  assert {
-    condition     = !contains(keys(aws_ssm_parameter.secret), "license") && strcontains(local.app_user_data, "echo \"MARGINCE_LICENSE=\" >>")
-    error_message = "An empty license_token must create no SSM parameter (SSM rejects empty values) and write an empty MARGINCE_LICENSE instead."
-  }
-
-  assert {
-    condition     = !anytrue([for s in local.worker_secrets : contains(["MARGINCE_OWNER_DSN", "MARGINCE_ADMIN_PASSWORD", "MARGINCE_LICENSE"], s.env_name)])
-    error_message = "worker must not fetch owner_dsn, admin_password or license."
-  }
-
-  assert {
-    condition     = length(local.app_secrets) == 9 && length(local.worker_secrets) == 7
-    error_message = "app must fetch its 9 parameters (10 with a license) and worker its 7."
-  }
-
-  assert {
-    condition = alltrue([
-      for ud in [local.app_user_data, local.worker_user_data] :
-      strcontains(ud, "aws ssm get-parameter") && strcontains(ud, "--with-decryption") && !strcontains(ud, "secretsmanager")
-    ])
-    error_message = "app/worker user-data must fetch secrets from SSM with decryption, not Secrets Manager."
-  }
-
-  assert {
-    condition     = alltrue([for ud in [local.edge_user_data, local.app_user_data, local.worker_user_data] : length(ud) < 16384])
-    error_message = "EC2 user data must stay under the 16 KB limit."
-  }
-
-  # ---- RDS: protected against deletion by default ----------------------------
-
-  assert {
-    condition     = aws_db_instance.this.deletion_protection == true && aws_db_instance.this.delete_automated_backups == false && aws_db_instance.this.skip_final_snapshot == false
-    error_message = "RDS must have deletion protection on, keep automated backups after deletion, and take a final snapshot."
-  }
-
-  # ---- Changed source under the same tag must replace instances --------------
-
-  assert {
-    condition = alltrue([
-      for ud in [local.edge_user_data, local.app_user_data, local.worker_user_data] :
-      strcontains(ud, "0123456789abcdef")
-    ])
-    error_message = "Every instance's user data must carry the source archive hash, so changed source replaces it."
-  }
-
-  assert {
-    condition = alltrue([
-      for role, key in local.binary_cache_keys :
-      key == "binaries/${role}-v0.1.0-0123456789abcdef.tar.gz"
-    ]) && strcontains(local.app_user_data, "BINARY_KEY=\"binaries/app-v0.1.0-0123456789abcdef.tar.gz\"")
-    error_message = "S3 binary cache keys must include both the tag and the source hash."
-  }
-
-  # ---- Versions: same pins as the Azure light stack -------------------------
-
-  assert {
-    condition = (
-      strcontains(local.app_user_data, "docker.io/library/redis:7.2@sha256:6461ca4ac0c5c9d81d53685c3bf76aa81f464a9de6cf3a97b80a1da8d1bb1de4") &&
-      strcontains(local.app_user_data, "dnf install -y docker ") &&
-      !strcontains(local.app_user_data, "dnf install -y valkey") &&
-      !strcontains(local.app_user_data, "valkey")
-    )
-    error_message = "app must run redis from the digest-pinned image under Docker, not the valkey dnf package."
-  }
-
-  assert {
-    condition = (
-      alltrue([for ud in [local.app_user_data, local.worker_user_data] : strcontains(ud, "postgresql16") && !strcontains(ud, "postgresql15")]) &&
-      alltrue([for ud in [local.edge_user_data, local.app_user_data, local.worker_user_data] : strcontains(ud, "go.work") && strcontains(ud, "sha256sum -c") && !strcontains(ud, "GO_VERSION=1.")]) &&
-      strcontains(local.edge_user_data, "nodejs.org/dist/latest-v") && !strcontains(local.edge_user_data, "NODE_VERSION=")
-    )
-    error_message = "Toolchains must come from the source pins (go.work, Dockerfile) with checksum verification, and the Postgres client must be 16."
-  }
-
-  # ---- No WAF; nginx does the filtering ---------------------------------------
-
-  assert {
-    condition     = aws_cloudfront_distribution.this.web_acl_id == null
-    error_message = "light must not attach a WAF web ACL to CloudFront (by design, for cost)."
-  }
-
-  assert {
-    condition     = strcontains(local.nginx_conf, "zone=auth:10m rate=30r/m") && strcontains(local.nginx_conf, "location = /v1/auth/login") && strcontains(local.nginx_conf, "location = /oauth/token")
-    error_message = "nginx must rate-limit the credential endpoints per client IP, as in the Azure light stack, since light has no WAF."
-  }
-
-  # ---- Alarms on by default ---------------------------------------------------
-
-  assert {
-    condition     = length(aws_sns_topic.alerts) == 1 && length(aws_sns_topic_subscription.alert_email) == 0
-    error_message = "The alerts topic must exist by default, with no email subscription unless alert_email is set."
-  }
-
-  assert {
-    condition = (
-      toset(keys(aws_cloudwatch_metric_alarm.system_status_check_failed)) == toset(["edge", "app", "worker"]) &&
-      length(aws_cloudwatch_metric_alarm.instance_status_check_failed) == 3 &&
-      length(aws_cloudwatch_metric_alarm.instance_cpu_high) == 3 &&
-      length(aws_cloudwatch_metric_alarm.rds_free_storage_low) == 1 &&
-      length(aws_cloudwatch_metric_alarm.rds_cpu_high) == 1 &&
-      length(aws_cloudwatch_metric_alarm.rds_connections_high) == 1
-    )
-    error_message = "All EC2 and RDS alarms must exist by default."
-  }
-
-  assert {
-    condition = alltrue([
-      for a in aws_cloudwatch_metric_alarm.system_status_check_failed :
-      contains(a.alarm_actions, "arn:aws:automate:eu-central-1:ec2:recover") && a.metric_name == "StatusCheckFailed_System"
-    ])
-    error_message = "Each instance's system status check alarm must trigger EC2 auto-recover."
-  }
-
-  assert {
-    condition     = aws_cloudwatch_metric_alarm.rds_free_storage_low[0].threshold == 2147483648
-    error_message = "The RDS free-storage alarm threshold must be 2 GiB in bytes."
+    condition     = strcontains(file("${path.module}/ec2.tf"), "ignore_changes = [ami]")
+    error_message = "A newer AMI does not replace the instance."
   }
 }
 
-run "alarms_disabled" {
+run "arm64" {
   command = plan
-
   variables {
+    cpu_architecture = "arm64"
+    instance_type    = "t4g.large"
+  }
+  assert {
+    condition     = strcontains(data.aws_ssm_parameter.ubuntu.name, "/current/arm64/")
+    error_message = "arm64 picks the arm64 AMI."
+  }
+}
+
+run "architecture_mismatch_refused" {
+  command = plan
+  variables {
+    instance_type = "t4g.large"
+  }
+  expect_failures = [var.instance_type]
+}
+
+run "firewall" {
+  command = plan
+  assert {
+    condition     = toset([for r in aws_vpc_security_group_ingress_rule.ssh : r.cidr_ipv4]) == toset(["203.0.113.10/32", "198.51.100.0/24"]) && alltrue([for r in aws_vpc_security_group_ingress_rule.ssh : r.from_port == 22 && r.to_port == 22])
+    error_message = "SSH is allowed from ssh_allowed_cidrs only."
+  }
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.http.cidr_ipv4 == "0.0.0.0/0" && aws_vpc_security_group_ingress_rule.http.from_port == 80 && aws_vpc_security_group_ingress_rule.https.cidr_ipv4 == "0.0.0.0/0" && aws_vpc_security_group_ingress_rule.https.from_port == 443
+    error_message = "80 and 443 are open to the internet."
+  }
+  assert {
+    condition = alltrue([
+      for d in concat(
+        [aws_security_group.host.description, aws_vpc_security_group_ingress_rule.http.description, aws_vpc_security_group_ingress_rule.https.description, aws_vpc_security_group_egress_rule.all.description],
+        [for r in aws_vpc_security_group_ingress_rule.ssh : r.description],
+      ) : can(regex("^[a-zA-Z0-9. _:/()#,@\\[\\]+=&;{}!$*-]+$", d))
+    ])
+    error_message = "Security group descriptions use only the characters AWS allows."
+  }
+}
+
+run "data_volume" {
+  command = plan
+  assert {
+    condition     = aws_ebs_volume.data.size == 64 && aws_ebs_volume.data.encrypted && aws_ebs_volume.data.type == "gp3"
+    error_message = "A 64 GB encrypted gp3 data volume."
+  }
+  assert {
+    condition     = aws_ebs_volume.data.availability_zone == aws_subnet.public.availability_zone
+    error_message = "The data volume is in the instance's zone."
+  }
+  assert {
+    condition     = strcontains(regex("resource \"aws_ebs_volume\" \"data\" \\{((?s:.*?))\\n\\}", file("${path.module}/ec2.tf"))[0], "prevent_destroy = true")
+    error_message = "The data volume has prevent_destroy."
+  }
+}
+
+run "cloud_init" {
+  command = apply
+  assert {
+    condition = alltrue([
+      strcontains(local.cloud_init, "mount_point=/var/lib/docker"),
+      strcontains(local.cloud_init, "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0"),
+      strcontains(local.cloud_init, "nofail"),
+      strcontains(local.cloud_init, "UUID=$uuid"),
+      strcontains(local.cloud_init, "RequiresMountsFor=/var/lib/docker"),
+      strcontains(local.cloud_init, "$host_src $host_root none bind,nofail"),
+      strcontains(local.cloud_init, "host_root=/opt/margince"),
+      strcontains(local.cloud_init, "admin_user=\"ubuntu\""),
+      !strcontains(local.cloud_init, "docker-ce"),
+      !strcontains(local.cloud_init, "nginx"),
+      !strcontains(local.cloud_init, "git clone"),
+    ])
+    error_message = "user_data only mounts the data volume at /var/lib/docker by UUID with nofail."
+  }
+  assert {
+    condition     = aws_instance.this.user_data_replace_on_change
+    error_message = "A user_data change replaces the instance."
+  }
+}
+
+run "backup_and_alarms_default_on" {
+  command = plan
+  assert {
+    condition     = length(aws_dlm_lifecycle_policy.daily) == 1 && aws_dlm_lifecycle_policy.daily[0].policy_details[0].schedule[0].retain_rule[0].count == 7
+    error_message = "Daily snapshots with 7 kept are on by default."
+  }
+  assert {
+    condition     = aws_dlm_lifecycle_policy.daily[0].policy_details[0].target_tags["Backup"] == "margince-light-daily" && length(aws_dlm_lifecycle_policy.daily[0].policy_details[0].target_tags) == 1
+    error_message = "The snapshots select the volumes tagged Backup = <name_prefix>-daily."
+  }
+  assert {
+    condition     = aws_ebs_volume.data.tags["Backup"] == "margince-light-daily" && aws_instance.this.root_block_device[0].tags["Backup"] == "margince-light-daily"
+    error_message = "The data volume and the root volume carry the backup tag."
+  }
+  assert {
+    condition     = length(aws_cloudwatch_metric_alarm.system_status_check_failed) == 1 && length(aws_cloudwatch_metric_alarm.instance_status_check_failed) == 1 && length(aws_cloudwatch_metric_alarm.cpu_high) == 1
+    error_message = "The alarms are on by default."
+  }
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.cpu_high[0].threshold == 90 && aws_cloudwatch_metric_alarm.cpu_high[0].period * aws_cloudwatch_metric_alarm.cpu_high[0].evaluation_periods == 900
+    error_message = "CPU alarm: over 90% for 15 minutes."
+  }
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.instance_status_check_failed[0].period * aws_cloudwatch_metric_alarm.instance_status_check_failed[0].evaluation_periods == 300
+    error_message = "Instance status alarm: failed for 5 minutes."
+  }
+  assert {
+    condition     = contains(aws_cloudwatch_metric_alarm.system_status_check_failed[0].alarm_actions, "arn:aws:automate:eu-central-1:ec2:recover")
+    error_message = "The system status alarm recovers the instance."
+  }
+}
+
+run "backup_and_alarms_off" {
+  command = plan
+  variables {
+    enable_backup = false
     enable_alarms = false
-    alert_email   = "ops@example.com"
   }
-
   assert {
-    condition = (
-      length(aws_sns_topic.alerts) == 0 &&
-      length(aws_sns_topic_subscription.alert_email) == 0 &&
-      length(aws_cloudwatch_metric_alarm.system_status_check_failed) == 0 &&
-      length(aws_cloudwatch_metric_alarm.rds_free_storage_low) == 0
-    )
-    error_message = "enable_alarms = false must create no topic, subscription or alarm."
+    condition     = length(aws_dlm_lifecycle_policy.daily) == 0 && length(aws_iam_role.dlm) == 0 && length(aws_sns_topic.alerts) == 0
+    error_message = "enable_backup and enable_alarms turn the resources off."
   }
 }
 
-run "email_and_license" {
-  command = plan
-
-  variables {
-    alert_email   = "ops@example.com"
-    license_token = "test-license-token"
-  }
-
+run "outputs" {
+  command = apply
   assert {
-    condition     = length(aws_sns_topic_subscription.alert_email) == 1 && aws_sns_topic_subscription.alert_email[0].endpoint == "ops@example.com"
-    error_message = "Setting alert_email must subscribe it to the alerts topic."
+    condition     = output.host_env == "HOST_SSH=ubuntu@198.51.100.7\nHOST_DOMAIN=crm.example.com\n"
+    error_message = "host_env holds HOST_SSH and HOST_DOMAIN."
   }
-
   assert {
-    condition     = contains(keys(aws_ssm_parameter.secret), "license") && length(local.app_secrets) == 10 && length(local.worker_secrets) == 7
-    error_message = "A license token must become an app-only SSM parameter."
+    condition     = output.dns_record == "crm.example.com A 198.51.100.7" && output.public_ip == "198.51.100.7"
+    error_message = "dns_record points domain at the public IP."
   }
-
   assert {
-    condition     = !strcontains(local.app_user_data, "echo \"MARGINCE_LICENSE=\" >>")
-    error_message = "With a license parameter, user-data must not also write an empty MARGINCE_LICENSE."
+    condition     = strcontains(output.ssh_known_hosts_hint, "ssh-keyscan -t ed25519 198.51.100.7") && strcontains(output.ssh_known_hosts_hint, "HOST_KNOWN_HOSTS")
+    error_message = "ssh_known_hosts_hint reads the host key of the public IP."
+  }
+  assert {
+    condition     = output.secret_names == tolist(["MARGINCE_LICENSE"]) && strcontains(output.secret_exports, "--name /margince-light/margince-license --with-decryption")
+    error_message = "secret_names lists the license and secret_exports reads it from SSM."
+  }
+  assert {
+    condition     = aws_ssm_parameter.license[0].type == "SecureString"
+    error_message = "The license is an SSM SecureString."
   }
 }
 
-run "deletion_protection_can_be_disabled" {
+run "no_license" {
   command = plan
-
   variables {
-    db_deletion_protection = false
+    license_token = ""
   }
-
   assert {
-    condition     = aws_db_instance.this.deletion_protection == false && aws_db_instance.this.skip_final_snapshot == false
-    error_message = "db_deletion_protection = false must turn protection off while still taking a final snapshot."
+    condition     = length(aws_ssm_parameter.license) == 0 && length(output.secret_names) == 0
+    error_message = "Without a license no parameter is stored or listed."
   }
 }
 
-run "rejects_unpinned_redis_image" {
+run "empty_ssh_allowed_cidrs_refused" {
   command = plan
-
   variables {
-    redis_image = "redis:7.2"
+    ssh_allowed_cidrs = []
   }
-
-  expect_failures = [var.redis_image]
+  expect_failures = [var.ssh_allowed_cidrs]
 }
 
-run "rejects_bad_alert_email" {
+run "ssh_from_anywhere_refused" {
   command = plan
-
   variables {
-    alert_email = "not-an-email"
+    ssh_allowed_cidrs = ["0.0.0.0/0"]
   }
-
-  expect_failures = [var.alert_email]
+  expect_failures = [var.ssh_allowed_cidrs]
 }
 
-run "removed_waf_variable_is_refused" {
+run "ssh_from_anywhere_explicit" {
   command = plan
   variables {
-    enable_waf = true
+    ssh_allowed_cidrs       = ["0.0.0.0/0"]
+    allow_ssh_from_anywhere = true
   }
-  expect_failures = [var.enable_waf]
+  assert {
+    condition     = [for r in aws_vpc_security_group_ingress_rule.ssh : r.cidr_ipv4] == ["0.0.0.0/0"]
+    error_message = "allow_ssh_from_anywhere opens SSH on purpose."
+  }
+}
+
+run "removed_variables_refused" {
+  command = plan
+  variables {
+    aws_region      = "eu-central-1"
+    public_base_url = "https://crm.example.com"
+    image_tag       = "v0.1.0"
+    # Removed variable, set only to prove the plan refuses it; not a credential.
+    admin_bootstrap_password = "not-real" # gitleaks:allow
+    margince_source_dir      = "../margince"
+    enable_waf               = true
+    enable_deep_monitoring   = true
+    db_instance_class        = "db.t4g.micro"
+  }
+  expect_failures = [
+    var.aws_region,
+    var.public_base_url,
+    var.image_tag,
+    var.admin_bootstrap_password,
+    var.margince_source_dir,
+    var.enable_waf,
+    var.enable_deep_monitoring,
+    var.db_instance_class,
+  ]
 }

@@ -1,16 +1,26 @@
-output "public_default_fqdn" {
-  description = "CNAME target for public_base_url's host (README.md, DNS step): the api app's ingress, served by its edge container. Empty until deploy_apps = true."
+output "public_ip_address" {
+  description = "The Application Gateway's public IP. Point public_base_url's host at it with an A record (README.md, step 6)."
+  value       = azurerm_public_ip.appgw.ip_address
+}
+
+output "api_internal_fqdn" {
+  description = "The api app's ingress FQDN inside the VNet: the Application Gateway's backend. Resolves only inside the VNet. Empty until deploy_apps = true."
   value       = var.deploy_apps ? azurerm_container_app.api[0].ingress[0].fqdn : ""
 }
 
-output "custom_domain_verification_id" {
-  description = "Value of the asuid.<host> TXT record Container Apps checks before bind_custom_domain can be set to true."
-  value       = azurerm_container_app_environment.this.custom_domain_verification_id
+output "environment_static_ip" {
+  description = "Private IP of the internal Container Apps environment's load balancer (appgw.tf's private DNS zone points the default domain at it)."
+  value       = azurerm_container_app_environment.this.static_ip_address
 }
 
-output "environment_static_ip" {
-  description = "Public inbound IP of the Container Apps environment (for an A record, if the DNS zone cannot hold a CNAME at this name)."
-  value       = azurerm_container_app_environment.this.static_ip_address
+output "public_certificate_secret_id" {
+  description = "Key Vault secret ID the Application Gateway reads its TLS certificate from. Import the certificate under public_certificate_name (README.md, step 6)."
+  value       = local.public_certificate_secret_id
+}
+
+output "waf_policy_mode" {
+  description = "Detection (waf_mode = \"count\") or Prevention (waf_mode = \"block\")."
+  value       = azurerm_web_application_firewall_policy.this.policy_settings[0].mode
 }
 
 output "nat_egress_ip" {
@@ -49,13 +59,14 @@ output "acr_login_server" {
   value = azurerm_container_registry.this.login_server
 }
 
-output "acr_repository_names" {
-  description = "ACR has no Terraform-managed repository resource: repositories are created on first push. These are the names each role's image is pushed under, not resources this stack provisions."
-  value = {
-    api    = "${azurerm_container_registry.this.login_server}/api"
-    worker = "${azurerm_container_registry.this.login_server}/worker"
-    web    = "${azurerm_container_registry.this.login_server}/web"
-  }
+output "registry" {
+  description = "The REGISTRY value for `make release` and `make package` (docs/release.md, Section 5): this stack's registry login server."
+  value       = azurerm_container_registry.this.login_server
+}
+
+output "image_refs" {
+  description = "The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>. ACR creates the repositories on the first push."
+  value       = local.images
 }
 
 output "postgres_fqdn" {

@@ -28,14 +28,21 @@ resource "azurerm_virtual_network" "this" {
 # ---- Subnets -----------------------------------------------------------------
 # Azure subnets are regional, not zone-scoped, so one subnet per tier covers
 # every zone. Zone placement is set on the resources themselves (postgres.tf's
-# zone, containerapps.tf's zone_redundancy_enabled). Three tiers here:
+# zone, containerapps.tf's zone_redundancy_enabled). Four tiers here: appgw,
 # containerapps, postgres and private_endpoints (jumpbox.tf adds ops). The
 # config share has no subnet of its own; it is reached through the storage
 # private endpoints (see privateendpoints.tf).
-#
-# cidrsubnet(var.vnet_cidr, 8, 0) is left unused: it held the Application
-# Gateway subnet, and renumbering the subnets below would force Terraform to
-# replace them.
+
+resource "azurerm_subnet" "appgw" {
+  # Dedicated /24 for the Application Gateway (appgw.tf): v2 needs a subnet
+  # that holds nothing else, and a /24 leaves room for autoscaling to the
+  # appgw_max_capacity instance count. No NAT gateway: the gateway's
+  # outbound traffic uses its own public IP.
+  name                 = "${var.name_prefix}-appgw"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 0)]
+}
 
 resource "azurerm_subnet" "containerapps" {
   # /23: more than the /27 a workload profiles environment needs
@@ -142,34 +149,19 @@ resource "azurerm_network_security_group" "containerapps" {
   resource_group_name = azurerm_resource_group.this.name
   tags                = merge(local.common_tags, { Name = "${var.name_prefix}-containerapps", Component = "network" })
 
-  # Public traffic to the api app (the only external ingress) reaches an
-  # external workload profiles environment through its public IP in the
-  # managed resource group, not through this subnet, so these inbound rules
-  # do not filter it (learn.microsoft.com/azure/container-apps/
-  # firewall-integration). They are kept for the platform's HTTP-to-HTTPS
-  # redirect and load balancer probes; intra-subnet traffic between the
-  # environment's components rides the default AllowVnetInBound rule.
+  # The environment is internal (containerapps.tf): its load balancer has a
+  # private IP in this subnet, and the only caller from outside the subnet
+  # is the Application Gateway, over HTTPS. Nothing from the internet is
+  # allowed in.
   security_rule {
-    name                       = "AllowHttpsInbound"
+    name                       = "AllowHttpsFromAppGateway"
     priority                   = 100
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "443"
-    source_address_prefix      = "Internet"
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "AllowHttpInboundForRedirectOnly"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "80"
-    source_address_prefix      = "Internet"
+    source_address_prefix      = azurerm_subnet.appgw.address_prefixes[0]
     destination_address_prefix = "*"
   }
 
@@ -302,7 +294,7 @@ resource "azurerm_network_security_group" "private_endpoints" {
     destination_address_prefix = "*"
   }
 
-  # The jumpbox pushes images to the registry and reads Key Vault and storage
+  # The jumpbox reads Key Vault and storage
   # over their private endpoints.
   security_rule {
     name                       = "AllowHttpsFromOps"
@@ -313,6 +305,20 @@ resource "azurerm_network_security_group" "private_endpoints" {
     source_port_range          = "*"
     destination_port_range     = "443"
     source_address_prefix      = cidrsubnet(var.vnet_cidr, 8, 6)
+    destination_address_prefix = "*"
+  }
+
+  # The Application Gateway reads the public certificate from Key Vault over
+  # its private endpoint (appgw.tf).
+  security_rule {
+    name                       = "AllowHttpsFromAppGateway"
+    priority                   = 125
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = azurerm_subnet.appgw.address_prefixes[0]
     destination_address_prefix = "*"
   }
 
@@ -347,6 +353,85 @@ resource "azurerm_network_security_group" "private_endpoints" {
 resource "azurerm_subnet_network_security_group_association" "private_endpoints" {
   subnet_id                 = azurerm_subnet.private_endpoints.id
   network_security_group_id = azurerm_network_security_group.private_endpoints.id
+}
+
+# Application Gateway v2 subnet rules (learn.microsoft.com/azure/
+# application-gateway/configuration-infrastructure): the listener ports from
+# the internet, the GatewayManager ports 65200-65535 and the Azure load
+# balancer probe are required. Outbound stays at the defaults, which the
+# gateway needs.
+resource "azurerm_network_security_group" "appgw" {
+  name                = "${var.name_prefix}-appgw"
+  location            = azurerm_resource_group.this.location
+  resource_group_name = azurerm_resource_group.this.name
+  tags                = merge(local.common_tags, { Name = "${var.name_prefix}-appgw", Component = "network" })
+
+  security_rule {
+    name                       = "AllowHttpsInbound"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "Internet"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowHttpInboundForRedirectOnly"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "Internet"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowGatewayManagerInbound"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "65200-65535"
+    source_address_prefix      = "GatewayManager"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowAzureLoadBalancerInbound"
+    priority                   = 130
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "AzureLoadBalancer"
+    destination_address_prefix = "*"
+  }
+
+  # Deny by default inside the VNet: without this, the built-in
+  # AllowVnetInBound rule lets every subnet reach this one on any port.
+  security_rule {
+    name                       = "DenyVnetInBound"
+    priority                   = 4000
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "VirtualNetwork"
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "appgw" {
+  subnet_id                 = azurerm_subnet.appgw.id
+  network_security_group_id = azurerm_network_security_group.appgw.id
 }
 
 # ---- Observability sink -----------------------------------------------------

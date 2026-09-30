@@ -60,20 +60,32 @@ variable "az_count" {
 }
 
 # ---- Images ---------------------------------------------------------------
+# The images are the ones `make release VERSION=<v>` (release.yml) or
+# `make package VERSION=<v>` builds from core's Dockerfile, named
+# <REGISTRY>/<instance_name>/<role>:<v> (docs/release.md, Section 6). Here
+# REGISTRY is this stack's registry login server (acr_login_server output).
 
-variable "image_tag" {
+variable "instance_name" {
+  description = "The instance's name from instance.yaml (`name`). It is the image namespace: <acr_login_server>/<instance_name>/api|web|worker."
+  type        = string
+  default     = "margince-default"
+  validation {
+    condition     = can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.instance_name))
+    error_message = "instance_name must match instance.yaml's name format: lowercase letters and digits, separated by single hyphens."
+  }
+}
+
+variable "release_version" {
   description = <<-EOT
-    Tag to deploy for all three roles (api, worker, web): a real release
-    version (e.g. a git SHA or MARGINCE_RELEASE_VERSION), never "latest".
-    ACR has no Terraform-managed setting that refuses a re-push to an
-    existing tag (see acr.tf), so "no latest" is a release convention, not
-    something the registry enforces. No default: choosing a tag is an
+    The release to deploy for all three roles (api, worker, web): the
+    VERSION of `make release` or `make package`, which is also the image tag
+    (docs/release.md, Section 2). No default: choosing a release is an
     operator decision.
   EOT
   type        = string
   validation {
-    condition     = length(trimspace(var.image_tag)) > 0
-    error_message = "image_tag must not be empty or whitespace."
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
+    error_message = "release_version must be a release version such as v0.3.0 or v1.3.0-rc.1 (docs/release.md, Section 2)."
   }
 }
 
@@ -275,24 +287,137 @@ variable "redis_share_quota_gb" {
   default     = 16
 }
 
-# ---- Public entry (the api app's edge container) ------------------------------------
-# There is no gateway in front of this stack. The api app is the one app with
-# external ingress, and its ingress targets the edge (nginx) container, which
-# serves the SPA and forwards api paths to cmd/api on localhost
-# (templates/edge-nginx.conf.tftpl).
+# ---- Public entry (Application Gateway WAF v2, appgw.tf) -----------------------------
+# The Application Gateway is the one public entry. It terminates TLS with the
+# certificate in Key Vault, applies the WAF policy, and forwards to the api
+# app's ingress inside the internal Container Apps environment. The api
+# app's ingress targets the edge (nginx) container, which serves the SPA and
+# forwards api paths to cmd/api on localhost (templates/edge-nginx.conf.tftpl).
 
-variable "bind_custom_domain" {
+variable "public_certificate_name" {
   description = <<-EOT
-    Binds public_base_url's host to the web app. Leave false on the FIRST
-    apply: Container Apps refuses the binding until the domain's DNS already
-    carries the asuid TXT record (value: the custom_domain_verification_id
-    output) and a CNAME to the public_default_fqdn output, and neither exists
-    before the environment does. Create both records, then set true and apply
-    again. The managed certificate is issued afterwards by one
-    `az containerapp hostname bind` call (README.md).
+    Name of the Key Vault certificate for public_base_url's host, which the
+    Application Gateway serves. Import it before the first apply with
+    deploy_apps = true (README.md, step 6). The gateway reads the latest
+    version, so a renewed certificate is picked up without an apply.
   EOT
-  type        = bool
-  default     = false
+  type        = string
+  default     = "public-tls"
+  validation {
+    condition     = can(regex("^[0-9A-Za-z-]{1,127}$", var.public_certificate_name))
+    error_message = "public_certificate_name must be a Key Vault object name: letters, digits and hyphens."
+  }
+}
+
+variable "appgw_min_capacity" {
+  description = "Minimum Application Gateway autoscale capacity units. 0 is allowed; 1 keeps one unit warm so the first requests after a quiet period are not slowed by a scale-out."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.appgw_min_capacity >= 0 && var.appgw_min_capacity <= 100
+    error_message = "appgw_min_capacity must be between 0 and 100."
+  }
+}
+
+variable "appgw_max_capacity" {
+  description = "Maximum Application Gateway autoscale capacity units."
+  type        = number
+  default     = 10
+  validation {
+    condition     = var.appgw_max_capacity >= 2 && var.appgw_max_capacity <= 125
+    error_message = "appgw_max_capacity must be between 2 and 125."
+  }
+}
+
+# ---- WAF (appgw.tf) -----------------------------------------------------------
+# Same variable names, defaults and meaning as the AWS standard stack.
+
+variable "waf_mode" {
+  description = <<-EOT
+    "count" or "block". count sets the WAF policy to Detection mode and every
+    custom rule to Log: matches are logged (AGWFirewallLogs) and nothing is
+    blocked. Start in count, review the logs for about a week, add
+    exclusions where needed, then switch to "block" (Prevention mode, custom
+    rules Block). See README "WAF rollout".
+  EOT
+  type        = string
+  default     = "count"
+  validation {
+    condition     = contains(["count", "block"], var.waf_mode)
+    error_message = "waf_mode must be \"count\" or \"block\"."
+  }
+}
+
+variable "waf_rate_limit_per_ip" {
+  description = "Global per-IP request limit per 5-minute window, across all paths except the provider webhook paths."
+  type        = number
+  default     = 2000
+  validation {
+    condition     = var.waf_rate_limit_per_ip >= 10
+    error_message = "waf_rate_limit_per_ip must be 10 or more."
+  }
+}
+
+variable "waf_auth_rate_limit_per_ip" {
+  description = "Per-IP request limit per 5-minute window on waf_auth_paths only (login, password reset, OAuth token and client registration)."
+  type        = number
+  default     = 100
+  validation {
+    condition     = var.waf_auth_rate_limit_per_ip >= 10
+    error_message = "waf_auth_rate_limit_per_ip must be 10 or more."
+  }
+}
+
+variable "waf_auth_paths" {
+  description = <<-EOT
+    URI paths the stricter auth rate limit applies to (prefix match, so a
+    trailing slash or a query string is matched too). Defaults are the api's
+    credential-accepting endpoints: password login, forgot/reset password,
+    OAuth token and dynamic client registration.
+  EOT
+  type        = list(string)
+  default = [
+    "/v1/auth/login",
+    "/v1/auth/forgot-password",
+    "/v1/auth/reset-password",
+    "/oauth/token",
+    "/oauth/register",
+  ]
+  validation {
+    condition     = length(var.waf_auth_paths) > 0 && alltrue([for p in var.waf_auth_paths : startswith(p, "/")])
+    error_message = "waf_auth_paths needs at least one path, each starting with /."
+  }
+}
+
+variable "waf_allowed_country_codes" {
+  description = <<-EOT
+    ISO 3166-1 alpha-2 country codes allowed to reach the gateway (for
+    example ["DE", "AT", "CH"]). Empty (default) disables geo filtering. The
+    provider webhook paths are always exempt, since Google, Microsoft and
+    HubSpot deliver from wherever their infrastructure runs.
+  EOT
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for c in var.waf_allowed_country_codes : can(regex("^[A-Z]{2}$", c))])
+    error_message = "waf_allowed_country_codes takes ISO 3166-1 alpha-2 codes in upper case, such as DE."
+  }
+}
+
+variable "waf_log_retention_days" {
+  description = "Retention of the gateway's firewall and access log tables (AGWFirewallLogs, AGWAccessLogs) in the Log Analytics workspace."
+  type        = number
+  default     = 30
+  validation {
+    condition     = var.waf_log_retention_days >= 4 && var.waf_log_retention_days <= 730
+    error_message = "waf_log_retention_days must be between 4 and 730 (Log Analytics table retention)."
+  }
+}
+
+variable "alarm_waf_blocked_requests_threshold" {
+  description = "WAF alert: requests blocked per 5 minutes above which the alert fires. Only meaningful once waf_mode = \"block\"; in count mode nothing is blocked."
+  type        = number
+  default     = 500
 }
 
 variable "break_glass_cidrs" {
@@ -420,7 +545,7 @@ variable "alert_email" {
   default     = ""
 }
 
-# ---- Operator access and image builds -------------------------------------------
+# ---- Operator access and image pushes -------------------------------------------
 
 variable "key_vault_admin_principal_ids" {
   description = <<-EOT
@@ -437,8 +562,8 @@ variable "operator_ip_allowlist" {
   description = <<-EOT
     Public IPv4 addresses (plain addresses, no /prefix) allowed through the
     public endpoints of Key Vault, the Storage Account and the container
-    registry while you set the stack up or push images from a laptop
-    (scripts/build-images.sh local). Each service keeps default-deny and its
+    registry while you set the stack up or push a release from a laptop
+    (README.md, "Releases"). Each service keeps default-deny and its
     private endpoint; only these addresses are let in. Leave empty in steady
     state: the three services then have no public endpoint at all. Postgres
     and Redis are never reachable this way; use the jumpbox for Postgres.
@@ -451,12 +576,25 @@ variable "operator_ip_allowlist" {
   }
 }
 
+variable "registry_public_access" {
+  description = <<-EOT
+    true opens the registry's public endpoint to every source, so a
+    GitHub-hosted runner (release.yml) can push releases; every push and pull
+    still needs Entra or token authentication, as on ECR. false (default)
+    keeps the registry reachable only through its private endpoint and from
+    operator_ip_allowlist; push from an allowlisted machine or from a
+    self-hosted runner in the VNet instead (README.md, "Releases").
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "enable_jumpbox" {
   description = <<-EOT
-    Creates a small Linux VM inside the VNet (jumpbox.tf) with Docker, Azure
-    CLI, Terraform and psql: the "cloud" image build path
-    (scripts/build-images.sh cloud), the database bootstrap, and anything
-    else that must reach the private endpoints. No public IP; reach it with
+    Creates a small Linux VM inside the VNet (jumpbox.tf) with Azure CLI,
+    Terraform and psql: the database bootstrap, applies once
+    operator_ip_allowlist is empty, and anything else that must reach the
+    private endpoints. It builds no images. No public IP; reach it with
     Azure Bastion Developer (enable_bastion_developer) or
     `az vm run-command`. Shuts down every evening (jumpbox_shutdown_time).
   EOT
@@ -471,7 +609,7 @@ variable "enable_bastion_developer" {
 }
 
 variable "jumpbox_vm_size" {
-  description = "2 vCPU / 8 GiB builds the Go and web images in a few minutes. Billed only while running."
+  description = "VM size of the jumpbox. Billed only while running."
   type        = string
   default     = "Standard_B2ms"
 }
@@ -503,7 +641,7 @@ variable "encryption_at_host" {
 }
 
 variable "jumpbox_shutdown_time" {
-  description = "Daily automatic shutdown, HHMM in jumpbox_shutdown_timezone. Start it again with `az vm start` or scripts/build-images.sh cloud."
+  description = "Daily automatic shutdown, HHMM in jumpbox_shutdown_timezone. Start it again with `az vm start`."
   type        = string
   default     = "2000"
 }
@@ -529,9 +667,10 @@ variable "attachments_share_quota_gb" {
 
 variable "deploy_apps" {
   description = <<-EOT
-    false on the first apply: everything except the Container Apps is
-    created. Set true once the images are pushed, the database bootstrapped
-    and margince.yaml uploaded (README.md), so no revision starts before its
+    false on the first apply: everything except the Container Apps and the
+    Application Gateway is created. Set true once the release images are
+    pushed, the database bootstrapped, margince.yaml uploaded and the public
+    certificate imported (README.md), so no revision starts before its
     prerequisites exist.
   EOT
   type        = bool
@@ -555,20 +694,6 @@ variable "include_bootstrap_admin" {
   description = "Passes the bootstrap admin password to the api for the first boot. Set false once the first admin has signed in and changed it (README.md)."
   type        = bool
   default     = true
-}
-
-variable "image_digests" {
-  description = <<-EOT
-    Optional map of role => image digest ("sha256:..."), for api, worker and
-    web. When set for a role, that role is deployed by digest, which a later
-    push cannot change. scripts/build-images.sh prints the digests.
-  EOT
-  type        = map(string)
-  default     = {}
-  validation {
-    condition     = alltrue([for d in values(var.image_digests) : can(regex("^sha256:[a-f0-9]{64}$", d))])
-    error_message = "image_digests values must look like sha256:<64 hex characters>."
-  }
 }
 
 # ---- Encryption and protection ---------------------------------------------------
@@ -618,4 +743,38 @@ variable "enable_attachments_backup" {
   description = "Daily Azure Backup of the attachments and redis shares, kept 30 days (Recovery Services vault). Share soft delete is always on."
   type        = bool
   default     = true
+}
+
+# ---- Removed variables -------------------------------------------------------------
+# Declared only so an old terraform.tfvars entry fails with a clear message;
+# Terraform would otherwise ignore it with a warning.
+
+variable "image_tag" {
+  description = "Removed: replaced by release_version."
+  type        = any
+  default     = null
+  validation {
+    condition     = var.image_tag == null
+    error_message = "image_tag was removed: set release_version to the VERSION of `make release` (for example v0.3.0). Delete image_tag from terraform.tfvars."
+  }
+}
+
+variable "image_digests" {
+  description = "Removed: images are deployed by release_version; ACR tag locking keeps a released tag immutable."
+  type        = any
+  default     = null
+  validation {
+    condition     = var.image_digests == null
+    error_message = "image_digests was removed: images are deployed as <registry>/<instance_name>/<role>:<release_version>, and the released tags are locked (README.md, \"Releases\"). Delete image_digests from terraform.tfvars."
+  }
+}
+
+variable "bind_custom_domain" {
+  description = "Removed: the custom domain is served by the Application Gateway (appgw.tf) with the Key Vault certificate public_certificate_name."
+  type        = any
+  default     = null
+  validation {
+    condition     = var.bind_custom_domain == null
+    error_message = "bind_custom_domain was removed: the Application Gateway serves public_base_url's host with the Key Vault certificate public_certificate_name (README.md, step 6). Delete bind_custom_domain from terraform.tfvars."
+  }
 }

@@ -1,237 +1,124 @@
-variable "aws_region" {
-  description = "AWS region every resource is created in."
-  type        = string
-  default     = "eu-central-1"
-}
+# The variables shared with the Azure light stack come first, with the same
+# names. AWS-only variables follow. removed.tf refuses the variables of the
+# earlier design.
+
+# ---- Shared with azure/light ----------------------------------------------------
 
 variable "name_prefix" {
-  description = "Short prefix for every resource name (e.g. \"margince-light\")."
+  description = "Short prefix for resource names."
   type        = string
   default     = "margince-light"
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{2,30}$", var.name_prefix))
+    error_message = "name_prefix: 3-31 characters, lowercase letters, digits and hyphens, starting with a letter."
+  }
+}
+
+variable "region" {
+  description = "AWS region, for example eu-central-1."
+  type        = string
+  default     = "eu-central-1"
+  validation {
+    condition     = can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]$", var.region))
+    error_message = "region must be an AWS region name such as eu-central-1."
+  }
 }
 
 variable "environment" {
-  description = <<-EOT
-    Stamped onto every resource's Environment tag (provider default_tags,
-    versions.tf) — the dimension a cost/operations tool groups this stack's
-    spend by when the same name_prefix is reused across more than one
-    environment.
-  EOT
+  description = "Value of the Environment tag on every resource."
   type        = string
   default     = "production"
 }
 
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC this stack creates."
-  type        = string
-  default     = "10.30.0.0/16"
-}
-
-variable "az_count" {
-  description = <<-EOT
-    Number of AZs the PRIVATE subnets (the RDS subnet group) spread across.
-    The compute itself — three EC2 instances (edge/app/worker), always — sits
-    in one public subnet; this only sizes the RDS side. An RDS subnet group
-    requires subnets in at least two AZs even for a single-AZ instance,
-    which is why this floor is 2 rather than 1.
-  EOT
-  type        = number
-  default     = 2
-  validation {
-    condition     = var.az_count >= 2
-    error_message = "az_count must be at least 2 — the RDS subnet group requires two Availability Zones."
-  }
-}
-
-variable "cpu_architecture" {
-  description = <<-EOT
-    Instance/image architecture — "x86_64" or "arm64". Defaults to arm64
-    (Graviton, e.g. t4g.small): RDS (db.t4g.micro) and ElastiCache
-    (cache.t4g.micro) already default to Graviton families, the product's
-    own release pipeline builds and smoke-tests every image on real arm64
-    GitHub runners and pushes multi-arch (linux/amd64,linux/arm64) images,
-    and the backend has zero cgo. Set to "x86_64" if your own build/push
-    step only produces an amd64 image — this also picks the matching
-    Amazon Linux 2023 AMI via the SSM parameter in ec2.tf.
-  EOT
-  type        = string
-  default     = "arm64"
-  validation {
-    condition     = contains(["x86_64", "arm64"], var.cpu_architecture)
-    error_message = "cpu_architecture must be \"x86_64\" or \"arm64\"."
-  }
-}
-
-# ---- Images -------------------------------------------------------------
-
-variable "image_tag" {
-  description = <<-EOT
-    Release identifier for all three roles (edge/app/worker) — a real
-    version (e.g. a git SHA or MARGINCE_RELEASE_VERSION), never "latest".
-    Each instance checks its own S3 artifact cache
-    (build.tf/templates/user_data-*.sh.tpl) for `binaries/<role>-<tag>.tar.gz`
-    first; if missing, it compiles from source and publishes that key
-    itself. No default: picking a floating tag is an operator decision this
-    stack should not make silently.
-  EOT
+variable "domain" {
+  description = "The public host name of Margince, for example crm.example.com. It becomes HOST_DOMAIN in deploy/production/host.env. Create its A record for the public_ip output."
   type        = string
   validation {
-    condition     = length(trimspace(var.image_tag)) > 0
-    error_message = "image_tag must not be empty or whitespace."
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.domain))
+    error_message = "domain must be a lowercase DNS name without scheme, port or path, for example crm.example.com."
   }
 }
-
-# ---- Compute sizing -------------------------------------------------------
 
 variable "instance_type" {
-  description = <<-EOT
-    Shared across all three instances (edge/app/worker, ec2.tf) — each runs
-    ONE role's process plus its own build toolchain (Go always; edge also
-    needs Node/pnpm for the frontend). t4g.small (2 vCPU / 2GiB) is the
-    floor that leaves headroom for a from-source compile on top of the
-    running process; t4g.micro (1GiB) starves the build. Burstable
-    (T-family): fine for a light/small-deployment workload, not for one
-    under sustained load — size up (m7g family) if CPU credit balance
-    becomes the bottleneck. Must match cpu_architecture: Graviton families
-    end in "g" before the size suffix (t4g, m7g, etc.).
-  EOT
+  description = "EC2 instance type. t3.large (2 vCPU, 8 GiB) runs api, worker, web, Postgres, Redis and Caddy. Must match cpu_architecture."
   type        = string
-  default     = "t4g.small"
-
+  default     = "t3.large"
   validation {
     condition     = var.cpu_architecture != "x86_64" || !can(regex("^(a1|[a-z]+[0-9]+g[a-z]*)\\.", var.instance_type))
-    error_message = "instance_type \"${var.instance_type}\" is a Graviton (arm64) family; set cpu_architecture = \"arm64\" or pick an x86_64 instance type."
+    error_message = "instance_type is a Graviton (arm64) type; set cpu_architecture = \"arm64\" or pick an x86_64 instance type."
   }
   validation {
     condition     = var.cpu_architecture != "arm64" || can(regex("^(a1|[a-z]+[0-9]+g[a-z]*)\\.", var.instance_type))
-    error_message = "instance_type \"${var.instance_type}\" does not look like a Graviton (arm64) family (e.g. t4g.small, m7g.large, c7gd.large, c7gn.large); set cpu_architecture = \"x86_64\" or choose an arm64 instance type."
+    error_message = "instance_type is not a Graviton (arm64) type such as t4g.large; set cpu_architecture = \"x86_64\" or pick an arm64 instance type."
   }
 }
 
-variable "root_volume_gb" {
-  description = <<-EOT
-    Shared across all three instances. 40 leaves headroom for the Go module
-    cache (every instance) and node_modules/pnpm store (edge only) a
-    from-source build (templates/user_data-*.sh.tpl) needs on top of the
-    running process, on a boot where its S3 artifact cache is empty.
-  EOT
-  type        = number
-  default     = 40
-}
-
-variable "admin_bootstrap_password" {
-  description = <<-EOT
-    MARGINCE_ADMIN_PASSWORD for the first boot against an empty database.
-    Rotate/remove per the Margince repository's docs/deployment.md once the organization exists —
-    this variable only seeds the initial SSM parameter value.
-  EOT
+variable "admin_ssh_public_key" {
+  description = "OpenSSH public key of the ubuntu user, ed25519 or RSA. The host adapter connects with the matching private key."
   type        = string
-  sensitive   = true
   validation {
-    condition     = length(var.admin_bootstrap_password) > 0
-    error_message = "admin_bootstrap_password must not be empty (SSM Parameter Store rejects empty values)."
+    condition     = startswith(var.admin_ssh_public_key, "ssh-ed25519 ") || startswith(var.admin_ssh_public_key, "ssh-rsa ")
+    error_message = "admin_ssh_public_key must be an ed25519 or RSA key (ssh-ed25519 ... or ssh-rsa ...)."
   }
 }
 
-variable "license_token" {
-  description = "MARGINCE_LICENSE. Empty runs unlicensed, which a production role refuses to boot on."
-  type        = string
-  default     = ""
-  sensitive   = true
+variable "ssh_allowed_cidrs" {
+  description = "Source ranges allowed to reach SSH (port 22): the addresses that run make host-bootstrap and make deploy. 0.0.0.0/0 needs allow_ssh_from_anywhere = true."
+  type        = list(string)
+  validation {
+    condition     = length(var.ssh_allowed_cidrs) > 0
+    error_message = "ssh_allowed_cidrs needs at least one range, for example the /32 of the address you deploy from (curl -s https://ifconfig.me)."
+  }
+  validation {
+    condition     = alltrue([for c in var.ssh_allowed_cidrs : can(cidrhost(c, 0)) && can(regex("^[0-9.]+/[0-9]+$", c))])
+    error_message = "ssh_allowed_cidrs entries must be IPv4 CIDR ranges such as 203.0.113.10/32."
+  }
+  validation {
+    condition     = var.allow_ssh_from_anywhere || !contains(var.ssh_allowed_cidrs, "0.0.0.0/0")
+    error_message = "ssh_allowed_cidrs contains 0.0.0.0/0. Set allow_ssh_from_anywhere = true to open SSH to the internet on purpose."
+  }
 }
 
-variable "public_base_url" {
-  description = <<-EOT
-    MARGINCE_PUBLIC_BASE_URL, e.g. https://crm.example.com. Its host is what
-    CloudFront (cloudfront.tf) requests an ACM certificate for and what
-    nginx's server_name matches (ec2.tf's `local.domain`) — this domain's
-    DNS must eventually CNAME to cloudfront_domain_name (see README); ACM's
-    own DNS validation is a separate, earlier manual step (cloudfront.tf).
-  EOT
-  type        = string
+variable "allow_ssh_from_anywhere" {
+  description = "Allows 0.0.0.0/0 in ssh_allowed_cidrs, for example for GitHub-hosted runners. SSH still needs the private key."
+  type        = bool
+  default     = false
 }
 
-# ---- Database ---------------------------------------------------------------
-
-variable "db_instance_class" {
-  type    = string
-  default = "db.t4g.micro"
-}
-
-variable "db_allocated_storage_gb" {
-  type    = number
-  default = 20
-}
-
-variable "db_engine_version" {
-  description = "Postgres major version (\"16\"). Major only: RDS applies minor upgrades itself (auto_minor_version_upgrade), and a pinned minor makes every later plan try to downgrade. Must be a major RDS lists pgvector support for."
-  type        = string
-  default     = "16"
-}
-
-variable "db_backup_retention_days" {
-  description = "Shorter than the full stack's default (7) on purpose — this is the light/small-deployment option, not the one asked to hold a long rollback window."
+variable "os_disk_gb" {
+  description = "Root volume size. Docker data is on the data volume."
   type        = number
-  default     = 3
+  default     = 30
+  validation {
+    condition     = var.os_disk_gb >= 10
+    error_message = "os_disk_gb must be at least 10."
+  }
 }
 
-variable "db_final_snapshot_generation" {
-  description = <<-EOT
-    Feeds rds.tf's random_id.final_snapshot as a keepers value, so a
-    deliberate replacement gets a fresh final-snapshot suffix without
-    deriving it from the resource being deleted (which would cycle). Bump
-    this before destroying and recreating the RDS instance in the SAME
-    state — otherwise the reused suffix collides with a snapshot an earlier
-    deletion already left behind. ElastiCache has no equivalent here: this
-    stack's replication group takes no final snapshot at all (elasticache.tf).
-  EOT
+variable "data_disk_gb" {
+  description = "Data volume mounted at /var/lib/docker: the postgres, redis, blobs and caddy volumes, and the images."
   type        = number
-  default     = 1
+  default     = 64
+  validation {
+    condition     = var.data_disk_gb >= 16
+    error_message = "data_disk_gb must be at least 16."
+  }
 }
 
-variable "db_deletion_protection" {
-  description = "RDS deletion protection. On by default: `terraform destroy` (or a replacement) of the database fails until this is set to false and applied first. A final snapshot is taken either way (rds.tf)."
+variable "enable_backup" {
+  description = "Daily EBS snapshots of the data volume and the root volume (Data Lifecycle Manager), 7-day retention. The data volume holds the database and the files and has no other copy."
   type        = bool
   default     = true
 }
 
-variable "redis_image" {
-  description = "Redis container image run by Docker on the app instance. Pinned by digest; the default is the same image and digest as Margince's docker-compose.dev.yml and the Azure standard stack (7.2 is the newest Redis the product supports)."
-  type        = string
-  default     = "docker.io/library/redis:7.2@sha256:6461ca4ac0c5c9d81d53685c3bf76aa81f464a9de6cf3a97b80a1da8d1bb1de4"
-
-  validation {
-    condition     = can(regex("@sha256:[0-9a-f]{64}$", var.redis_image))
-    error_message = "redis_image must be pinned by digest (<image>@sha256:<64 hex>)."
-  }
-}
-
-# ---- Observability -----------------------------------------------------------
-
-variable "log_retention_days" {
-  type    = number
-  default = 14
-}
-
 variable "enable_alarms" {
-  description = <<-EOT
-    Creates alarms.tf's SNS topic and CloudWatch alarms: per instance
-    (edge/app/worker) system status check with EC2 auto-recover, instance
-    status check, sustained CPU; RDS free storage, CPU and connections. On
-    by default: every role is a single instance with no peer, so these are
-    the only signal that something is down. Standard-resolution alarms on
-    free basic metrics, roughly $0.10/alarm/month.
-  EOT
+  description = "CloudWatch alarms: system status check with auto-recover, instance status check for 5 minutes, CPU over 90% for 15 minutes. Sent to an SNS topic and alert_email."
   type        = bool
   default     = true
 }
 
 variable "alert_email" {
-  description = <<-EOT
-    Optional email address subscribed to the alerts SNS topic. Empty (the
-    default) creates no subscription. AWS emails a confirmation link that
-    must be clicked before any alert is delivered.
-  EOT
+  description = "Optional email address subscribed to the alerts topic. Empty adds no subscription. AWS sends a confirmation link first."
   type        = string
   default     = ""
   validation {
@@ -240,64 +127,27 @@ variable "alert_email" {
   }
 }
 
-variable "db_max_connections_alarm_threshold" {
-  description = <<-EOT
-    DatabaseConnections above this for 15 minutes alarms. db.t4g.micro's
-    default max_connections is roughly 80-110 (derived from instance
-    memory); raise this with a larger db_instance_class.
-  EOT
-  type        = number
-  default     = 70
-}
-
-# ---- Source -----------------------------------------------------------------
-
-variable "margince_source_dir" {
-  description = <<-EOT
-    Path to a checkout of the Margince source repository, at the commit to
-    deploy. build.tf archives it (minus its .dockerignore exclusions) and
-    uploads it to S3; each instance builds its own piece from that archive.
-    The default assumes the Margince repository sits next to this repository's
-    checkout (five levels up from deploy/production/aws/light).
-  EOT
+variable "license_token" {
+  description = "MARGINCE_LICENSE. Stored as an SSM SecureString for make deploy. Empty stores nothing; the environment then needs MARGINCE_ENV=test (docs/deploy.md Section 5.8)."
   type        = string
-  default     = "../../../../../margince"
-  validation {
-    condition     = fileexists("${var.margince_source_dir}/Dockerfile")
-    error_message = "margince_source_dir must point at a Margince source checkout (no Dockerfile found there)."
-  }
+  default     = ""
+  sensitive   = true
 }
 
-variable "auth_rate_limit_per_minute" {
-  description = "Requests per minute per client address nginx allows on login, password reset, OAuth token and setup paths (burst of the same size). Same rule set as the Azure light stack."
-  type        = number
-  default     = 30
-  validation {
-    condition     = var.auth_rate_limit_per_minute >= 1
-    error_message = "auth_rate_limit_per_minute must be at least 1."
-  }
+# ---- AWS only -------------------------------------------------------------------
+
+variable "vpc_cidr" {
+  description = "CIDR block of the VPC. The public subnet is its first /24."
+  type        = string
+  default     = "10.30.0.0/16"
 }
 
-# Removed. Declared only so an old terraform.tfvars entry fails with a clear
-# message; Terraform would otherwise ignore it with a warning.
-variable "enable_waf" {
-  description = "Removed: light has no WAF by design; nginx on edge rate-limits the credential endpoints."
-  type        = any
-  default     = null
+variable "cpu_architecture" {
+  description = "x86_64 or arm64. The release images must exist for it: release.yml builds the repository variable PLATFORMS, default linux/amd64. For arm64 (t4g.large), set PLATFORMS to linux/amd64,linux/arm64 before make release."
+  type        = string
+  default     = "x86_64"
   validation {
-    condition     = var.enable_waf == null
-    error_message = "enable_waf was removed: light has no WAF by design; nginx on edge rate-limits the credential endpoints. Delete it from terraform.tfvars."
-  }
-}
-
-# Removed. Declared only so an old terraform.tfvars entry fails with a clear
-# message; Terraform would otherwise ignore it with a warning.
-variable "enable_deep_monitoring" {
-  description = "Removed: renamed to enable_alarms (default true)."
-  type        = any
-  default     = null
-  validation {
-    condition     = var.enable_deep_monitoring == null
-    error_message = "enable_deep_monitoring was removed: renamed to enable_alarms (default true). Delete it from terraform.tfvars."
+    condition     = contains(["x86_64", "arm64"], var.cpu_architecture)
+    error_message = "cpu_architecture must be \"x86_64\" or \"arm64\"."
   }
 }

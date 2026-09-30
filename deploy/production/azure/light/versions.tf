@@ -1,9 +1,9 @@
 terraform {
   required_version = ">= 1.10.0"
 
-  # Remote state is required: it holds every generated password and the Entra
-  # client secret. The values live in backend.hcl (copy backend.hcl.example),
-  # kept out of the repo:
+  # Remote state is required: it holds the Entra client secret and the
+  # license. The values live in backend.hcl (copy backend.hcl.example), kept
+  # out of the repo:
   #
   #   terraform init -backend-config=backend.hcl
   #
@@ -34,8 +34,8 @@ terraform {
 provider "azurerm" {
   features {
     key_vault {
-      # A POC should tear down cleanly, but a purged vault name is gone for
-      # good; keep soft-deleted vaults and secrets recoverable.
+      # A purged vault name is gone for good; keep soft-deleted vaults and
+      # secrets recoverable.
       purge_soft_delete_on_destroy    = false
       recover_soft_deleted_key_vaults = true
     }
@@ -43,8 +43,8 @@ provider "azurerm" {
       prevent_deletion_if_contains_resources = true
     }
     recovery_service {
-      # A VM replacement (any custom_data change) re-creates the protected
-      # item. Keep the old recovery points instead of deleting them.
+      # A VM replacement re-creates the protected item. Keep the old
+      # recovery points instead of deleting them.
       vm_backup_stop_protection_and_retain_data_on_destroy = true
     }
   }

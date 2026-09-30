@@ -1,69 +1,76 @@
-output "aws_region" {
-  value = var.aws_region
+# The outputs shared with the Azure light stack come first, with the same
+# names. AWS-only outputs follow.
+
+locals {
+  ssh_user  = "ubuntu"
+  public_ip = aws_eip.this.public_ip
+
+  # Names for deploy/production/secrets, and the commands that set their
+  # values in the shell that runs make deploy.
+  secret_env = local.license_set ? {
+    MARGINCE_LICENSE = "$(aws ssm get-parameter --region ${var.region} --name ${local.license_name} --with-decryption --query Parameter.Value --output text)"
+  } : {}
 }
 
-output "edge_instance_id" {
-  value = aws_instance.edge.id
+# ---- Shared with azure/light ----------------------------------------------------
+
+output "public_ip" {
+  description = "The Elastic IP. The A record of domain points here."
+  value       = local.public_ip
 }
 
-output "app_instance_id" {
-  value = aws_instance.app.id
+output "host_env" {
+  description = "The lines for deploy/production/host.env."
+  value       = "HOST_SSH=${local.ssh_user}@${local.public_ip}\nHOST_DOMAIN=${var.domain}\n"
 }
 
-output "worker_instance_id" {
-  value = aws_instance.worker.id
-}
-
-output "ssm_connect_command_edge" {
-  description = "Shell access — no SSH ingress on any instance's security group (network.tf), by design."
-  value       = "aws ssm start-session --target ${aws_instance.edge.id} --region ${var.aws_region}"
-}
-
-output "ssm_connect_command_app" {
-  value = "aws ssm start-session --target ${aws_instance.app.id} --region ${var.aws_region}"
-}
-
-output "ssm_connect_command_worker" {
-  value = "aws ssm start-session --target ${aws_instance.worker.id} --region ${var.aws_region}"
-}
-
-output "acm_validation_record" {
-  description = <<-EOT
-    The DNS record ACM needs to issue the CloudFront certificate — this
-    stack has no Route53 integration, so add this CNAME with your own DNS
-    provider before applying aws_acm_certificate_validation.this (see
-    README). Empty until aws_acm_certificate.this exists.
+output "ssh_known_hosts_hint" {
+  description = "Commands that read the SSH host key and the fingerprints to compare it with, for HOST_KNOWN_HOSTS."
+  value       = <<-EOT
+    ssh-keyscan -t ed25519 ${local.public_ip} > known_hosts.production
+    ssh-keygen -lf known_hosts.production
+    aws ec2 get-console-output --region ${var.region} --instance-id ${aws_instance.this.id} --latest --output text | grep -A6 'BEGIN SSH HOST KEY FINGERPRINTS'
+    # The ED25519 fingerprints must match. Then:
+    export HOST_KNOWN_HOSTS="$(cat known_hosts.production)"
   EOT
-  value = {
-    name  = tolist(aws_acm_certificate.this.domain_validation_options)[0].resource_record_name
-    type  = tolist(aws_acm_certificate.this.domain_validation_options)[0].resource_record_type
-    value = tolist(aws_acm_certificate.this.domain_validation_options)[0].resource_record_value
-  }
 }
 
-output "cloudfront_domain_name" {
-  description = "Point public_base_url's DNS record here (a CNAME, or an ALIAS/ANAME record if your provider supports one at the zone apex)."
-  value       = aws_cloudfront_distribution.this.domain_name
+output "dns_record" {
+  description = "The DNS record to create at your DNS provider."
+  value       = "${var.domain} A ${local.public_ip}"
 }
 
-output "rds_endpoint" {
-  value = aws_db_instance.this.address
+output "ssh_command" {
+  description = "Opens a shell on the instance."
+  value       = "ssh ${local.ssh_user}@${local.public_ip}"
 }
 
-output "s3_blobstore_bucket" {
-  value = aws_s3_bucket.blobstore.bucket
+output "secret_names" {
+  description = "Names to list in deploy/production/secrets, besides the ones you add yourself."
+  value       = sort(keys(local.secret_env))
+}
+
+output "secret_exports" {
+  description = "Commands that set the values of secret_names in the shell that runs make deploy."
+  value       = join("", [for k in sort(keys(local.secret_env)) : "export ${k}=\"${local.secret_env[k]}\"\n"])
+}
+
+# ---- AWS only -------------------------------------------------------------------
+
+output "instance_id" {
+  value = aws_instance.this.id
+}
+
+output "data_volume_id" {
+  value = aws_ebs_volume.data.id
+}
+
+output "license_parameter_name" {
+  description = "The SSM parameter that holds MARGINCE_LICENSE. Empty without license_token."
+  value       = local.license_set ? local.license_name : ""
 }
 
 output "alerts_topic_arn" {
-  description = "SNS topic every alarm (alarms.tf) notifies. Empty when enable_alarms is false."
+  description = "The SNS topic that receives the alarms. Empty when enable_alarms is false."
   value       = var.enable_alarms ? aws_sns_topic.alerts[0].arn : ""
-}
-
-output "secret_parameter_names" {
-  description = <<-EOT
-    SSM Parameter Store names (not values) of every credential this stack
-    seals, SecureString under alias/aws/ssm. Read one with:
-      aws ssm get-parameter --name <name> --with-decryption --query Parameter.Value --output text
-  EOT
-  value       = { for k, p in aws_ssm_parameter.secret : k => p.name }
 }

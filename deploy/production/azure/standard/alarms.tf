@@ -1,4 +1,4 @@
-# Metric alerts for the data services and the two apps. Thresholds are
+# Metric alerts for the data services, the two apps and the WAF. Thresholds are
 # starting points, not tuned values.
 #
 # The only notification wired is the optional var.alert_email. Any other
@@ -82,6 +82,31 @@ locals {
         threshold   = 3
         window      = "PT15M"
         description = "api replicas are restarting."
+        dimension   = ""
+      }
+      # Requests the WAF blocked (custom and managed rules). Only meaningful
+      # once waf_mode = "block"; in count mode nothing is blocked. The
+      # counterpart of the AWS stack's WAF BlockedRequests alarm.
+      waf-blocked-requests = {
+        scope       = azurerm_application_gateway.this[0].id
+        namespace   = "Microsoft.Network/applicationGateways"
+        metric      = "AzwafTotalRequests"
+        aggregation = "Total"
+        operator    = "GreaterThan"
+        threshold   = var.alarm_waf_blocked_requests_threshold
+        window      = "PT5M"
+        description = "The WAF is blocking an unusual number of requests: an attack, or a false positive after a release."
+        dimension   = "Action=Block"
+      }
+      appgw-unhealthy-backend = {
+        scope       = azurerm_application_gateway.this[0].id
+        namespace   = "Microsoft.Network/applicationGateways"
+        metric      = "UnhealthyHostCount"
+        aggregation = "Average"
+        operator    = "GreaterThan"
+        threshold   = 0
+        window      = "PT5M"
+        description = "The Application Gateway cannot reach the api app (/healthz probe failing)."
         dimension   = ""
       }
       worker-restarts = {

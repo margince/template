@@ -1,161 +1,238 @@
-# Margince on Azure, light (proof of concept)
+# Margince on Azure, light
 
-The cheapest way to run Margince in a customer's Azure subscription and Entra
-ID tenant: one VM that builds Margince from source and runs it natively,
-plus a small managed Postgres. For production use the standard stack.
+One Ubuntu 24.04 VM in a customer's Azure subscription and Entra ID tenant.
+Terraform creates the infrastructure only. The template's `host` adapter
+deploys Margince to the VM: Docker Compose, Caddy with an automatic HTTPS
+certificate, and PostgreSQL 16 and Redis as containers on the VM
+([docs/deploy.md, Section 5](../../../../docs/deploy.md#5-the-host-adapter)).
+The AWS light stack ([../../aws/light](../../aws/light/README.md)) has the
+same shape, variables and outputs.
 
-## What it creates
+## 1. What it creates
 
 | Area | Resources |
 |---|---|
-| Compute | One Ubuntu 24.04 VM (`Standard_B2ms`), system-assigned identity, static public IP with an Azure DNS name. nginx (TLS, SPA, reverse proxy), `margince-api`, `margince-worker` and Redis 7.2 (Redis's signed apt repository, pinned to 7.2, the same version as the standard stack) under systemd. Trusted Launch, encryption at host, Azure-orchestrated OS patching. |
-| Storage | 64 GB data disk at `/var/lib/margince`: attachments (`MARGINCE_BLOBSTORE_PATH`), Redis data, `margince.yaml`, certificates, build cache. |
-| Database | Postgres Flexible Server 16, `B_Standard_B1ms`, 32 GB (auto-grow), VNet-only, TLS 1.2+ required, failed-login throttling, 7-day backups. |
-| Secrets | Key Vault (standard, RBAC, firewall open only to the VM and `operator_ip_allowlist`) with every generated secret; the VM identity reads them at service start. |
-| Network | VNet with a VM subnet and a delegated Postgres subnet. NSG: 80/443 from the Internet, SSH only from Azure Bastion Developer (free). |
-| Identity | Entra app registration (single tenant, assignment required, your security group) for staff sign-in and Graph mail. |
+| Compute | One VM, `Standard_B2ms` (2 vCPU, 8 GiB), Canonical Ubuntu 24.04 LTS server Gen2. Trusted Launch, encryption at host, Azure-orchestrated OS patching. Admin user `azureadmin` with passwordless `sudo`, SSH key login only. |
+| Storage | 30 GB OS disk. 64 GB data disk (`prevent_destroy`), mounted at `/var/lib/docker` by cloud-init before Docker is installed. Every Docker volume (`pgdata`, `redisdata`, `blobs`, `caddydata`) is on it. |
+| Network | VNet with one subnet, static Standard public IP. NSG: 80 and 443 from the internet, 22 from `ssh_allowed_cidrs` only. Outbound open. |
+| Secrets | Key Vault (RBAC, firewall open to `ssh_allowed_cidrs` and `key_vault_allowed_cidrs`) with the Entra client secret and the license. The VM does not read it. |
+| Identity | Entra app registration: single tenant, assignment required, your security group, staff sign-in and Graph mail. |
+| Backup | Recovery Services vault: daily backup of the VM with its data disk, 7 days (`enable_backup`). |
+| Alerts | Action group and two metric alerts: VM unavailable for 5 minutes, CPU over 90% for 15 minutes (`enable_alarms`, `alert_email`). |
 
-```
-Internet ─443─> nginx ──127.0.0.1:8080──> margince-api ─┬─> Postgres (VNet, TLS)
-                 │ SPA, 403 on password login           ├─> Redis 127.0.0.1:6379 
-                 │ outside break_glass_cidrs            └─> Graph, Dataverse, LLM (from the public IP)
-                 └ rate limits on auth paths    margince-worker ─┘
-```
+cloud-init does one thing: it formats the data disk when it has no
+filesystem, mounts it by UUID with `nofail`, and makes `docker.service`
+require the mount. It also bind-mounts `/var/lib/docker/margince-host` at
+`/opt/margince`, owned by the SSH user, so the adapter's default `HOST_DIR`
+(`/opt/margince/<name>`, with `shared/instance.env` and `shared/data.env`) is
+on the data disk too. It does not install Docker or Margince. Keep `HOST_DIR`
+unset, or under `/opt/margince`.
 
-## What it is not
+## 2. Cost
 
-- **One VM, no high availability.** A VM or zone failure is an outage until
-  the VM is back. Postgres has point-in-time restore; the VM and its data
-  disk are backed up daily for 7 days (`enable_vm_backup`, on by default).
-- **Builds on the box.** First boot clones the repository and compiles the
-  Go binaries and the SPA (about 15 minutes on B2ms). Nothing is signed or
-  pinned beyond the git ref you choose.
-- **No WAF, no log shipping, no alerts.** Logs are in journald and
-  `/var/log/nginx` on the VM.
+West Europe, pay-as-you-go, about **EUR 75 per month**:
 
-Cost, West Europe, pay-as-you-go: about **EUR 80/month** (VM ~55, Postgres
-~17, disks ~8, public IP ~3; Bastion Developer and Key Vault are free or
-cents), plus about EUR 8 for `enable_vm_backup`. Stop the VM and Postgres to pay
-mostly for storage.
+| Item | EUR per month |
+|---|---|
+| VM `Standard_B2ms` | about 55 |
+| OS and data disk (StandardSSD) | about 8 |
+| Static public IP | about 3 |
+| Azure Backup (`enable_backup`) | about 8 |
+| Key Vault, alerts | less than 1 |
 
-## Steps
+## 3. Prerequisites
 
-**1. Backend and variables.** You need Owner (or Contributor plus User Access
-Administrator) on the subscription and Entra Application Administrator.
-azurerm 4.x needs the subscription explicitly, and encryption at host needs a
-one-time feature registration (skip it with `encryption_at_host = false`):
+| Requirement | Detail |
+|---|---|
+| Azure role | Owner, or Contributor and User Access Administrator, on the subscription. |
+| Entra role | Application Administrator or Cloud Application Administrator, for `entra.tf`. |
+| Tools | Terraform 1.10.0 or later, Azure CLI, `ssh`, `ssh-keyscan`. |
+| State | A storage account for the remote state (`backend.hcl.example`). |
+| Instance | The instance repository with `make install` done, and the registry settings of [docs/release.md](../../../../docs/release.md#5-repository-settings). |
+| License | A production license, or a test environment ([docs/deploy.md, Section 5.8](../../../../docs/deploy.md#58-the-license-check)). |
 
-```bash
-export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+Set the subscription and register encryption at host once (or set
+`encryption_at_host = false`):
+
+```sh
+export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 az feature register --namespace Microsoft.Compute --name EncryptionAtHost
-az feature show --namespace Microsoft.Compute --name EncryptionAtHost --query properties.state  # wait for "Registered"
+az feature show --namespace Microsoft.Compute --name EncryptionAtHost --query properties.state
 az provider register --namespace Microsoft.Compute
 ```
 
-```bash
-cd light
-cp backend.hcl.example backend.hcl            # fill in
-cp terraform.tfvars.example terraform.tfvars  # fill in
-terraform init -backend-config=backend.hcl
+## 4. Deploy
+
+Run the `terraform` commands in `deploy/production/azure/light` and the `make`
+commands in the repository root.
+
+### 4.1 Apply
+
+1. Copy `backend.hcl.example` to `backend.hcl` and fill it in.
+2. Copy `terraform.tfvars.example` to `terraform.tfvars` and fill in `domain`,
+   `admin_ssh_public_key`, `ssh_allowed_cidrs` and
+   `entra_access_group_object_id`. `ssh_allowed_cidrs` must include the
+   address you run Terraform from: the Key Vault firewall admits only these
+   addresses and `key_vault_allowed_cidrs`.
+3. Apply:
+
+   ```sh
+   terraform init -backend-config=backend.hcl
+   terraform apply
+   ```
+
+4. Wait until cloud-init has mounted the data disk:
+
+   ```sh
+   $(terraform output -raw ssh_command) cloud-init status --wait
+   ```
+
+   `status: done` is required. On `status: error`, read
+   `/var/log/cloud-init-output.log` on the VM.
+
+### 4.2 DNS
+
+Create the A record that `terraform output dns_record` prints, at your DNS
+provider. A CAA record, if present, must allow `letsencrypt.org`.
+
+### 4.3 host.env, config and secrets
+
+1. Replace the `HOST_SSH=` and `HOST_DOMAIN=` lines of
+   `deploy/production/host.env` with the output of:
+
+   ```sh
+   terraform output -raw host_env
+   ```
+
+2. Set `bootstrap_admin.email` and the workspace in
+   `deploy/production/config/margince.yaml`.
+3. Add every name that `terraform output secret_names` prints to
+   `deploy/production/secrets`, one per line.
+4. Commit and push. `make deploy` refuses uncommitted changes.
+
+### 4.4 Known hosts
+
+1. Run the commands that `terraform output -raw ssh_known_hosts_hint`
+   prints. They read the host key with `ssh-keyscan` and the fingerprints
+   from the VM's boot log.
+2. Compare the ED25519 fingerprints. Continue only when they match.
+3. Export `HOST_KNOWN_HOSTS` as the last line of the hint shows.
+
+### 4.5 Install Docker
+
+```sh
+make host-bootstrap ENV=production
 ```
 
-`operator_ip_allowlist` must hold the public IP you run Terraform from: the
-Key Vault firewall denies every other address, and Terraform writes the
-secrets through it. The admin SSH key may be RSA or ed25519; RSA is the safe choice for the
-Bastion portal login.
+### 4.6 Release and deploy
 
-**2. Apply.**
+1. Cut a release and wait until `release.yml` has pushed the images:
 
-```bash
-terraform apply
+   ```sh
+   make release VERSION=<v>
+   ```
+
+2. Set the values of `secret_names` from Key Vault. Run the commands that
+   this prints:
+
+   ```sh
+   terraform output -raw secret_exports
+   ```
+
+3. Deploy. `REGISTRY` must be the value the release used:
+
+   ```sh
+   REGISTRY=<registry> make deploy ENV=production VERSION=<v>
+   ```
+
+### 4.7 First sign-in
+
+1. Print the generated first admin password:
+
+   ```sh
+   make host-admin-password ENV=production
+   ```
+
+2. Sign in at `https://<domain>` as `bootstrap_admin.email` and change the
+   password.
+3. Complete the Entra ID steps in Section 7.1.
+
+## 5. Upgrades
+
+An upgrade is a deployment of a new version:
+
+```sh
+make release VERSION=<v>
+REGISTRY=<registry> make deploy ENV=production VERSION=<v>
 ```
 
-The VM then provisions itself. Follow it from Bastion (`ssh_via_bastion`
-output) with `sudo tail -f /var/log/margince-setup.log`. If a step fails, fix
-the cause and run `sudo margince-setup` again.
+Rollback and its limits: [docs/deploy.md, Section 5.12](../../../../docs/deploy.md#512-rollback-limits).
 
-**3. DNS.** Without `public_hostname`, Margince is served at
-`https://<label>.<region>.cloudapp.azure.com` (`azure_fqdn` output) and gets
-its certificate at first boot; skip to step 5. With your own hostname,
-create an A record to the `public_ip` output (or a CNAME to `azure_fqdn`).
-A CAA record, if present, must allow `letsencrypt.org`.
+A change of the cloud-init document replaces the VM. The data disk and the
+public IP stay. After a replacement:
 
-**4. Enable TLS** (custom hostname only), once DNS resolves:
+1. Wait for `cloud-init status --wait` (Section 4.1).
+2. Get the new host key into `HOST_KNOWN_HOSTS` (Section 4.4).
+3. Run `make host-bootstrap ENV=production`.
+4. Run `make deploy ENV=production VERSION=<v>`. The volumes and
+   `HOST_DIR` are on the data disk, so the data, the database passwords and
+   the generated keys are kept.
 
-```bash
-sudo margince-enable-tls
-```
+## 6. Backups and restore
 
-It checks that the name points at the VM, gets a Let's Encrypt certificate
-and reloads nginx. The certbot timer renews it.
+With `enable_backup = true`, Azure Backup takes a daily recovery point of the
+VM with its OS and data disk at 02:00 UTC and keeps 7. The template itself
+does not back up the database ([docs/deploy.md, Section 5.13](../../../../docs/deploy.md#513-backups)).
 
-**5. Entra ID** (Entra admin, once): grant admin consent for the app
-(Enterprise applications → Margince → Permissions), unless
-`entra_grant_admin_consent = true`; add the app (`entra_client_id` output) to
-the Conditional Access policy that protects Dataverse; check that
-Assignment required = Yes and only your group is assigned.
-
-**6. First login.** From a `break_glass_cidrs` address, sign in as
-`bootstrap_admin_email` with the password from the `admin_password_command`
-output, set the permanent password and keep it as the break-glass account.
-Turn on Microsoft sign-in in Margince's settings and test it.
-
-**7. Close.** Remove the `bootstrap_admin` section from
-`/app/config/margince.yaml` and restart `margince-api`. Once the organization
-exists the api ignores the bootstrap password and deletes its file;
-`include_bootstrap_admin = false` also stops passing it, but replaces the VM
-(see below), so fold it into your next planned change.
-
-## Operating it
-
-| Task | Command on the VM |
+| Task | Action |
 |---|---|
-| Upgrade Margince | `sudo margince-build <branch, tag or commit>` (restarts the services; the api migrates) |
-| Roll back | `sudo ln -sfn /opt/margince/releases/<old> /opt/margince/current && sudo systemctl restart margince-api margince-worker` |
-| Logs | `journalctl -u margince-api -u margince-worker -f` |
-| Entra secret rotation | after the apply that rotates it: `sudo systemctl restart margince-api margince-worker` |
-| Re-run the database bootstrap | `sudo margince-bootstrap-db` (idempotent) |
+| Restore the whole VM | Azure portal: Recovery Services vault `<name_prefix>-rsv` > Backup items > the VM > Restore VM. |
+| Restore the data disk only | Restore disks, then swap the data disk of the VM, or attach the restored disk and copy the volumes. |
+| Keep the instance keys | Also copy `$HOST_DIR/shared/instance.env` off the VM and store it securely. `MARGINCE_KEYVAULT_ROOT_KEY` opens the sealed data; a backup without it is not enough. |
 
-Changing a variable that feeds cloud-init (nginx rules, workspace settings,
-git ref, posture) **replaces the VM**. The data disk, public IP, Key Vault and
-Postgres stay; the new VM rebuilds in about 20 minutes and keeps
-`margince.yaml`, attachments and certificates. Plain upgrades should use
-`margince-build` instead.
+A disk-level backup of a running database is crash-consistent. For an
+application-consistent copy, also run `pg_dump` in the `postgres` container on
+a schedule.
 
-The data disk records the commit last installed (`/var/lib/margince/deployed-commit`).
-`margince-build` refuses a ref that does not contain it, because migrations
-run forward only. On a replaced VM whose `margince_git_ref` is older than the
-recorded commit, first boot builds the recorded commit and logs a reminder to
-update `margince_git_ref`.
+## 7. Azure notes
 
-The Postgres server and the data disk have `prevent_destroy`. A plan that
-would replace either (changing `db_version`, `vnet_cidr`, `name_prefix` or
-`resource_group_name`) fails instead of deleting the data.
+### 7.1 Entra ID
 
-SSH in as `admin_username` (default `azureadmin`). The services run as the
-separate `margince` user, which has no sudo; `admin_username` cannot be
-`margince`.
+1. Grant admin consent for the app (Enterprise applications > Margince >
+   Permissions), unless `entra_grant_admin_consent = true`.
+2. Add the app (`entra_client_id` output) to the Conditional Access policy
+   that protects your other business applications.
+3. Check that Assignment required is Yes and that only your group is
+   assigned.
 
-Dataverse: add the `egress_ip` output to the Dataverse IP firewall.
+### 7.2 Entra secret rotation
 
-## Security notes
+The first `terraform apply` after `entra_secret_rotation_days` creates a new
+client secret and writes it to Key Vault. Then run Section 4.6, steps 2 and
+3, with the running version.
 
-- Public surface: nginx on 80 (ACME and redirect) and 443. cmd/api listens on
-  loopback only; Redis, the worker's health port and `/metrics` are not
-  reachable from outside.
-- Password login is refused outside `break_glass_cidrs`; everyone else signs
-  in with Entra ID under your Conditional Access policy.
-- Secrets live in Key Vault and in `/etc/margince/secrets.env` (root and the
-  service user only). api and worker share that file on this single VM.
-- Postgres has no public endpoint; connections use TLS with full
-  certificate verification.
-- nginx uses Mozilla's "intermediate" TLS profile (TLS 1.2/1.3) with HSTS.
-- Key Vault accepts only the VM's public IP and `operator_ip_allowlist`;
-  `admin_password_command` works only from those addresses.
+### 7.3 Access
 
-## Tests
+| Task | Command |
+|---|---|
+| Shell on the VM | `terraform output -raw ssh_command` |
+| Logs | `docker compose -p margince-<name> logs` on the VM, in `$HOST_DIR/current` |
+| Boot log | `az vm boot-diagnostics get-boot-log -g <resource-group> -n <vm>` |
 
-```bash
+## 8. Versions
+
+| Component | Version | Source |
+|---|---|---|
+| Ubuntu | 24.04 LTS | `vm.tf`, latest image at create time |
+| Docker Engine, Compose plugin | Docker's apt repository | `make host-bootstrap` |
+| PostgreSQL | 16 with pgvector | the image the host adapter pins (`scripts/deploy/host/compose.yaml`) |
+| Redis | 7.2 | the image the host adapter pins (`scripts/deploy/host/compose.yaml`) |
+| Terraform | 1.10.0 or later | `versions.tf` |
+| Providers | azurerm ~> 4.81, azuread ~> 2.53, random ~> 3.6, time ~> 0.12 | `versions.tf` |
+
+## 9. Tests
+
+```sh
 terraform init -backend=false
 terraform validate
 terraform test          # offline checks with mocked providers
