@@ -16,6 +16,7 @@ set -euo pipefail
 DATA=/data
 SECRETS="$DATA/secrets.env"
 PGDATA="$DATA/postgres"
+PGINIT="$DATA/postgres.init"
 SOCKET_DIR=/run/postgresql
 API_READY_TIMEOUT=300
 
@@ -123,12 +124,15 @@ if [ ! -f "$SECRETS" ]; then
 fi
 
 # ── PostgreSQL ──
+# initdb writes PG_VERSION first, so a cluster it did not finish would look
+# complete. It runs in a temporary directory, renamed only after success.
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   say "first start: creating the database"
-  rm -rf "$PGDATA"
-  install -d -o postgres -g postgres -m 700 "$PGDATA"
-  as_user postgres initdb -D "$PGDATA" --username=postgres --auth-local=trust --auth-host=reject \
+  rm -rf "$PGDATA" "$PGINIT"
+  install -d -o postgres -g postgres -m 700 "$PGINIT"
+  as_user postgres initdb -D "$PGINIT" --username=postgres --auth-local=trust --auth-host=reject \
     --encoding=UTF8 --locale=C.UTF-8 >/dev/null
+  mv "$PGINIT" "$PGDATA"
 fi
 start postgres exec_as postgres postgres -D "$PGDATA" -c listen_addresses= -c unix_socket_directories="$SOCKET_DIR"
 wait_for 60 "${PIDS[-1]}" PostgreSQL pg_isready -q -h "$SOCKET_DIR"

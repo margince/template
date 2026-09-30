@@ -46,6 +46,10 @@ init="$AIO/margince-init"
 check "init sets MARGINCE_ENV=test" grep -q '^export MARGINCE_ENV=test$' "$init"
 check "init never reads MARGINCE_LICENSE" bash -c '! grep -q MARGINCE_LICENSE "$1"' _ "$init"
 check "init gates initdb on PG_VERSION" grep -q 'PG_VERSION' "$init"
+# initdb writes PG_VERSION first; an interrupted initdb in place would look
+# finished to the next start. It runs in a temporary directory instead.
+check "initdb runs in a temporary directory that is renamed only after success" \
+  bash -c 'grep -q "initdb -D \"\$PGINIT\"" "$1" && grep -q "mv \"\$PGINIT\" \"\$PGDATA\"" "$1" && grep -qE "rm -rf .*\"\\\$PGINIT\"" "$1"' _ "$init"
 check "init writes secrets through a temporary file and a rename" bash -c 'grep -q "tmp=\"\$SECRETS.tmp\"" "$1" && grep -q "mv \"\$tmp\" \"\$SECRETS\"" "$1"' _ "$init"
 check "init runs db-bootstrap.sql on every start (not inside the initdb branch)" \
   bash -c 'awk "/^if \[ ! -s \"\\\$PGDATA\/PG_VERSION\" \]/{inside=1} inside&&/^fi/{inside=0} inside&&/db-bootstrap/{bad=1} END{exit bad}" "$1"' _ "$init"
