@@ -107,9 +107,12 @@ each start.
    in.
 
 3. Put the two files where testers can download them without logging in. A
-   release of a public repository already has them: `release.yml` attaches
-   both to the GitHub release and writes the commands into the release notes
-   ([release.md](release.md)). For a private repository, use any web server.
+   release of a public repository already has them when `REGISTRY` is set:
+   `release.yml` then pushes the image, attaches both files to the GitHub
+   release, and writes the commands into the release notes
+   ([release.md](release.md)). Without `REGISTRY`, nothing is pushed and the
+   release offers no install command. For a private repository, use any web
+   server.
 4. Send the tester the command for their system:
 
    | System | Command |

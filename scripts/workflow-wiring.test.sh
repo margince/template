@@ -501,11 +501,17 @@ if [ -e "$RELEASE_WF" ]; then
   else
     fail "publish does not refuse a missing or empty image-list/images.txt with ::error:: and build the notes from it"
   fi
+  # The install scripts pull the pushed image. Without a push their image
+  # name has no registry, and a tester's docker pull would resolve it on the
+  # default public registry: they are attached and advertised only after a push.
   if printf '%s\n' "$publish_job" | grep -qF 'name: margince-aio-scripts-${{ needs.version.outputs.version }}' \
-     && [ "$(printf '%s\n' "$publish_job" | grep -cF 'dist/*.zip dist/install.sh dist/install.ps1')" -eq 2 ]; then
-    ok "publish attaches install.sh and install.ps1 to the release"
+     && [ "$(printf '%s\n' "$publish_job" | grep -cF "if ! grep -qF 'images were not pushed' image-list/images.txt; then")" -ge 2 ] \
+     && printf '%s\n' "$publish_job" | grep -qF 'assets+=(dist/install.sh dist/install.ps1)' \
+     && [ "$(printf '%s\n' "$publish_job" | grep -cF '"${assets[@]}"')" -eq 2 ] \
+     && ! printf '%s\n' "$publish_job" | grep -qF 'dist/*.zip dist/install.sh'; then
+    ok "publish attaches and advertises install.sh and install.ps1 only when the images were pushed"
   else
-    fail "publish does not download margince-aio-scripts-<version> and attach dist/install.sh and dist/install.ps1 on both paths"
+    fail "publish does not attach dist/install.sh and dist/install.ps1 (and write 'Try it') only when image-list/images.txt lists pushed images"
   fi
   # --prerelease is added in exactly one place, behind the version job's flag.
   pre_lines="$(grep -c -- '--prerelease' "$RELEASE_WF" || true)"

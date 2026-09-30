@@ -399,13 +399,18 @@ jobs:
             echo "## Images"
             echo
             sed '/^$/d; s/^/- /' image-list/images.txt
-            echo
-            echo "## Try it"
-            echo
-            echo "Testers start the all-in-one image with one command. It installs Docker when it is missing."
-            echo
-            echo "- macOS, Ubuntu: \`curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.sh | sh\`"
-            echo "- Windows (PowerShell): \`irm https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.ps1 | iex\`"
+            ## The install scripts pull the pushed all-in-one image. Without a
+            ## push, their image name has no registry and a tester's pull would
+            ## go to the default public registry, so they are not offered.
+            if ! grep -qF 'images were not pushed' image-list/images.txt; then
+              echo
+              echo "## Try it"
+              echo
+              echo "Testers start the all-in-one image with one command. It installs Docker when it is missing."
+              echo
+              echo "- macOS, Ubuntu: \`curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.sh | sh\`"
+              echo "- Windows (PowerShell): \`irm https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.ps1 | iex\`"
+            fi
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
@@ -426,9 +431,15 @@ jobs:
           ## step failed after creating it. Uploading with --clobber into the
           ## existing one is the recovery, rather than a red run nobody can
           ## clear without deleting the release by hand.
+          ## The install scripts only when their image was pushed (see the notes).
+          assets=(dist/*.zip)
+          if ! grep -qF 'images were not pushed' image-list/images.txt; then
+            assets+=(dist/install.sh dist/install.ps1)
+          fi
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release: $TAG already exists — replacing its assets and notes"
-            gh release upload "$TAG" dist/*.zip dist/install.sh dist/install.ps1 --clobber
+            gh release upload "$TAG" "${assets[@]}" --clobber
             gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           else
             ## Spelled as a conditional rather than `[ … ] && args+=(…)`. The
@@ -440,7 +451,7 @@ jobs:
             if [ "$PRERELEASE" = true ]; then
               args+=(--prerelease)
             fi
-            gh release create "$TAG" "${args[@]}" dist/*.zip dist/install.sh dist/install.ps1
+            gh release create "$TAG" "${args[@]}" "${assets[@]}"
           fi
 
           echo "release: published $TAG" >> "$GITHUB_STEP_SUMMARY"
