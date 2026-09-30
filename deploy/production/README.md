@@ -19,9 +19,9 @@ cloud services differ.
 | | Light: proof of concept, small pilots | Standard: mid-size production |
 |---|---|---|
 | Deployment | Terraform creates the server; the `host` adapter deploys: `make release`, `make host-bootstrap`, `make deploy` | Terraform deploys the images `make release` pushed, set by `release_version` |
-| Application | Docker Compose on one Ubuntu 24.04 VM, Caddy with automatic HTTPS | Managed containers: api (with the nginx edge), worker, web |
+| Application | Docker Compose on one Ubuntu 24.04 VM: Caddy with automatic HTTPS, then nginx | Managed containers: api (with the nginx edge), worker, web |
 | Postgres and Redis | Containers on the VM, data on a separate disk with daily snapshots | Managed Postgres 16; Redis 7.2 |
-| Entry and filtering | Caddy; rate limits in the application | Managed WAF, `waf_mode` count then block, the same rules and variables |
+| Entry and filtering | nginx rate-limits the credential endpoints per client address (`AUTH_RATE_LIMIT_PER_MINUTE`) | Managed WAF, `waf_mode` count then block, the same rules and variables |
 | Azure | VM, managed disk, Azure Backup, Key Vault, Entra app | Application Gateway WAF v2, Container Apps, Postgres Flexible Server, Redis 7.2 container, ACR, Key Vault |
 | AWS | EC2 instance, EBS volume, DLM snapshots, SSM Parameter Store | ALB with AWS WAF, ECS Fargate, RDS Multi-AZ, ElastiCache Valkey 7.2, ECR, SSM Parameter Store |
 

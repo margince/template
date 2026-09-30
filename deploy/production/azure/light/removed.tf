@@ -73,22 +73,22 @@ variable "acme_email" {
 }
 
 variable "break_glass_cidrs" {
-  description = "Removed: nginx is not installed; Caddy routes the traffic (docs/deploy.md Section 5.10)."
+  description = "Removed: password login is no longer refused by client address; the host adapter nginx rate-limits the credential endpoints instead (docs/deploy.md Section 5.10)."
   type        = any
   default     = null
   validation {
     condition     = var.break_glass_cidrs == null
-    error_message = "break_glass_cidrs was removed: nginx is not installed; Caddy routes the traffic (docs/deploy.md Section 5.10). Delete it from terraform.tfvars."
+    error_message = "break_glass_cidrs was removed: password login is no longer refused by client address; the host adapter nginx rate-limits the credential endpoints instead (docs/deploy.md Section 5.10). Delete it from terraform.tfvars."
   }
 }
 
 variable "auth_rate_limit_per_minute" {
-  description = "Removed: nginx is not installed; Caddy routes the traffic (docs/deploy.md Section 5.10)."
+  description = "Removed: the rate limit is now AUTH_RATE_LIMIT_PER_MINUTE in deploy/production/host.env, applied by the host adapter nginx (docs/deploy.md Section 5.10)."
   type        = any
   default     = null
   validation {
     condition     = var.auth_rate_limit_per_minute == null
-    error_message = "auth_rate_limit_per_minute was removed: nginx is not installed; Caddy routes the traffic (docs/deploy.md Section 5.10). Delete it from terraform.tfvars."
+    error_message = "auth_rate_limit_per_minute was removed: the rate limit is now AUTH_RATE_LIMIT_PER_MINUTE in deploy/production/host.env, applied by the host adapter nginx (docs/deploy.md Section 5.10). Delete it from terraform.tfvars."
   }
 }
 

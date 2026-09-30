@@ -101,9 +101,9 @@ http {
         # the client used. The gateway sends the app's internal FQDN as Host
         # (its backend setting picks the host name from the backend), so Host
         # is set to the public host here. X-Real-IP is the client address
-        # resolved above;
-        # Margince versions that support MARGINCE_TRUSTED_PROXIES trust it
-        # from 127.0.0.1 only.
+        # resolved above, for the api's logs; core keys its own limits on the
+        # direct peer (127.0.0.1) and reads no forwarded header, so the
+        # per-client limits are this file's limit_req and the gateway's WAF.
         # X-Forwarded-For is overwritten, never appended, so no
         # client-supplied entry reaches the api.
         proxy_http_version 1.1;

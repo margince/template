@@ -360,8 +360,13 @@ Resource Manager ID; the storage lock also refuses the delete.
   endpoint once `operator_ip_allowlist` is empty.
 - **Sign-in**: password login is refused outside `break_glass_cidrs`; the
   client address comes from the rightmost `X-Forwarded-For` entry, which the
-  gateway and Container Apps append, so clients cannot spoof it. The edge passes it to `cmd/api` as `X-Real-IP`,
-  which the api trusts only from `127.0.0.1` (`MARGINCE_TRUSTED_PROXIES`).
+  gateway and Container Apps append, so clients cannot spoof it. Core keys its
+  own per-address limits (login, password reset, Microsoft sign-in) on the
+  direct peer and reads no forwarded header; behind the edge every request
+  comes from `127.0.0.1`, so those limits act as one cap shared by all users.
+  The per-client limits are the edge's `limit_req` on the sign-in paths and
+  the gateway's WAF rate rules. The edge passes the client address as
+  `X-Real-IP` for the api's logs only.
 - **Secrets**: each app identity may read only the Key Vault secrets its
   process uses. The api app's identities are also available to its edge
   container; keep the web image current.

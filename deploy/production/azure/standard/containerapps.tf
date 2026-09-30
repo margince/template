@@ -122,11 +122,11 @@ locals {
     # The edge in the same replica serves the MCP App views; no hairpin
     # through the public internet.
     { name = "MARGINCE_MCP_APPS_BASE_URL", value = "http://127.0.0.1:${local.edge_port}" },
-    # The edge is the only peer cmd/api sees. This tells the api to trust the
-    # edge's X-Real-IP for its per-client limits; Margince versions that do
-    # not support the setting ignore it (and log it as unused), and then the
-    # edge's own per-client limits on the sign-in paths are what applies.
-    { name = "MARGINCE_TRUSTED_PROXIES", value = "127.0.0.1/32" },
+    # No trusted-proxy setting: core keys its per-address limits on the direct
+    # peer and reads no forwarded header, so behind the edge they see
+    # 127.0.0.1 and act as one shared cap. The per-client limits that hold
+    # are the edge's limit_req on the sign-in paths and the gateway's WAF
+    # rate rules (appgw.tf).
   ])
 
   worker_env = concat(local.common_env, [

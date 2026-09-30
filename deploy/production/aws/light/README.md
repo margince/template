@@ -2,7 +2,9 @@
 
 One Ubuntu 24.04 EC2 instance in a customer's AWS account.
 Terraform creates the infrastructure only. The template's `host` adapter
-deploys Margince to the instance: Docker Compose, Caddy with an automatic HTTPS
+deploys Margince to the instance: Docker Compose, nginx for routing and per-address rate limits on the
+credential endpoints (`AUTH_RATE_LIMIT_PER_MINUTE` in `host.env`, default
+30), Caddy with an automatic HTTPS
 certificate, and PostgreSQL 16 and Redis as containers on the instance
 ([docs/deploy.md, Section 5](../../../../docs/deploy.md#5-the-host-adapter)).
 The Azure light stack ([../../azure/light](../../azure/light/README.md)) has the
