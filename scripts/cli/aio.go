@@ -74,6 +74,9 @@ func AIOConfig(file, displayName string) ([]byte, error) {
 		setScalar(root, "!!str", "Admin", "bootstrap_admin", "display_name")
 	}
 	setScalar(root, "!!str", "secrets/admin-password", "bootstrap_admin", "password_file")
+	// core resolves password before password_file; a production reference
+	// would win and name a path the image does not have.
+	deleteKey(lookup(root, "bootstrap_admin"), "password")
 	setScalar(root, "!!bool", "false", "mcp", "connector_enabled")
 	setValue(root, "email", &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
 		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enabled"},
@@ -109,6 +112,19 @@ func setValue(m *yaml.Node, key string, value *yaml.Node) {
 		}
 	}
 	m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+}
+
+// deleteKey removes key from mapping m, when m is a mapping that has it.
+func deleteKey(m *yaml.Node, key string) {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return
+		}
+	}
 }
 
 // setScalar sets the scalar at path, creating (or replacing non-mapping)

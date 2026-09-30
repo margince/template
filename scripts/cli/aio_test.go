@@ -121,3 +121,22 @@ func TestRunAIOConfig(t *testing.T) {
 		t.Fatalf("stderr %q", errOut.String())
 	}
 }
+
+// core resolves bootstrap_admin.password before password_file, so a
+// production reference such as ${file:/run/secrets/...} would win and point
+// at a path the image does not have.
+func TestAIOConfigDropsPasswordReference(t *testing.T) {
+	in := "version: 1\nworkspace:\n  name: A\n  base_currency: EUR\n  timezone: UTC\n" +
+		"bootstrap_admin:\n  email: a@b.example\n  password: ${file:/run/secrets/admin-password}\n"
+	out, err := AIOConfig(writeFile(t, in), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := decode(t, out)["bootstrap_admin"].(map[string]any)
+	if _, ok := admin["password"]; ok {
+		t.Fatalf("bootstrap_admin.password was kept: %v", admin)
+	}
+	if admin["password_file"] != "secrets/admin-password" {
+		t.Fatalf("bootstrap_admin = %v", admin)
+	}
+}
