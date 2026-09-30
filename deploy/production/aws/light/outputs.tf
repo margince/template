@@ -74,3 +74,11 @@ output "alerts_topic_arn" {
   description = "The SNS topic that receives the alarms."
   value       = aws_sns_topic.alerts.arn
 }
+
+output "sso_redirect_uris" {
+  description = "Redirect URIs to register in the customer's own Microsoft Entra or Google app, for optional sign-in and mailbox capture configured in Margince under Settings. Margince needs none of them to run."
+  value = {
+    microsoft = ["https://${var.domain}/v1/auth/oidc/microsoft/callback", "https://${var.domain}/v1/connectors/graph/callback", "https://${var.domain}/v1/connectors/graphcal/callback"]
+    google    = ["https://${var.domain}/v1/auth/oidc/google/callback", "https://${var.domain}/v1/connectors/gmail/callback"]
+  }
+}

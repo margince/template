@@ -52,7 +52,7 @@ variable "deploy_apps" {
 # ---- Application ----------------------------------------------------------------------
 
 variable "public_base_url" {
-  description = "MARGINCE_PUBLIC_BASE_URL, e.g. https://crm.example.com. Its host is served by the Application Gateway and is the base of every Entra redirect URI."
+  description = "MARGINCE_PUBLIC_BASE_URL, e.g. https://crm.example.com. Its host is served by the Application Gateway and is the base of every sso_redirect_uris entry."
   type        = string
   validation {
     condition     = can(regex("^https://[a-z0-9.-]+$", var.public_base_url))
@@ -81,27 +81,12 @@ variable "admin_bootstrap_password" {
 }
 
 variable "include_bootstrap_admin" {
-  description = "Passes the bootstrap admin password to the api. Set false once the first admin has signed in and changed it (README.md, step 7)."
+  description = "Passes the bootstrap admin password to the api. Set false once the first admin has signed in and changed it (README.md, step 6)."
   type        = bool
   default     = true
 }
 
 # ---- Access -----------------------------------------------------------------------------
-
-variable "entra_access_group_object_id" {
-  description = "Object ID of the Entra security group allowed to use Margince (reuse the group that gates Dataverse). entra.tf assigns it to the app registration, which requires assignment."
-  type        = string
-  validation {
-    condition     = can(regex("^[0-9a-fA-F-]{36}$", var.entra_access_group_object_id))
-    error_message = "entra_access_group_object_id must be an Entra object ID (a GUID)."
-  }
-}
-
-variable "break_glass_cidrs" {
-  description = "Source ranges allowed to use password login (POST /v1/auth/login); everyone else gets 403 from the edge and must sign in with Entra ID. Keep it to the admin network that holds the break-glass account. Empty blocks password login for everyone."
-  type        = list(string)
-  default     = []
-}
 
 variable "operator_ip_allowlist" {
   description = "Public IPv4 addresses (no /prefix) let through the Key Vault, Storage and registry firewalls while you set up or push a release. Leave empty in steady state; Postgres and Redis are never reachable this way (use the jumpbox)."

@@ -1,8 +1,8 @@
 # Margince on Azure
 
-Terraform root module that deploys Margince into your own Azure subscription
-and Entra ID tenant, sized for a small team (about 40 users). It deploys the
-images that the template's `make release` builds (Section 4), the same flow as
+Terraform root module that deploys Margince into your own Azure subscription,
+sized for a small team (about 40 users). It deploys the
+images that the template's `make release` builds (Section 3), the same flow as
 the AWS standard stack.
 
 ## What it creates
@@ -13,23 +13,21 @@ the AWS standard stack.
 | Compute | Container Apps environment (internal: private IP only, workload profiles, Consumption profile, zone-redundant). **api** app (3 to 6 replicas, CPU and HTTP scale rules): `cmd/api` plus an **edge** nginx container that serves the SPA; its ingress is reachable only from the gateway. **worker** app: no ingress. **redis** app: Redis 7.2, one replica, internal TCP only. |
 | Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
 | Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, registry, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
-| Identity | Entra app registration (single tenant, assignment required, your security group), managed identities for api, worker, Dataverse and customer-managed keys |
+| Identity | Managed identities for api, worker, Dataverse and customer-managed keys |
 | Delivery | Container Registry Premium (images from `make release`, private endpoint), jumpbox VM with Azure Bastion Developer |
 | Protection | Share soft delete and daily Azure Backup (attachments, redis), delete locks on the stateful resources, diagnostic settings on every resource that has them, metric alerts, Log Analytics (90 days) |
 
 ```
 Internet ──HTTPS──> Application Gateway WAF v2 ──HTTPS──> api app ingress (private) ──> edge (nginx :8081) ──localhost──> cmd/api (:8080)
                                          │  serves the SPA                  │
-                                         │  403 on password login           ├─> Postgres (VNet)
-                                         │  outside break_glass_cidrs       ├─> redis app (TCP 6379, in the environment)
+                                         │  rate limits auth paths          ├─> Postgres (VNet)
+                                         │                                  ├─> redis app (TCP 6379, in the environment)
                                          │                                  ├─> Key Vault, Files (private endpoints)
-                                         │  rate limits auth paths          └─> NAT fixed IP ─> Graph, Dataverse, LLM
+                                         │                                  └─> NAT fixed IP ─> Graph, Dataverse, LLM
 worker (no ingress) ───────────────────────────────────────────────────────────┘
 ```
 
-Staff sign in only with Microsoft (Entra ID): the enterprise app requires
-assignment to your security group, and your Conditional Access policy
-applies. Guests reach only their scoped links (booking, Deal Room,
+Staff sign in as described in "Sign-in". Guests reach only their scoped links (booking, Deal Room,
 unsubscribe), which the app protects with tokens.
 
 ## Before you start
@@ -47,19 +45,15 @@ unsubscribe), which the app protects with tokens.
   Network Watcher in the region (`NetworkWatcher_<region>` in
   `NetworkWatcherRG`), which Azure creates with the first VNet unless the
   subscription opted out.
-- **Entra ID**: Application Administrator for whoever runs Terraform, and an
-  Entra admin for admin consent (step 2). Conditional Access needs Entra ID
-  P1.
 - **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`; Docker with buildx for
-  a manual image push (Section 4).
+  a manual image push (Section 3).
 - **Margince**: a licence token, and this instance repository with its `core/`
   submodule checked out (`git submodule update --init`). The images come from
   `make release`; the bootstrap SQL and `margince.example.yaml` come from
   `core/`, so every stack deploys the core version `instance.yaml` pins.
 - **TLS certificate** for the host in `public_base_url`, as a PFX file, to
-  import into Key Vault in step 6.
-- **Remote state**: state holds every generated password and the Entra
-  client secret. Create a state storage account first (`backend.hcl.example`)
+  import into Key Vault in step 5.
+- **Remote state**: state holds every generated password and key. Create a state storage account first (`backend.hcl.example`)
   and never keep state on a laptop.
 
 ## 1. Provision (apps off)
@@ -73,27 +67,17 @@ terraform apply                               # deploy_apps = false
 ```
 
 `terraform.tfvars` needs `release_version`, `public_base_url`,
-`admin_bootstrap_password`, `license_token`, `entra_access_group_object_id`
-and `jumpbox_ssh_public_key` (`ssh-keygen -t ed25519`; RSA also works), and
-usually `break_glass_cidrs` and `operator_ip_allowlist` (your public IP, from
+`admin_bootstrap_password`, `license_token` and `jumpbox_ssh_public_key`
+(`ssh-keygen -t ed25519`; RSA also works), and usually
+`operator_ip_allowlist` (your public IP, from
 `curl -s https://api.ipify.org`). See "Variables".
 
 This creates everything except the Container Apps: network, Key Vault and its
 secrets, Postgres, the redis app, storage and shares, registry, private
-endpoints, the Entra app and the jumpbox. `operator_ip_allowlist` lets Terraform write
-Key Vault secrets and file shares from your machine; it is closed in step 7.
+endpoints and the jumpbox. `operator_ip_allowlist` lets Terraform write
+Key Vault secrets and file shares from your machine; it is closed in step 6.
 
-## 2. Entra ID (Entra admin, once)
-
-1. **Admin consent**: Enterprise applications → Margince (`<name_prefix>`) →
-   Permissions → Grant admin consent.
-2. **Conditional Access**: add the app (`terraform output -raw entra_client_id`)
-   to the policy that protects Dataverse, so both apps share MFA and device
-   rules.
-3. **Check access**: Properties → Assignment required = Yes; Users and groups
-   lists only your security group.
-
-## 3. Bootstrap the database (jumpbox, once)
+## 2. Bootstrap the database (jumpbox, once)
 
 Postgres is reachable only inside the VNet. Open the jumpbox from the Azure
 portal (VM `<name_prefix>-jumpbox` → Connect → Bastion → SSH with your private
@@ -125,7 +109,7 @@ rerun. It creates the `margince` database and the `margince_owner` and
 `pg_trgm`, `btree_gist`) are already allow-listed by Terraform. Migrations run
 later, from the api's entrypoint, with the owner role.
 
-## 4. Build and push the images
+## 3. Build and push the images
 
 The AWS standard stack uses the same flow. The images are the ones
 `make release` (the `release.yml` workflow) or `make package` builds from
@@ -186,10 +170,10 @@ only, the platform `release.yml` builds by default.
    ```
 
 5. Set `release_version = "v0.3.0"` in `terraform.tfvars` and run
-   `terraform apply` (step 6 the first time). api and worker roll together;
+   `terraform apply` (step 5 the first time). api and worker roll together;
    the api startup probe allows five minutes for migrations.
 
-## 5. Upload `margince.yaml` (once)
+## 4. Upload `margince.yaml` (once)
 
 ```bash
 ACCOUNT="$(terraform output -raw storage_account_name)"
@@ -202,7 +186,7 @@ az storage file upload --account-name "$ACCOUNT" --account-key "$KEY" \
 rm margince.yaml
 ```
 
-## 6. Start the apps and the gateway
+## 5. Start the apps and the gateway
 
 ```bash
 # DNS, in your zone: an A record for the host in public_base_url
@@ -228,28 +212,32 @@ Check the entry point:
 curl -s https://crm.example.com/readyz                        # 200 when dependencies are healthy
 curl -s -o /dev/null -w '%{http_code}\n' https://crm.example.com/metrics                   # 404
 curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                          # 301 to HTTPS
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://crm.example.com/v1/auth/login     # 403 outside break-glass
 ```
 
-## 7. First login, then close setup access
+## 6. First login, then close setup access
 
-1. From a `break_glass_cidrs` address, sign in with the bootstrap admin, set
-   the permanent password and keep it as the break-glass account.
-2. Turn on Microsoft sign-in in Margince's settings and test it (MFA prompt
-   from Conditional Access).
-3. Invite staff with the email address they have in Entra.
-4. Remove `bootstrap_admin` from `margince.yaml`, set
+1. Sign in with the bootstrap admin and set the permanent password.
+2. Invite staff (see "Sign-in").
+3. Remove `bootstrap_admin` from `margince.yaml`, set
    `include_bootstrap_admin = false`, add the LLM provider key in
    Settings → AI.
-5. Set `operator_ip_allowlist = []` and apply. From now on, run Terraform
-   from the jumpbox (`/opt/margince-instance/deploy/production/azure/standard`, backend as in step 3),
+4. Set `operator_ip_allowlist = []` and apply. From now on, run Terraform
+   from the jumpbox (`/opt/margince-instance/deploy/production/azure/standard`, backend as in step 2),
    or add your IP back for a single apply.
 
-## 8. Releases
+## 7. Releases
 
-Follow Section 4 for each new version: `make release VERSION=<v>` (or
+Follow Section 3 for each new version: `make release VERSION=<v>` (or
 `make package` and a manual push), lock the tags, set `release_version` and
 run `terraform apply` from the jumpbox or an allowlisted machine.
+
+## Sign-in
+
+Margince uses its own accounts: users sign in with email and password, and an administrator invites them. Nothing in this stack is needed for that.
+
+Microsoft (Entra ID) or Google sign-in is optional. A Margince administrator turns it on in **Settings → General → Microsoft app** (or **Google app**) with an app the customer's IT registers in its own Entra or Google console; no restart and no apply. Register the redirect URIs from `terraform output sso_redirect_uris`. A Microsoft app saved in Settings signs in only users of the directory it is registered in. To allow only single sign-on after that, set `auth.password.enabled: false` in `margince.yaml` (core `docs/reference/configuration.md`, "Turning the password method off"); the operator's emergency route is core's `margince-migrate reset-password`.
+
+Password login is protected by per-client rate limits on the credential endpoints (the edge nginx and the Application Gateway WAF).
 
 ## WAF rollout
 
@@ -295,14 +283,12 @@ uses it.
 | `release_version` | required | Release to deploy (image tag) |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
-| `entra_access_group_object_id` | required | Security group allowed to sign in |
 | `jumpbox_ssh_public_key` | required | SSH key for the jumpbox |
-| `deploy_apps` | `false` | Two-phase apply: `true` once prerequisites exist (step 6) |
-| `break_glass_cidrs` | `[]` | Networks allowed to use password login |
+| `deploy_apps` | `false` | Two-phase apply: `true` once prerequisites exist (step 5) |
 | `operator_ip_allowlist` | `[]` | Setup IPs through the Key Vault, Storage and registry firewalls |
 | `key_vault_admin_principal_ids` | `[]` (the applying identity) | Key Vault Administrators |
 | `alert_email` | `""` | Alert receiver |
-| `include_bootstrap_admin` | `true` | `false` after the first admin login (step 7) |
+| `include_bootstrap_admin` | `true` | `false` after the first admin login (step 6) |
 | `azure_region`, `name_prefix`, `instance_name` | `westeurope`, `margince`, `margince-default` | Placement and names (`name_prefix` is also the resource group) |
 | `db_sku_name`, `db_zone_redundant_ha` | `B_Standard_B2s`, `false` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `3`, `6` | api scale bounds |
@@ -358,10 +344,10 @@ Microsoft recommends General Purpose for production Postgres:
   ingress is private, in the internal environment. `cmd/api` is reached on localhost; the worker, Redis (internal
   TCP ingress), Postgres, Key Vault, storage and registry have no public
   endpoint once `operator_ip_allowlist` is empty.
-- **Sign-in**: password login is refused outside `break_glass_cidrs`; the
+- **Sign-in**: password login is open from any address (see "Sign-in"); the
   client address comes from the rightmost `X-Forwarded-For` entry, which the
   gateway and Container Apps append, so clients cannot spoof it. Core keys its
-  own per-address limits (login, password reset, Microsoft sign-in) on the
+  own per-address limits (login, password reset, single sign-on) on the
   direct peer and reads no forwarded header; behind the edge every request
   comes from `127.0.0.1`, so those limits act as one cap shared by all users.
   The per-client limits are the edge's `limit_req` on the sign-in paths and
@@ -389,7 +375,7 @@ Microsoft recommends General Purpose for production Postgres:
   Recovery Services vault and the registry (`enable_resource_locks`). Set it
   to `false` and apply before `terraform destroy`.
 - **Images**: `make release` images, released tags locked read-only after
-  the push (Section 4), so `release_version` pins the deployed images. Limit
+  the push (Section 3), so `release_version` pins the deployed images. Limit
   who can run commands on the jumpbox VM.
 - **Storage key**: Azure Files SMB mounts need the account key, which is in
   state and in the environment's storage configuration. Rotate it with the
@@ -406,8 +392,6 @@ Microsoft recommends General Purpose for production Postgres:
   their SPA locations in step.
 - **Content-Security-Policy is report-only** until the SPA has been checked
   against it.
-- **One Entra app** serves sign-in and Graph mail; its client secret rotates
-  every 180 days on apply, with a Key Vault near-expiry event 30 days ahead.
 - **Redis is one container.** It is not zone-redundant. Container Apps starts
   a new revision before stopping the old one, so an in-place change to the
   redis app (image, resources, command) would briefly run two Redis processes
@@ -419,9 +403,8 @@ Microsoft recommends General Purpose for production Postgres:
   ```bash
   terraform apply -replace=azurerm_container_app.redis
   ```
-- **Needs app changes**: Entra-only Postgres (no passwords), Redis with
-  Entra auth (Azure Managed Redis) and a federated credential instead of the
-  Entra client secret all require support in Margince first.
+- **Needs app changes**: Entra-only Postgres (no passwords) and Redis with
+  Entra auth (Azure Managed Redis) both require support in Margince first.
 - **No SMB protocol restrictions** on the file shares: Microsoft does not
   document Container Apps mounts with SMB 3.1.1-only, AES-256-GCM and
   NTLMv2. The shares are reached only through the private endpoint.

@@ -130,21 +130,6 @@ resource "azurerm_key_vault_secret" "license" {
   depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
 }
 
-# The Entra app's client secret (entra.tf), read by api and worker as
-# MARGINCE_GRAPH_CLIENT_SECRET: Margince's Microsoft sign-in and its Graph
-# mail/calendar connectors share this one credential (cmd/api/microsoftsignin.go).
-resource "azurerm_key_vault_secret" "entra_client_secret" {
-  name         = "margince-entra-client-secret"
-  value        = azuread_application_password.margince.value
-  key_vault_id = azurerm_key_vault.this.id
-  tags         = merge(local.common_tags, { Name = "${var.name_prefix}-entra-client-secret", Component = "secrets" })
-
-  # Key Vault raises SecretNearExpiry 30 days ahead of this date.
-  expiration_date = azuread_application_password.margince.end_date
-
-  depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
-}
-
 # ---- Outlook push notifications and metrics ------------------------------------
 
 # Shared secret Microsoft Graph echoes on every change notification. api checks

@@ -118,3 +118,11 @@ output "private_subnet_ids" {
   description = "Private subnets; launch the temporary bootstrap host in one of these."
   value       = aws_subnet.private[*].id
 }
+
+output "sso_redirect_uris" {
+  description = "Redirect URIs to register in the customer's own Microsoft Entra or Google app, for optional sign-in and mailbox capture configured in Margince under Settings. Margince needs none of them to run."
+  value = {
+    microsoft = ["${var.public_base_url}/v1/auth/oidc/microsoft/callback", "${var.public_base_url}/v1/connectors/graph/callback", "${var.public_base_url}/v1/connectors/graphcal/callback"]
+    google    = ["${var.public_base_url}/v1/auth/oidc/google/callback", "${var.public_base_url}/v1/connectors/gmail/callback"]
+  }
+}

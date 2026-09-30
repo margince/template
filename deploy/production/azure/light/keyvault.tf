@@ -1,7 +1,7 @@
-# Key Vault (standard, RBAC) holds the two values that make deploy needs from
-# the operator and that Terraform knows: the Entra client secret and the
-# license. make deploy reads them from its own environment; the secret_exports
-# output prints the commands that fill it. The VM never reads the vault.
+# Key Vault (standard, RBAC) holds the value that make deploy needs from the
+# operator and that Terraform knows: the license. make deploy reads it from
+# its own environment; the secret_exports output prints the command that
+# fills it. The VM never reads the vault.
 # The host adapter generates every other secret on the server
 # (docs/deploy.md Section 5.6).
 
@@ -15,10 +15,7 @@ locals {
 
   # Key Vault secret name => value. Key Vault rejects an empty value, so the
   # license secret exists only when license_token is set.
-  kv_secrets = merge(
-    { "margince-entra-client-secret" = local.entra_client_secret },
-    local.license_set ? { "margince-license" = var.license_token } : {},
-  )
+  kv_secrets = local.license_set ? { "margince-license" = var.license_token } : {}
 }
 
 resource "azurerm_key_vault" "this" {
@@ -56,9 +53,6 @@ resource "azurerm_key_vault_secret" "this" {
   value        = local.kv_secrets[each.key]
   key_vault_id = azurerm_key_vault.this.id
   tags         = local.common_tags
-
-  # Key Vault raises SecretNearExpiry 30 days before the Entra secret ends.
-  expiration_date = each.key == "margince-entra-client-secret" ? azuread_application_password.margince.end_date : null
 
   depends_on = [azurerm_role_assignment.terraform_kv_admin]
 }

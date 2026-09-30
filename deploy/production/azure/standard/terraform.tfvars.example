@@ -12,12 +12,8 @@ release_version = "v0.3.0"
 license_token = "<licence token>"
 
 # MARGINCE_ADMIN_PASSWORD for the first boot. Set include_bootstrap_admin =
-# false once the first admin has signed in (README.md, step 7).
+# false once the first admin has signed in (README.md, step 6).
 admin_bootstrap_password = "change-me-before-first-boot"
-
-# Object ID of the Entra security group that already gates the customer's
-# Dataverse environment. Only its members can sign in to Margince.
-entra_access_group_object_id = "00000000-0000-0000-0000-000000000000"
 
 # SSH public key for the jumpbox: ssh-keygen -t ed25519 (RSA also works).
 jumpbox_ssh_public_key = "ssh-ed25519 AAAA... you@example.com"
@@ -25,12 +21,8 @@ jumpbox_ssh_public_key = "ssh-ed25519 AAAA... you@example.com"
 # ---- Usually set ---------------------------------------------------------------
 
 # false on the first apply; true once images, database, margince.yaml and the
-# public certificate exist (README.md, step 6).
+# public certificate exist (README.md, step 5).
 deploy_apps = false
-
-# Admin network(s) allowed to use password login (the break-glass account).
-# Everyone else must sign in with Microsoft.
-break_glass_cidrs = ["203.0.113.10/32"]
 
 # Your public IP while you set up or push images from a laptop
 # (curl -s https://api.ipify.org). Set back to [] afterwards.

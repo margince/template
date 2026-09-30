@@ -12,7 +12,7 @@
 #
 # The gateway, its certificate grant and the diagnostic setting follow
 # deploy_apps: the backend is the api app, and the certificate is imported
-# into Key Vault after the first apply (README.md, step 6). The public IP, the
+# into Key Vault after the first apply (README.md, step 5). The public IP, the
 # identity and the WAF policy exist from the first apply, so DNS can point at
 # the gateway's address before the gateway exists.
 
@@ -23,7 +23,7 @@ locals {
   # environment.
   appgw_zones = ["1", "2"]
 
-  # The Key Vault certificate for public_base_url's host (README.md, step 6).
+  # The Key Vault certificate for public_base_url's host (README.md, step 5).
   public_certificate_name = "public-tls"
 
   # The key vault object the gateway serves as its TLS certificate. The
@@ -383,7 +383,7 @@ resource "azurerm_application_gateway" "this" {
   # X-Forwarded-For becomes the client address alone: the gateway would
   # otherwise append "ip:port" to whatever the client sent. The edge trusts
   # the gateway subnet and takes the rightmost untrusted entry as the client
-  # (break_glass_cidrs, its auth rate limit, X-Real-IP for cmd/api).
+  # (its auth rate limit, X-Real-IP for cmd/api).
   rewrite_rule_set {
     name = "client-address"
     rewrite_rule {

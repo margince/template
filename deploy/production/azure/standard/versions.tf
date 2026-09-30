@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.10.0"
 
   # Remote state is required: state holds every generated password, the
-  # storage key, the Redis password and the Entra client secret. The values live in
+  # storage key and the Redis password. The values live in
   # backend.hcl (copy backend.hcl.example), kept out of the repo:
   #
   #   terraform init -backend-config=backend.hcl
@@ -20,13 +20,7 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
-    # entra.tf: the sign-in app registration, its enterprise-app assignment to
-    # the customer's existing security group, and its client secret.
-    azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 2.53"
-    }
-    # entra.tf's client-secret rotation clock.
+    # time_sleep: waits for role assignments to propagate.
     time = {
       source  = "hashicorp/time"
       version = "~> 0.12"
@@ -52,8 +46,3 @@ provider "azurerm" {
 # azurerm has no provider-level default_tags block. Tagged resources merge
 # network.tf's local.common_tags (Project, ManagedBy, Stack) into their
 # own tags, and add Name and Component per resource.
-
-# Authenticates as whoever runs `terraform apply` (az login), in the tenant of
-# the ARM_SUBSCRIPTION_ID subscription. entra.tf needs that identity to hold
-# Entra's Application Administrator (or Cloud Application Administrator) role.
-provider "azuread" {}

@@ -1,9 +1,9 @@
 # Operator jumpbox: one small Linux VM inside the VNet, for everything that
 # must reach the private endpoints (Postgres has no public endpoint at all):
 #
-#   - the one-time database bootstrap (README.md step 3);
-#   - writing margince.yaml onto the config share (step 5);
-#   - terraform apply once operator_ip_allowlist is empty (step 7).
+#   - the one-time database bootstrap (README.md step 2);
+#   - writing margince.yaml onto the config share (step 4);
+#   - terraform apply once operator_ip_allowlist is empty (step 6).
 #
 # It builds no images: releases are built by `make release` (release.yml) or
 # `make package` and pushed to the registry (README.md, "Releases").

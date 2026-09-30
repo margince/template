@@ -1,4 +1,4 @@
-# Offline plan checks with mocked providers: no Azure or Entra access needed.
+# Offline plan checks with mocked providers: no Azure access needed.
 #   terraform init -backend=false && terraform test
 mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
@@ -8,42 +8,15 @@ mock_provider "azurerm" {
     }
   }
 }
-mock_provider "azuread" {
-  mock_data "azuread_client_config" {
-    defaults = {
-      tenant_id = "00000000-0000-0000-0000-000000000001"
-      object_id = "00000000-0000-0000-0000-000000000002"
-    }
-  }
-  mock_data "azuread_application_published_app_ids" {
-    defaults = {
-      result = { MicrosoftGraph = "00000003-0000-0000-c000-000000000000" }
-    }
-  }
-  mock_data "azuread_service_principal" {
-    defaults = {
-      # Microsoft Graph's published delegated-permission ids, identical in every
-      # tenant. Not credentials; gitleaks' generic-api-key rule matches their shape.
-      oauth2_permission_scope_ids = {
-        openid      = "37f7f235-527c-4136-accd-4a02d197296e", email = "64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0",
-        profile     = "14dad69e-099b-42c9-810b-d002981feec1", offline_access = "7427e0e9-2fba-42fe-b0c0-848c9e6a8182", # gitleaks:allow
-        "User.Read" = "e1fe6dd8-ba31-4d61-89e7-88639da4683d", "Mail.Read" = "570282fd-fa5c-430d-a7fd-fc8dc98a9dca",
-        "Mail.Send" = "e383f46e-2787-4529-855e-0e479a3ffac0", "Calendars.Read" = "465a38f9-76ea-45b9-9f34-9e8b0d4b0b42"
-      }
-    }
-  }
-}
 mock_provider "random" {}
 mock_provider "time" {}
 
 variables {
-  release_version              = "v0.3.0"
-  public_base_url              = "https://crm.example.com"
-  admin_bootstrap_password     = "change-me-before-first-boot"
-  license_token                = "test-licence"
-  entra_access_group_object_id = "00000000-0000-0000-0000-0000000000aa"
-  jumpbox_ssh_public_key       = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/vUmkEV7lfFP7t36rOoMbvwoNzx4r0gfQKltPmyKTIC6WILJaitH79JH2yJXHb8ePibRalweus+EV/EPKn0oUrOzjVsjVzMef9Rz5CoAovRnDe6z2+y84XnjlIeN5b58NkeBaliOlFv36enIfMluv/sOMHTjfBwbCooF+ChwYnz9p20V5y0DFe/axStpcKcmHW7RfRuijO+vxC+te9mhCbLdN1sJm6qC9pSeADHSDH/swyDK6l1526/+NJqHfryRbhuQ8uPDL7pT14Z02AFnvIMvYhvSomi4Kag9aFQLFmm2Jd1Yz6lERFj4i6+51WvD/ZPmC7OER6N09qlUdXo3qx8Amf472GAQl9VhVHtolycBNtKehQomHLNuBffSIiarnOH5hYwLQEBD3ixah4xbXlmDAb9p+Ub31ppEv9ZLA2YebcRPzUfy/bvBLxysWAJTSwrnTvP0/bJW4Egqa37prx8MQRQkB/yRiET3I3DHFlLDsSnKQnEYSEBmvvLvxE6s= test"
-  break_glass_cidrs            = ["203.0.113.10/32"]
+  release_version          = "v0.3.0"
+  public_base_url          = "https://crm.example.com"
+  admin_bootstrap_password = "change-me-before-first-boot"
+  license_token            = "test-licence"
+  jumpbox_ssh_public_key   = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/vUmkEV7lfFP7t36rOoMbvwoNzx4r0gfQKltPmyKTIC6WILJaitH79JH2yJXHb8ePibRalweus+EV/EPKn0oUrOzjVsjVzMef9Rz5CoAovRnDe6z2+y84XnjlIeN5b58NkeBaliOlFv36enIfMluv/sOMHTjfBwbCooF+ChwYnz9p20V5y0DFe/axStpcKcmHW7RfRuijO+vxC+te9mhCbLdN1sJm6qC9pSeADHSDH/swyDK6l1526/+NJqHfryRbhuQ8uPDL7pT14Z02AFnvIMvYhvSomi4Kag9aFQLFmm2Jd1Yz6lERFj4i6+51WvD/ZPmC7OER6N09qlUdXo3qx8Amf472GAQl9VhVHtolycBNtKehQomHLNuBffSIiarnOH5hYwLQEBD3ixah4xbXlmDAb9p+Ub31ppEv9ZLA2YebcRPzUfy/bvBLxysWAJTSwrnTvP0/bJW4Egqa37prx8MQRQkB/yRiET3I3DHFlLDsSnKQnEYSEBmvvLvxE6s= test"
 }
 
 run "first_apply_without_apps" {
@@ -214,6 +187,21 @@ run "full_apply_with_apps_and_gateway" {
     error_message = "The edge sends the public host to cmd/api and trusts the gateway's X-Forwarded-For."
   }
   assert {
+    condition = (
+      strcontains(local.edge_nginx_conf, "limit_req_zone $binary_remote_addr zone=auth:10m rate=30r/m;") &&
+      length(regexall("limit_req zone=auth burst=30 nodelay;", local.edge_nginx_conf)) == 4 &&
+      strcontains(local.edge_nginx_conf, "location = /v1/auth/login {\n            limit_req zone=auth") &&
+      !strcontains(local.edge_nginx_conf, "break_glass") &&
+      !strcontains(local.edge_nginx_conf, "block_password_login") &&
+      !strcontains(local.edge_nginx_conf, "return 403")
+    )
+    error_message = "The edge rate-limits the credential endpoints and lets password login through from any address (no break-glass block)."
+  }
+  assert {
+    condition     = !contains(keys(local.api_secrets), "entra-client-secret") && length([for e in concat(local.api_env, local.worker_env) : e if contains(["MARGINCE_GRAPH_CLIENT_ID", "MARGINCE_GRAPH_CLIENT_SECRET", "MARGINCE_GRAPH_TENANT", "MARGINCE_MICROSOFT_SIGNIN_TENANT", "MARGINCE_SECRET_GENERATION"], e.name)]) == 0
+    error_message = "The apps get no Entra app settings; sign-in apps are configured in Margince under Settings."
+  }
+  assert {
     condition = alltrue([
       for role in ["api", "worker", "web"] :
       local.images[role] == "marginceabcdeacr.azurecr.io/margince-default/${role}:v0.3.0"
@@ -235,6 +223,25 @@ run "full_apply_with_apps_and_gateway" {
   assert {
     condition     = contains(keys(azurerm_monitor_metric_alert.this), "api-5xx")
     error_message = "The api app gets a 5xx alert once deployed."
+  }
+}
+
+run "no_identity_resources" {
+  command = plan
+  assert {
+    condition     = alltrue([for f in fileset(path.module, "*.tf") : !can(regex("azuread_|hashicorp/azuread|provider \"azuread\"", file("${path.module}/${f}")))])
+    error_message = "The stack creates no Entra resources and declares no azuread provider."
+  }
+  assert {
+    condition     = !strcontains(file("${path.module}/templates/edge-nginx.conf.tftpl"), "break_glass")
+    error_message = "The edge template has no break-glass block."
+  }
+  assert {
+    condition = output.sso_redirect_uris == {
+      microsoft = ["https://crm.example.com/v1/auth/oidc/microsoft/callback", "https://crm.example.com/v1/connectors/graph/callback", "https://crm.example.com/v1/connectors/graphcal/callback"]
+      google    = ["https://crm.example.com/v1/auth/oidc/google/callback", "https://crm.example.com/v1/connectors/gmail/callback"]
+    }
+    error_message = "sso_redirect_uris lists the Microsoft and Google callbacks under public_base_url."
   }
 }
 

@@ -1,8 +1,7 @@
 terraform {
   required_version = ">= 1.10.0"
 
-  # Remote state is required: it holds the Entra client secret and the
-  # license. The values live in backend.hcl (copy backend.hcl.example), kept
+  # Remote state is required: it holds the license. The values live in backend.hcl (copy backend.hcl.example), kept
   # out of the repo:
   #
   #   terraform init -backend-config=backend.hcl
@@ -16,17 +15,9 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.81"
     }
-    azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 2.53"
-    }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
-    }
-    time = {
-      source  = "hashicorp/time"
-      version = "~> 0.12"
     }
   }
 }
@@ -49,8 +40,3 @@ provider "azurerm" {
     }
   }
 }
-
-# Authenticates as whoever runs `terraform apply` (az login). That identity
-# needs Entra's Application Administrator (or Cloud Application
-# Administrator) role.
-provider "azuread" {}

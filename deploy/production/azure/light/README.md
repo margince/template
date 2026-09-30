@@ -1,6 +1,6 @@
 # Margince on Azure, light
 
-One Ubuntu 24.04 VM in a customer's Azure subscription and Entra ID tenant.
+One Ubuntu 24.04 VM in a customer's Azure subscription.
 Terraform creates the infrastructure only. The template's `host` adapter
 deploys Margince to the VM: Docker Compose, nginx for routing and per-address rate limits on the
 credential endpoints (`AUTH_RATE_LIMIT_PER_MINUTE` in `host.env`, default
@@ -17,8 +17,7 @@ same shape, variables and outputs.
 | Compute | One VM, `Standard_B2ms` (2 vCPU, 8 GiB), Canonical Ubuntu 24.04 LTS server Gen2. Trusted Launch, encryption at host, Azure-orchestrated OS patching. Admin user `azureadmin` with passwordless `sudo`, SSH key login only. |
 | Storage | 30 GB OS disk. 64 GB data disk (`prevent_destroy`), mounted at `/var/lib/docker` by cloud-init before Docker is installed. Every Docker volume (`pgdata`, `redisdata`, `blobs`, `caddydata`) is on it. |
 | Network | VNet with one subnet, static Standard public IP. NSG: 80 and 443 from the internet, 22 from `ssh_allowed_cidrs` only. Outbound open. |
-| Secrets | Key Vault (RBAC, purge protection, firewall open to `ssh_allowed_cidrs` only) with the Entra client secret and the license. The VM does not read it. |
-| Identity | Entra app registration: single tenant, assignment required, your security group, staff sign-in and Graph mail. |
+| Secrets | Key Vault (RBAC, purge protection, firewall open to `ssh_allowed_cidrs` only) with the license. The VM does not read it. |
 | Backup | Recovery Services vault: daily backup of the VM with its data disk, 7 days. |
 | Alerts | Action group and two metric alerts: VM unavailable for 5 minutes, CPU over 90% for 15 minutes, to `alert_email`. |
 
@@ -47,7 +46,6 @@ West Europe, pay-as-you-go, about **EUR 75 per month**:
 | Requirement | Detail |
 |---|---|
 | Azure role | Owner, or Contributor and User Access Administrator, on the subscription. |
-| Entra role | Application Administrator or Cloud Application Administrator, for `entra.tf`. |
 | Tools | Terraform 1.10.0 or later, Azure CLI, `ssh`, `ssh-keyscan`. |
 | State | A storage account for the remote state (`backend.hcl.example`). |
 | Instance | The instance repository with `make install` done, and the registry settings of [docs/release.md](../../../../docs/release.md#5-repository-settings). |
@@ -81,7 +79,6 @@ commands in the repository root.
    | `domain` | required | Public host name, for example `crm.example.com`. |
    | `admin_ssh_public_key` | required | ed25519 or RSA public key of the SSH user `azureadmin`. |
    | `ssh_allowed_cidrs` | required | IPv4 ranges for SSH and the Key Vault firewall. `0.0.0.0/0` is refused. |
-   | `entra_access_group_object_id` | required | The Entra security group allowed to use Margince. |
    | `name_prefix` | `margince` | Prefix of the resource names; the resource group is `<name_prefix>-light`. |
    | `region` | `westeurope` | Azure region. |
    | `vm_size` | `Standard_B2ms` | VM size. |
@@ -170,7 +167,7 @@ make host-bootstrap ENV=production
 
 2. Sign in at `https://<domain>` as `bootstrap_admin.email` and change the
    password.
-3. Complete the Entra ID steps in Section 7.1.
+3. Invite the other users (Section 7).
 
 ## 5. Upgrades
 
@@ -209,25 +206,15 @@ A disk-level backup of a running database is crash-consistent. For an
 application-consistent copy, also run `pg_dump` in the `postgres` container on
 a schedule.
 
-## 7. Azure notes
+## 7. Sign-in
 
-### 7.1 Entra ID
+Margince uses its own accounts: users sign in with email and password, and an administrator invites them. Nothing in this stack is needed for that.
 
-1. Grant admin consent for the app (Enterprise applications > Margince >
-   Permissions). This needs Privileged Role Administrator or Global
-   Administrator, so the stack leaves it to you.
-2. Add the app (`entra_client_id` output) to the Conditional Access policy
-   that protects your other business applications.
-3. Check that Assignment required is Yes and that only your group is
-   assigned.
+Microsoft (Entra ID) or Google sign-in is optional. A Margince administrator turns it on in **Settings → General → Microsoft app** (or **Google app**) with an app the customer's IT registers in its own Entra or Google console; no restart and no apply. Register the redirect URIs from `terraform output sso_redirect_uris`. A Microsoft app saved in Settings signs in only users of the directory it is registered in. To allow only single sign-on after that, set `auth.password.enabled: false` in `margince.yaml` (core `docs/reference/configuration.md`, "Turning the password method off"); the operator's emergency route is core's `margince-migrate reset-password`.
 
-### 7.2 Entra secret rotation
+Password login is protected by per-client rate limits on the credential endpoints (the host adapter's nginx).
 
-The first `terraform apply` after 180 days creates a new
-client secret and writes it to Key Vault. Then run Section 4.6, steps 2 and
-3, with the running version.
-
-### 7.3 Access
+## 8. Access
 
 | Task | Command |
 |---|---|
@@ -235,7 +222,7 @@ client secret and writes it to Key Vault. Then run Section 4.6, steps 2 and
 | Logs | `docker compose -p margince-<name> logs` on the VM, in `$HOST_DIR/current` |
 | Boot log | `az vm boot-diagnostics get-boot-log -g <resource-group> -n <vm>` |
 
-## 8. Versions
+## 9. Versions
 
 | Component | Version | Source |
 |---|---|---|
@@ -244,9 +231,9 @@ client secret and writes it to Key Vault. Then run Section 4.6, steps 2 and
 | PostgreSQL | 16 with pgvector | the image the host adapter pins (`scripts/deploy/host/compose.yaml`) |
 | Redis | 7.2 | the image the host adapter pins (`scripts/deploy/host/compose.yaml`) |
 | Terraform | 1.10.0 or later | `versions.tf` |
-| Providers | azurerm ~> 4.81, azuread ~> 2.53, random ~> 3.6, time ~> 0.12 | `versions.tf` |
+| Providers | azurerm ~> 4.81, random ~> 3.6 | `versions.tf` |
 
-## 9. Tests
+## 10. Tests
 
 ```sh
 terraform init -backend=false

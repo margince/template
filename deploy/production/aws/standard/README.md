@@ -239,6 +239,14 @@ Follow Section 3 for each new version, then set `release_version` in
 `terraform.tfvars` and run `terraform apply`. All three services get a new
 task definition in the same apply; api, worker and web move together.
 
+## Sign-in
+
+Margince uses its own accounts: users sign in with email and password, and an administrator invites them. Nothing in this stack is needed for that.
+
+Microsoft (Entra ID) or Google sign-in is optional. A Margince administrator turns it on in **Settings → General → Microsoft app** (or **Google app**) with an app the customer's IT registers in its own Entra or Google console; no restart and no apply. Register the redirect URIs from `terraform output sso_redirect_uris`. A Microsoft app saved in Settings signs in only users of the directory it is registered in. To allow only single sign-on after that, set `auth.password.enabled: false` in `margince.yaml` (core `docs/reference/configuration.md`, "Turning the password method off"); the operator's emergency route is core's `margince-migrate reset-password`.
+
+Password login is protected by per-client rate limits on the credential endpoints (the WAF's per-IP rate rules).
+
 ## WAF rollout
 
 `alb.tf`'s web ACL, the counterpart of the Azure standard stack's WAF policy
@@ -314,6 +322,26 @@ core's `redis:7.2` and the Azure stacks (ElastiCache has no Redis OSS 7.2).
 Two nodes with automatic failover, `noeviction` (Redis is the outbox relay:
 an evicted key is a lost event), TLS required and an AUTH token, 7-day
 snapshots and slow-log delivery to CloudWatch Logs.
+
+## Cost
+
+Rough list prices in eu-central-1, per month, before usage-based traffic:
+
+| Item | USD |
+|---|---|
+| ECS Fargate: api (2-4 tasks), worker (1-3), web (2) | 80-165 |
+| RDS db.t4g.medium Multi-AZ, 50 GB gp3 | 130-145 |
+| ElastiCache cache.t4g.small, two nodes | 60 |
+| NAT gateways (2) and data processing | 65-90 |
+| ALB | 30-45 |
+| VPC endpoints (5 interface; the S3 gateway endpoint is free) | 40 |
+| AWS WAF | 15-25 |
+| CloudWatch logs and alarms, SNS | 10-20 |
+| S3, EFS, ECR, KMS key and SSM Standard | 10-20 |
+| **Total** | **about 440-660** |
+
+A Graviton release (`cpu_architecture = "ARM64"`, `PLATFORMS` including
+`linux/arm64`) cuts the Fargate line by about 20%.
 
 ## Security notes
 

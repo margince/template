@@ -90,14 +90,3 @@ variable "license_token" {
   default     = ""
   sensitive   = true
 }
-
-# ---- Azure only -----------------------------------------------------------------
-
-variable "entra_access_group_object_id" {
-  description = "Object ID of the Entra security group allowed to use Margince, usually the group that already gates Dataverse."
-  type        = string
-  validation {
-    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.entra_access_group_object_id))
-    error_message = "entra_access_group_object_id must be the object ID (a GUID) of the security group that already gates the Dataverse environment."
-  }
-}

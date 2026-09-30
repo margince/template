@@ -12,9 +12,6 @@ admin_ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 # SSH and the Key Vault firewall admit only these. 0.0.0.0/0 is refused.
 ssh_allowed_cidrs = ["203.0.113.10/32"]
 
-# The Entra security group allowed to use Margince.
-entra_access_group_object_id = "00000000-0000-0000-0000-000000000000"
-
 # ---- Optional, shown with their defaults ------------------------------------------
 
 # name_prefix   = "margince"

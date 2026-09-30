@@ -1,4 +1,4 @@
-# Offline checks with mocked providers: no Azure or Entra access needed.
+# Offline checks with mocked providers: no Azure access needed.
 #   terraform init -backend=false && terraform test
 mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
@@ -46,53 +46,13 @@ mock_provider "azurerm" {
     defaults = { id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/margince-light/providers/Microsoft.Insights/actionGroups/alerts" }
   }
 }
-mock_provider "azuread" {
-  mock_data "azuread_client_config" {
-    defaults = {
-      tenant_id = "00000000-0000-0000-0000-000000000001"
-      object_id = "00000000-0000-0000-0000-000000000002"
-    }
-  }
-  mock_data "azuread_application_published_app_ids" {
-    defaults = {
-      result = { MicrosoftGraph = "00000003-0000-0000-c000-000000000000" }
-    }
-  }
-  mock_data "azuread_service_principal" {
-    defaults = {
-      # Microsoft Graph's published delegated-permission ids, identical in every
-      # tenant. Not credentials; gitleaks' generic-api-key rule matches their shape.
-      oauth2_permission_scope_ids = {
-        openid      = "37f7f235-527c-4136-accd-4a02d197296e", email = "64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0",
-        profile     = "14dad69e-099b-42c9-810b-d002981feec1", offline_access = "7427e0e9-2fba-42fe-b0c0-848c9e6a8182", # gitleaks:allow
-        "User.Read" = "e1fe6dd8-ba31-4d61-89e7-88639da4683d", "Mail.Read" = "570282fd-fa5c-430d-a7fd-fc8dc98a9dca",
-        "Mail.Send" = "e383f46e-2787-4529-855e-0e479a3ffac0", "Calendars.Read" = "465a38f9-76ea-45b9-9f34-9e8b0d4b0b42"
-      }
-    }
-  }
-
-  mock_resource "azuread_application" {
-    defaults = {
-      id        = "/applications/00000000-0000-0000-0000-000000000005"
-      client_id = "00000000-0000-0000-0000-000000000006"
-    }
-  }
-  mock_resource "azuread_application_password" {
-    defaults = { end_date = "2027-06-01T00:00:00Z" }
-  }
-  mock_resource "azuread_service_principal" {
-    defaults = { object_id = "00000000-0000-0000-0000-000000000007" }
-  }
-}
 mock_provider "random" {}
-mock_provider "time" {}
 
 variables {
-  domain                       = "crm.example.com"
-  license_token                = "test-licence"
-  entra_access_group_object_id = "00000000-0000-0000-0000-0000000000aa"
-  admin_ssh_public_key         = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/vUmkEV7lfFP7t36rOoMbvwoNzx4r0gfQKltPmyKTIC6WILJaitH79JH2yJXHb8ePibRalweus+EV/EPKn0oUrOzjVsjVzMef9Rz5CoAovRnDe6z2+y84XnjlIeN5b58NkeBaliOlFv36enIfMluv/sOMHTjfBwbCooF+ChwYnz9p20V5y0DFe/axStpcKcmHW7RfRuijO+vxC+te9mhCbLdN1sJm6qC9pSeADHSDH/swyDK6l1526/+NJqHfryRbhuQ8uPDL7pT14Z02AFnvIMvYhvSomi4Kag9aFQLFmm2Jd1Yz6lERFj4i6+51WvD/ZPmC7OER6N09qlUdXo3qx8Amf472GAQl9VhVHtolycBNtKehQomHLNuBffSIiarnOH5hYwLQEBD3ixah4xbXlmDAb9p+Ub31ppEv9ZLA2YebcRPzUfy/bvBLxysWAJTSwrnTvP0/bJW4Egqa37prx8MQRQkB/yRiET3I3DHFlLDsSnKQnEYSEBmvvLvxE6s= test"
-  ssh_allowed_cidrs            = ["203.0.113.10/32", "198.51.100.0/24"]
+  domain               = "crm.example.com"
+  license_token        = "test-licence"
+  admin_ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/vUmkEV7lfFP7t36rOoMbvwoNzx4r0gfQKltPmyKTIC6WILJaitH79JH2yJXHb8ePibRalweus+EV/EPKn0oUrOzjVsjVzMef9Rz5CoAovRnDe6z2+y84XnjlIeN5b58NkeBaliOlFv36enIfMluv/sOMHTjfBwbCooF+ChwYnz9p20V5y0DFe/axStpcKcmHW7RfRuijO+vxC+te9mhCbLdN1sJm6qC9pSeADHSDH/swyDK6l1526/+NJqHfryRbhuQ8uPDL7pT14Z02AFnvIMvYhvSomi4Kag9aFQLFmm2Jd1Yz6lERFj4i6+51WvD/ZPmC7OER6N09qlUdXo3qx8Amf472GAQl9VhVHtolycBNtKehQomHLNuBffSIiarnOH5hYwLQEBD3ixah4xbXlmDAb9p+Ub31ppEv9ZLA2YebcRPzUfy/bvBLxysWAJTSwrnTvP0/bJW4Egqa37prx8MQRQkB/yRiET3I3DHFlLDsSnKQnEYSEBmvvLvxE6s= test"
+  ssh_allowed_cidrs    = ["203.0.113.10/32", "198.51.100.0/24"]
 }
 
 run "single_ubuntu_vm" {
@@ -208,12 +168,19 @@ run "outputs" {
     error_message = "ssh_known_hosts_hint reads the host key of the public IP."
   }
   assert {
-    condition     = output.secret_names == tolist(["MARGINCE_GRAPH_CLIENT_ID", "MARGINCE_GRAPH_CLIENT_SECRET", "MARGINCE_GRAPH_TENANT", "MARGINCE_LICENSE", "MARGINCE_MICROSOFT_SIGNIN_TENANT"])
-    error_message = "secret_names lists the Entra values and the license."
+    condition     = output.secret_names == tolist(["MARGINCE_LICENSE"])
+    error_message = "secret_names lists the license only."
   }
   assert {
-    condition     = contains(keys(azurerm_key_vault_secret.this), "margince-license") && contains(keys(azurerm_key_vault_secret.this), "margince-entra-client-secret")
-    error_message = "Key Vault holds the license and the Entra client secret."
+    condition     = keys(azurerm_key_vault_secret.this) == ["margince-license"]
+    error_message = "Key Vault holds the license only."
+  }
+  assert {
+    condition = output.sso_redirect_uris == {
+      microsoft = ["https://crm.example.com/v1/auth/oidc/microsoft/callback", "https://crm.example.com/v1/connectors/graph/callback", "https://crm.example.com/v1/connectors/graphcal/callback"]
+      google    = ["https://crm.example.com/v1/auth/oidc/google/callback", "https://crm.example.com/v1/connectors/gmail/callback"]
+    }
+    error_message = "sso_redirect_uris lists the Microsoft and Google callbacks under https://<domain>."
   }
 }
 
@@ -252,10 +219,10 @@ run "ssh_from_anywhere_ipv6_refused" {
   expect_failures = [var.ssh_allowed_cidrs]
 }
 
-run "entra_group_required" {
+run "no_identity_resources" {
   command = plan
-  variables {
-    entra_access_group_object_id = ""
+  assert {
+    condition     = alltrue([for f in fileset(path.module, "*.tf") : !can(regex("azuread_|hashicorp/azuread|provider \"azuread\"", file("${path.module}/${f}")))])
+    error_message = "The stack creates no Entra resources and declares no azuread provider; sign-in apps are set up in Margince under Settings."
   }
-  expect_failures = [var.entra_access_group_object_id]
 }

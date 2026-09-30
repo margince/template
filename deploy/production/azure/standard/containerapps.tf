@@ -37,7 +37,7 @@ resource "azurerm_container_app_environment" "this" {
 }
 
 # Mounted read-only at /app/config on api and worker. The operator uploads
-# margince.yaml to this share once by hand (README.md step 5); Terraform does
+# margince.yaml to this share once by hand (README.md step 4); Terraform does
 # not write it.
 resource "azurerm_container_app_environment_storage" "config" {
   name                         = "config"
@@ -72,7 +72,6 @@ locals {
     connector-state-key = { id = azurerm_key_vault_secret.connector_state_key, env = "MARGINCE_CONNECTOR_STATE_KEY" }
     admin-password      = { id = azurerm_key_vault_secret.admin_password, env = "MARGINCE_ADMIN_PASSWORD" } # api entrypoint: first boot only
     license             = { id = azurerm_key_vault_secret.license, env = "MARGINCE_LICENSE" }
-    entra-client-secret = { id = azurerm_key_vault_secret.entra_client_secret, env = "MARGINCE_GRAPH_CLIENT_SECRET" }
     graph-push-token    = { id = azurerm_key_vault_secret.graph_push_token, env = "MARGINCE_GRAPH_PUSH_TOKEN" }
     graph-notify-url    = { id = azurerm_key_vault_secret.graph_notification_url, env = "MARGINCE_GRAPH_NOTIFICATION_URL" }
     metrics-token       = { id = azurerm_key_vault_secret.metrics_token, env = "MARGINCE_METRICS_TOKEN" }
@@ -80,11 +79,10 @@ locals {
 
   api_secret_names = concat(
     ["owner-dsn", "app-dsn", "redis-password", "keyvault-root-key", "webhook-key",
-    "connector-state-key", "license", "entra-client-secret", "graph-push-token", "metrics-token"],
+    "connector-state-key", "license", "graph-push-token", "metrics-token"],
     var.include_bootstrap_admin ? ["admin-password"] : [],
   )
-  worker_secret_names = ["app-dsn", "redis-password", "keyvault-root-key", "webhook-key",
-  "entra-client-secret", "graph-notify-url"]
+  worker_secret_names = ["app-dsn", "redis-password", "keyvault-root-key", "webhook-key", "graph-notify-url"]
 
   api_secrets    = { for n in local.api_secret_names : n => local.secret_catalog[n] }
   worker_secrets = { for n in local.worker_secret_names : n => local.secret_catalog[n] }
@@ -100,16 +98,9 @@ locals {
     # Attachments: Margince's filesystem store on the attachments share,
     # because its object-store client speaks S3 only (storage.tf).
     { name = "MARGINCE_BLOBSTORE_PATH", value = "/app/blobstore" },
-    { name = "MARGINCE_GRAPH_CLIENT_ID", value = local.entra_client_id },
-    { name = "MARGINCE_GRAPH_TENANT", value = local.entra_tenant_id },
-    # A new Entra secret version rolls a new revision, so the apps pick up a
-    # rotated secret without a manual restart (entra.tf).
-    { name = "MARGINCE_SECRET_GENERATION", value = azurerm_key_vault_secret.entra_client_secret.version },
   ]
 
   api_env = concat(local.common_env, [
-    # Microsoft sign-in, pinned to the customer's directory.
-    { name = "MARGINCE_MICROSOFT_SIGNIN_TENANT", value = local.entra_tenant_id },
     # The edge in the same replica serves the MCP App views; no hairpin
     # through the public internet.
     { name = "MARGINCE_MCP_APPS_BASE_URL", value = "http://127.0.0.1:${local.edge_port}" },
@@ -132,11 +123,10 @@ locals {
   worker_observe_port = 9101
   public_host         = trimprefix(var.public_base_url, "https://")
   edge_nginx_conf = templatefile("${path.module}/templates/edge-nginx.conf.tftpl", {
-    edge_port         = local.edge_port
-    api_port          = local.api_port
-    envoy_cidr        = azurerm_subnet.containerapps.address_prefixes[0]
-    appgw_cidr        = azurerm_subnet.appgw.address_prefixes[0]
-    break_glass_cidrs = var.break_glass_cidrs
+    edge_port  = local.edge_port
+    api_port   = local.api_port
+    envoy_cidr = azurerm_subnet.containerapps.address_prefixes[0]
+    appgw_cidr = azurerm_subnet.appgw.address_prefixes[0]
     # Requests per minute per client address on the sign-in paths (burst of
     # the same size). Staff behind one office NAT share one address.
     auth_rate   = 30
@@ -182,10 +172,9 @@ resource "azurerm_container_app" "api" {
     for_each = local.api_secrets
     content {
       name = secret.key
-      # Versioned id: a new secret version (Entra secret rotation) changes the
-      # app itself, so its new revision starts with the new value. A
-      # versionless id is re-read only on Container Apps' own refresh cycle,
-      # while the same apply already deletes the old Entra password.
+      # Versioned id: a new secret version changes the app itself, so its
+      # new revision starts with the new value. A versionless id is re-read
+      # only on Container Apps' own refresh cycle.
       key_vault_secret_id = secret.value.id.id
       identity            = azurerm_user_assigned_identity.api.id
     }
@@ -194,8 +183,8 @@ resource "azurerm_container_app" "api" {
   # The Application Gateway's backend (appgw.tf). external_enabled makes the
   # ingress reachable from the VNet; the environment is internal, so nothing
   # outside the VNet reaches it. It targets the edge container, never
-  # cmd/api directly: edge serves the SPA, applies the break-glass and rate
-  # rules, and forwards api paths to cmd/api on localhost. The gateway
+  # cmd/api directly: edge serves the SPA, applies the rate limits, and
+  # forwards api paths to cmd/api on localhost. The gateway
   # connects over HTTPS; HTTP is redirected to HTTPS.
   ingress {
     external_enabled           = true
@@ -366,10 +355,9 @@ resource "azurerm_container_app" "worker" {
     for_each = local.worker_secrets
     content {
       name = secret.key
-      # Versioned id: a new secret version (Entra secret rotation) changes the
-      # app itself, so its new revision starts with the new value. A
-      # versionless id is re-read only on Container Apps' own refresh cycle,
-      # while the same apply already deletes the old Entra password.
+      # Versioned id: a new secret version changes the app itself, so its
+      # new revision starts with the new value. A versionless id is re-read
+      # only on Container Apps' own refresh cycle.
       key_vault_secret_id = secret.value.id.id
       identity            = azurerm_user_assigned_identity.worker.id
     }

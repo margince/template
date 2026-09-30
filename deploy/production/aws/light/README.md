@@ -71,7 +71,7 @@ commands in the repository root.
    | `ssh_allowed_cidrs` | required | IPv4 ranges for SSH. `0.0.0.0/0` is refused. |
    | `name_prefix` | `margince-light` | Prefix of the resource names. |
    | `region` | `eu-central-1` | AWS region. |
-   | `instance_type` | `t3.large` | EC2 instance type; a Graviton type selects the arm64 AMI (Section 7.1). |
+   | `instance_type` | `t3.large` | EC2 instance type; a Graviton type selects the arm64 AMI (Section 8.1). |
    | `data_disk_gb` | `64` | Size of the data volume. |
    | `alert_email` | `""` | Subscriber of the alerts topic. Empty adds none. |
    | `license_token` | `""` | `MARGINCE_LICENSE`, stored in SSM. |
@@ -195,21 +195,29 @@ A snapshot of a running database is crash-consistent. For an
 application-consistent copy, also run `pg_dump` in the `postgres` container on
 a schedule.
 
-## 7. AWS notes
+## 7. Sign-in
 
-### 7.1 Architecture
+Margince uses its own accounts: users sign in with email and password, and an administrator invites them. Nothing in this stack is needed for that.
+
+Microsoft (Entra ID) or Google sign-in is optional. A Margince administrator turns it on in **Settings → General → Microsoft app** (or **Google app**) with an app the customer's IT registers in its own Entra or Google console; no restart and no apply. Register the redirect URIs from `terraform output sso_redirect_uris`. A Microsoft app saved in Settings signs in only users of the directory it is registered in. To allow only single sign-on after that, set `auth.password.enabled: false` in `margince.yaml` (core `docs/reference/configuration.md`, "Turning the password method off"); the operator's emergency route is core's `margince-migrate reset-password`.
+
+Password login is protected by per-client rate limits on the credential endpoints (the host adapter's nginx).
+
+## 8. AWS notes
+
+### 8.1 Architecture
 
 `instance_type` selects the AMI: a Graviton type (`t4g`, `m7g`, `c7gn`, ...)
 gets the arm64 AMI, any other type the x86_64 AMI. The release images must
 exist for that architecture (Section 3).
 
-### 7.2 Recovery
+### 8.2 Recovery
 
 The system status alarm runs EC2 auto-recover: the instance moves to healthy
 hardware and keeps its ID, Elastic IP and volumes. The instance status alarm
 only notifies; reboot the instance.
 
-### 7.3 Access
+### 8.3 Access
 
 | Task | Command |
 |---|---|
@@ -217,7 +225,7 @@ only notifies; reboot the instance.
 | Logs | `docker compose -p margince-<name> logs` on the instance, in `$HOST_DIR/current` |
 | Console output | `aws ec2 get-console-output --instance-id <id> --latest --output text` |
 
-## 8. Versions
+## 9. Versions
 
 | Component | Version | Source |
 |---|---|---|
@@ -228,7 +236,7 @@ only notifies; reboot the instance.
 | Terraform | 1.10.0 or later | `versions.tf` |
 | Providers | aws ~> 5.60 | `versions.tf` |
 
-## 9. Tests
+## 10. Tests
 
 ```sh
 terraform init -backend=false

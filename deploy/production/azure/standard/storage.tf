@@ -144,7 +144,7 @@ resource "azurerm_storage_management_policy" "this" {
 }
 
 # Read-only config share holding margince.yaml. Terraform creates the share;
-# the operator writes the file once by hand (README.md step 5). 5 GiB is Azure
+# the operator writes the file once by hand (README.md step 4). 5 GiB is Azure
 # Files' minimum share quota; the config file needs a fraction of it.
 resource "azurerm_storage_share" "config" {
   name               = "${var.name_prefix}-config"

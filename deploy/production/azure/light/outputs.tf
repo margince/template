@@ -9,15 +9,7 @@ locals {
 
   # Names for deploy/production/secrets, and the commands that set their
   # values in the shell that runs make deploy.
-  secret_env = merge(
-    {
-      MARGINCE_GRAPH_CLIENT_ID         = local.entra_client_id
-      MARGINCE_GRAPH_TENANT            = local.entra_tenant_id
-      MARGINCE_MICROSOFT_SIGNIN_TENANT = local.entra_tenant_id
-      MARGINCE_GRAPH_CLIENT_SECRET     = "$(${local.kv_read} margince-entra-client-secret)"
-    },
-    local.license_set ? { MARGINCE_LICENSE = "$(${local.kv_read} margince-license)" } : {},
-  )
+  secret_env = local.license_set ? { MARGINCE_LICENSE = "$(${local.kv_read} margince-license)" } : {}
 }
 
 # ---- Shared with aws/light ------------------------------------------------------
@@ -81,17 +73,12 @@ output "public_base_url" {
   value = local.public_base_url
 }
 
-output "entra_client_id" {
-  value = local.entra_client_id
-}
-
-output "entra_tenant_id" {
-  value = local.entra_tenant_id
-}
-
-output "entra_redirect_uris" {
-  description = "Redirect URIs registered on the Entra app."
-  value       = local.entra_redirect_uris
+output "sso_redirect_uris" {
+  description = "Redirect URIs to register in the customer's own Microsoft Entra or Google app, for optional sign-in and mailbox capture configured in Margince under Settings. Margince needs none of them to run."
+  value = {
+    microsoft = ["${local.public_base_url}/v1/auth/oidc/microsoft/callback", "${local.public_base_url}/v1/connectors/graph/callback", "${local.public_base_url}/v1/connectors/graphcal/callback"]
+    google    = ["${local.public_base_url}/v1/auth/oidc/google/callback", "${local.public_base_url}/v1/connectors/gmail/callback"]
+  }
 }
 
 output "alerts_action_group_id" {

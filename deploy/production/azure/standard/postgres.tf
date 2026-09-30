@@ -121,7 +121,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   # point-in-time-restore window.
   #
   # scripts/deploy/db-bootstrap.sql runs once, by hand, against this server as
-  # "pgadmin" (README.md step 3). Flexible Server only creates a default
+  # "pgadmin" (README.md step 2). Flexible Server only creates a default
   # "postgres" database and has no argument to create another at provision
   # time, so the script's `CREATE DATABASE margince OWNER margince_owner`
   # branch runs here.

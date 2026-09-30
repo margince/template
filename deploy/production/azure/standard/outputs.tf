@@ -1,5 +1,5 @@
 output "public_ip_address" {
-  description = "The Application Gateway's public IP. Point public_base_url's host at it with an A record (README.md, step 6)."
+  description = "The Application Gateway's public IP. Point public_base_url's host at it with an A record (README.md, step 5)."
   value       = azurerm_public_ip.appgw.ip_address
 }
 
@@ -14,7 +14,7 @@ output "environment_static_ip" {
 }
 
 output "public_certificate_secret_id" {
-  description = "Key Vault secret ID the Application Gateway reads its TLS certificate from. Import the certificate as public-tls (README.md, step 6)."
+  description = "Key Vault secret ID the Application Gateway reads its TLS certificate from. Import the certificate as public-tls (README.md, step 5)."
   value       = local.public_certificate_secret_id
 }
 
@@ -28,18 +28,12 @@ output "nat_egress_ip" {
   value       = azurerm_public_ip.nat.ip_address
 }
 
-output "entra_tenant_id" {
-  value = local.entra_tenant_id
-}
-
-output "entra_client_id" {
-  description = "Application (client) ID of the Margince app registration. Add this app to the Conditional Access policy that protects Dataverse."
-  value       = local.entra_client_id
-}
-
-output "entra_redirect_uris" {
-  description = "Redirect URIs of the app registration (set by entra.tf)."
-  value       = local.entra_redirect_uris
+output "sso_redirect_uris" {
+  description = "Redirect URIs to register in the customer's own Microsoft Entra or Google app, for optional sign-in and mailbox capture configured in Margince under Settings. Margince needs none of them to run."
+  value = {
+    microsoft = ["${var.public_base_url}/v1/auth/oidc/microsoft/callback", "${var.public_base_url}/v1/connectors/graph/callback", "${var.public_base_url}/v1/connectors/graphcal/callback"]
+    google    = ["${var.public_base_url}/v1/auth/oidc/google/callback", "${var.public_base_url}/v1/connectors/gmail/callback"]
+  }
 }
 
 output "dataverse_identity_client_id" {
@@ -106,7 +100,7 @@ output "jumpbox_admin_username" {
   value = local.jumpbox_admin_username
 }
 
-# ---- Database bootstrap (README.md step 3) --------------------------------------
+# ---- Database bootstrap (README.md step 2) --------------------------------------
 # Generated without special characters, so they go into a DSN unescaped. Read
 # with `terraform output -raw <name>`; never printed by a plain `terraform output`.
 
