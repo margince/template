@@ -3,10 +3,11 @@
 # The macOS and Ubuntu version is install.sh.
 #
 #   irm <url>/install.ps1 | iex
-#   .\install.ps1 -Action <up|down|reset|logins|logs> [-Yes]
+#   & ([scriptblock]::Create((irm <url>/install.ps1))) <up|down|reset|logins|logs> [-Yes]
 #
-# No param() block: `irm | iex` cannot pass parameters, and the arguments of
-# a downloaded script are parsed from $args instead.
+# No param() block: `irm | iex` cannot pass arguments, and the scriptblock
+# form passes them in $args. A downloaded install.ps1 takes the same
+# arguments, but Windows' default execution policy refuses to run it.
 
 $Script:Image = '@IMAGE@'
 $Script:Container = '@CONTAINER@'
@@ -111,7 +112,7 @@ function Wait-Healthy {
     $timeout = [int]($env:MARGINCE_START_TIMEOUT, 600 | Where-Object { $_ } | Select-Object -First 1)
     for ($waited = 0; (Get-ContainerValue '{{if .State.Health}}{{.State.Health.Status}}{{end}}') -ne 'healthy'; $waited += 5) {
         if ($waited -ge $timeout) {
-            Fail 'Margince did not start within 10 minutes. Download install.ps1, run .\install.ps1 -Action logs, and send the output to the person who gave you this command.'
+            Fail 'Margince did not start within 10 minutes. Run & ([scriptblock]::Create((irm <address of install.ps1>))) logs and send the output to the person who gave you this command.'
         }
         Start-Sleep -Seconds 5
     }
@@ -149,7 +150,7 @@ function Invoke-Up {
     }
     Wait-Healthy
     Show-Logins
-    Say 'To stop Margince, run .\install.ps1 -Action down. Your data is kept.'
+    Say 'To stop Margince, run & ([scriptblock]::Create((irm <address of install.ps1>))) down. Your data is kept.'
     Start-Process -FilePath "http://localhost:$($Script:Port)"
 }
 

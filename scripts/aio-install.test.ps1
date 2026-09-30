@@ -63,6 +63,7 @@ $out = Invoke-Aio (@('up') + $common) *>&1 | Out-String
 Check 'up runs the container on 127.0.0.1:8080' ($script:Log -contains 'docker run -d --name margince-acme --restart unless-stopped -p 127.0.0.1:8080:80 -v margince-acme-data:/data acme/all-in-one:v1.0.0')
 Check 'up shows the address and the sign-in' (($out -match 'http://localhost:8080') -and ($out -match 'stub-password'))
 Check 'up opens the browser' ($script:Log -contains 'start http://localhost:8080 ')
+Check 'up names the down action in a form that runs without a script file' ($out -match [regex]::Escape('[scriptblock]::Create((irm'))
 
 Reset-Stub; $script:S.Busy = @('8080')
 Invoke-Aio (@('up') + $common) *>&1 | Out-Null
@@ -91,7 +92,7 @@ Check 'no answer installs nothing' (@($script:Log | Where-Object { $_ -like 'win
 
 Reset-Stub; $script:S.Health = 'starting'; $env:MARGINCE_START_TIMEOUT = '10'
 $out = Invoke-Aio (@('up') + $common) *>&1 | Out-String
-Check 'never healthy names the logs action' ($out -match 'logs')
+Check 'never healthy names the logs action in a form that runs without a script file' (($out -match 'logs') -and ($out -match [regex]::Escape('[scriptblock]::Create')))
 Remove-Item Env:MARGINCE_START_TIMEOUT
 
 Reset-Stub; Invoke-Aio (@('up') + $common) *>&1 | Out-Null; $script:Log.Clear()
@@ -100,6 +101,13 @@ Check 'down stops the container' ($script:Log -contains 'docker stop margince-ac
 $script:S.Answer = 'yes'
 Invoke-Aio (@('reset') + $common) *>&1 | Out-Null
 Check 'reset after yes removes the container and the volume' (($script:Log -contains 'docker rm -f -v margince-acme') -and ($script:Log -contains 'docker volume rm margince-acme-data'))
+
+$sb = [scriptblock]::Create((Get-Content -Raw (Join-Path $PSScriptRoot 'aio/install.ps1')))
+Reset-Stub
+$env:MARGINCE_AIO_NO_MAIN = ''
+$out = & $sb logs -Image acme/all-in-one:v1.0.0 -Container margince-acme -Volume margince-acme-data *>&1 | Out-String
+$env:MARGINCE_AIO_NO_MAIN = '1'
+Check 'a scriptblock of the script takes the action as an argument' ($script:Log -contains 'docker logs --tail 200 margince-acme')
 
 $out = Invoke-Aio @('up') *>&1 | Out-String
 Check 'an unrendered script names make aio-scripts' ($out -match 'make aio-scripts')

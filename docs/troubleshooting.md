@@ -738,7 +738,8 @@ again. The command then only starts Margince.
 **Cause:** The command must ask before it installs Docker, and it runs
 without a terminal.
 
-**Fix:** Add `--yes` at the end (`sh -s -- up --yes`, or `-Yes` on Windows).
+**Fix:** Add `--yes` at the end (`sh -s -- up --yes`). On Windows, use
+`& ([scriptblock]::Create((irm <url>/install.ps1))) up -Yes`.
 
 ## Related guides
 

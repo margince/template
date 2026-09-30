@@ -123,16 +123,18 @@ kept.
 
 Other actions:
 
-| Action | macOS, Ubuntu | Windows |
+| Action | macOS, Ubuntu | Windows (PowerShell) |
 |---|---|---|
-| Stop, keep the data | `curl -fsSL <url>/install.sh \| sh -s -- down` | `.\install.ps1 -Action down` |
-| Show the sign-in | `curl -fsSL <url>/install.sh \| sh -s -- logins` | `.\install.ps1 -Action logins` |
-| Print the log | `curl -fsSL <url>/install.sh \| sh -s -- logs` | `.\install.ps1 -Action logs` |
-| Delete Margince and its data | `curl -fsSL <url>/install.sh \| sh -s -- reset` | `.\install.ps1 -Action reset` |
+| Stop, keep the data | `curl -fsSL <url>/install.sh \| sh -s -- down` | `& ([scriptblock]::Create((irm <url>/install.ps1))) down` |
+| Show the sign-in | `curl -fsSL <url>/install.sh \| sh -s -- logins` | `& ([scriptblock]::Create((irm <url>/install.ps1))) logins` |
+| Print the log | `curl -fsSL <url>/install.sh \| sh -s -- logs` | `& ([scriptblock]::Create((irm <url>/install.ps1))) logs` |
+| Delete Margince and its data | `curl -fsSL <url>/install.sh \| sh -s -- reset` | `& ([scriptblock]::Create((irm <url>/install.ps1))) reset` |
 
-On Windows, the actions other than the default run from a downloaded
-`install.ps1`. Add `--yes` (or `-Yes`) to answer the install question in
-advance, for example where there is no terminal.
+On Windows, `irm | iex` cannot pass an action, and the default execution
+policy refuses to run a downloaded `install.ps1`, so the other actions use the
+scriptblock form above. Add `--yes` on macOS and Ubuntu, or `-Yes` in the
+scriptblock form on Windows, to answer the install question in advance, for
+example where there is no terminal.
 
 ## 6. What the tester sees
 
