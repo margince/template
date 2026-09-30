@@ -168,6 +168,21 @@ reset; touch "$STATE/docker-missing"
 if STUB_OS=Darwin MARGINCE_TTY=/nonexistent/tty run_install up >"$TMP/out" 2>&1; then fail "no terminal fails"; else
   check "without a terminal the message names --yes" grep -q -- '--yes' "$TMP/out"; fi
 
+# 11b. The same under dash (Ubuntu's /bin/sh): a failed redirection on a
+# special built-in must not end the shell silently.
+if command -v dash >/dev/null 2>&1; then
+  reset; touch "$STATE/docker-missing"
+  if PATH="$BIN:/usr/bin:/bin" MARGINCE_OS_RELEASE="$TMP/os-release" MARGINCE_TTY=/nonexistent/tty MARGINCE_SLEEP=true STUB_OS=Darwin \
+      dash "$INSTALL" --image acme/all-in-one:v1.0.0 --container margince-acme --volume margince-acme-data up >"$TMP/out" 2>&1; then
+    fail "dash without a terminal fails"
+  else
+    check "dash without a terminal names --yes" grep -q -- '--yes' "$TMP/out"
+  fi
+  reset; touch "$STATE/running"; echo sha256:new > "$STATE/container"; echo 8080 > "$STATE/port"
+  PATH="$DBIN:$BIN:/usr/bin:/bin" MARGINCE_TTY=/nonexistent/tty dash "$INSTALL" --image x --container margince-acme --volume margince-acme-data reset >"$TMP/out" 2>&1 || true
+  check "dash reset without a terminal names --yes" grep -q -- '--yes' "$TMP/out"
+fi
+
 # 12. Docker installed but not running on macOS: started, then used.
 reset; touch "$STATE/daemon-down"
 STUB_OS=Darwin run_install up >"$TMP/out" 2>&1 || true

@@ -69,10 +69,12 @@ done
 # ── questions ──
 
 # ask <question> — 0 for yes. Reads the terminal, not standard input:
-# standard input is this script when it runs as `curl ... | sh`.
+# standard input is this script when it runs as `curl ... | sh`. The terminal
+# is probed in a subshell: dash ends the shell on a failed redirection of a
+# special built-in such as `:`.
 ask() {
   [ "$YES" = yes ] && return 0
-  if ! { : <"$TTY"; } 2>/dev/null; then
+  if ! (: <"$TTY") 2>/dev/null; then
     fail "$1 There is no terminal to answer in. Run the command again with --yes at the end (sh -s -- up --yes)."
   fi
   printf '%s [Y/n] ' "$1"
@@ -310,7 +312,7 @@ cmd_down() {
 cmd_reset() {
   require_docker
   if [ "$YES" != yes ]; then
-    { : <"$TTY"; } 2>/dev/null || fail "There is no terminal to answer in. Run the command again with --yes at the end."
+    (: <"$TTY") 2>/dev/null || fail "There is no terminal to answer in. Run the command again with --yes at the end."
     printf 'This deletes Margince and all its data. Type yes to continue: '
     answer=""
     read -r answer <"$TTY" || answer=""
