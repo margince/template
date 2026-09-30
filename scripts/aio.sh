@@ -4,10 +4,10 @@
 #
 #   build <v>    make aio: assemble build/aio/ and build <repo>/all-in-one:<v>.
 #                Runs make package first when a role image is missing.
-#                PUSH=1 (needs REGISTRY) pushes linux/amd64 and linux/arm64
-#                (AIO_PLATFORMS) from the pushed role images. DATASET=<checkout>
-#                includes the demo dataset and its seeder. METADATA_FILE=<path>
-#                writes buildx's metadata file.
+#                PUSH=1 (needs REGISTRY) pushes it from the pushed role images,
+#                for AIO_PLATFORMS, else PLATFORMS, else linux/amd64,linux/arm64.
+#                DATASET=<checkout> includes the demo dataset and its seeder.
+#                METADATA_FILE=<path> writes buildx's metadata file.
 #   smoke <v>    make aio-smoke: run the image on a temporary volume and check it.
 #   scripts <v>  make aio-scripts: write dist/aio/<v>/install.sh and install.ps1.
 #   up <v>, down, reset, logins, logs
@@ -90,7 +90,9 @@ cmd_build() {
   local output=(--builder "$(docker context show)" --load)
   if [ "${PUSH:-}" = "1" ]; then
     [ -n "${REGISTRY:-}" ] || die "aio: PUSH=1 requires REGISTRY (the registry host the image is pushed to)"
-    output=(--push --platform "${AIO_PLATFORMS:-linux/amd64,linux/arm64}")
+    # The platforms of the role images it is built FROM: PLATFORMS, which
+    # make package reads too, unless AIO_PLATFORMS narrows it.
+    output=(--push --platform "${AIO_PLATFORMS:-${PLATFORMS:-linux/amd64,linux/arm64}}")
   else
     for role in api web worker; do
       docker image inspect "$REPO/$role:$version" >/dev/null 2>&1 || missing=yes

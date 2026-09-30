@@ -40,10 +40,11 @@ the three images is missing from the local image store, it runs
 |---|---|---|
 | `VERSION` | none | The release version of the role images and the tag of the image. Required. |
 | `DATASET` | unset | A checkout of the demo dataset. The image then loads it on its first start. |
-| `PUSH` | unset | `PUSH=1` pushes the image for `linux/amd64` and `linux/arm64` from the pushed role images, instead of loading it. Requires `REGISTRY`. |
+| `PUSH` | unset | `PUSH=1` pushes the image instead of loading it, built from the pushed role images of `<v>`. Requires `REGISTRY`. |
 | `REGISTRY` | unset | The registry prefix. |
 | `REPO` | `<REGISTRY>/<name>` | Overrides the whole image repository. |
-| `AIO_PLATFORMS` | `linux/amd64,linux/arm64` | The platforms of a pushed image. |
+| `PLATFORMS` | unset | The platforms of the pushed role images (`make package` reads it too). A pushed image has the same platforms. |
+| `AIO_PLATFORMS` | `PLATFORMS`, else `linux/amd64,linux/arm64` | The platforms of a pushed image. Each one must exist in the pushed role images. |
 | `METADATA_FILE` | unset | Writes Buildx's metadata file, which records the pushed digest. |
 
 The image contains:
@@ -82,11 +83,17 @@ each start.
 
 ## 5. Give testers the command
 
-1. Push the image:
+1. Push the role images and then the image, for the same platforms. Testers
+   on Apple silicon Macs need `linux/arm64`:
 
    ```sh
-   make aio VERSION=<v> PUSH=1 REGISTRY=<registry>
+   export REGISTRY=<registry> PLATFORMS=linux/amd64,linux/arm64
+   make package VERSION=<v> PUSH=1
+   make aio VERSION=<v> PUSH=1
    ```
+
+   `release.yml` does both for a release, with the platforms of the
+   repository variable `PLATFORMS` (default `linux/amd64`).
 
 2. Write the install scripts:
 

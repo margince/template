@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AIO="$SCRIPT_DIR/aio"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
-unset REGISTRY REPO PUSH DATASET METADATA_FILE AIO_PLATFORMS AIO_SMOKE_TIMEOUT
+unset REGISTRY REPO PUSH DATASET METADATA_FILE PLATFORMS AIO_PLATFORMS AIO_SMOKE_TIMEOUT
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
 export GIT_AUTHOR_NAME="Test Dev"     GIT_AUTHOR_EMAIL="dev@example.test"
 export GIT_COMMITTER_NAME="Test Dev"  GIT_COMMITTER_EMAIL="dev@example.test"
@@ -142,6 +142,13 @@ if (export PUSH=1; aio build v1.0.0) >/dev/null 2>"$TMP/err"; then fail "PUSH=1 
 reset_log
 (export PUSH=1 REGISTRY=registry.example.test/acme; aio build v1.0.0) >/dev/null 2>&1 || true
 check "PUSH=1 pushes both platforms under the registry" bash -c 'grep "buildx build" "$1" | grep -q -- "--push --platform linux/amd64,linux/arm64" && grep "buildx build" "$1" | grep -q -- "-t registry.example.test/acme/acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
+reset_log
+(export PUSH=1 REGISTRY=registry.example.test/acme PLATFORMS=linux/amd64; aio build v1.0.0) >/dev/null 2>&1 || true
+check "PUSH=1 follows PLATFORMS, the platforms of the pushed role images" bash -c 'grep "buildx build" "$1" | grep -q -- "--push --platform linux/amd64 "' _ "$STUB_LOG"
+reset_log
+(export PUSH=1 REGISTRY=registry.example.test/acme PLATFORMS=linux/amd64 AIO_PLATFORMS=linux/arm64; aio build v1.0.0) >/dev/null 2>&1 || true
+check "AIO_PLATFORMS wins over PLATFORMS" bash -c 'grep "buildx build" "$1" | grep -q -- "--push --platform linux/arm64 "' _ "$STUB_LOG"
+(export PUSH=1 REGISTRY=registry.example.test/acme; aio build v1.0.0) >/dev/null 2>&1 || true
 check "PUSH=1 uses the default builder" bash -c '! grep "buildx build" "$1" | grep -q -- "--builder"' _ "$STUB_LOG"
 check "PUSH=1 does not look for local role images" bash -c '! grep -q "image inspect" "$1"' _ "$STUB_LOG"
 
