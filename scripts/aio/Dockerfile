@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# check=skip=InvalidDefaultArgInFrom
 #
 # The all-in-one image (docs/superpowers/specs/2026-09-30-all-in-one-image-design.md).
 # Built by scripts/aio.sh from a context in build/aio/, never from this
