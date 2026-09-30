@@ -145,7 +145,7 @@ rc="$(run_smoke v1.0.0)"
 if [ "$rc" = 0 ]; then ok "a healthy set passes"; else fail "a healthy set passes (rc=$rc): $(cat "$TMP/out")"; fi
 if all_removed; then ok "success removes every container and the network"; else fail "success removes every container and the network: $(cat "$STUB_LOG")"; fi
 if grep -qE '^docker network create margince-smoke-[a-z0-9]+' "$STUB_LOG"; then ok "the network is margince-smoke-<random>"; else fail "the network is margince-smoke-<random>"; fi
-for img in pgvector/pgvector:pg16 redis:7 acme/api:v1.0.0 acme/worker:v1.0.0 acme/web:v1.0.0; do
+for img in "pgvector/pgvector:pg16@sha256:[0-9a-f]{64}" "redis:7\.2@sha256:[0-9a-f]{64}" acme/api:v1.0.0 acme/worker:v1.0.0 acme/web:v1.0.0; do
   if grep -E "^docker run .* $img( |$)" "$STUB_LOG" >/dev/null; then ok "starts $img"; else fail "starts $img"; fi
 done
 if grep -qE '^docker exec -i .* psql ' "$STUB_LOG"; then ok "bootstraps the database with psql"; else fail "bootstraps the database with psql"; fi

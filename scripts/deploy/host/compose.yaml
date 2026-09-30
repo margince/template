@@ -73,6 +73,11 @@
 # Order (core/docs/deployment.md, "Order of operations"): postgres and redis
 # healthy, and blobs-init completed, then api, then worker and web once the
 # api answers /readyz.
+#
+# Images. postgres and redis use exactly the image references (tag and
+# digest) that core pins in core/docker-compose.dev.yml; render.test.sh fails
+# when they differ. After `make update-core`, copy core's references here.
+# caddy is pinned to one 2.x release by its multi-arch index digest.
 
 # The project name. The caller also passes -p margince-<name>; this line keeps
 # the same project, and so the same volumes, if it does not.
@@ -176,7 +181,7 @@ services:
   # <<< default file store
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
     profiles: [local-data]
     restart: unless-stopped
     logging: *logging
@@ -195,7 +200,7 @@ services:
       start_period: 60s
 
   redis:
-    image: redis:7
+    image: redis:7.2@sha256:6461ca4ac0c5c9d81d53685c3bf76aa81f464a9de6cf3a97b80a1da8d1bb1de4
     profiles: [local-data]
     restart: unless-stopped
     logging: *logging
@@ -209,7 +214,7 @@ services:
       retries: 30
 
   caddy:
-    image: caddy:2
+    image: caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
     restart: unless-stopped
     logging: *logging
     ports:

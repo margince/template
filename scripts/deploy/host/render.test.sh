@@ -13,6 +13,10 @@
 # `docker compose config`, which reads files only: no daemon call, no network.
 # Without Docker those cases print a notice and are skipped.
 #
+# compose.yaml pins postgres, redis and caddy by tag and digest. When core/ is
+# checked out, the postgres and redis images must equal core's in
+# core/docker-compose.dev.yml; without core/ that comparison is skipped.
+#
 # Usage: bash scripts/deploy/host/render.test.sh
 set -euo pipefail
 
@@ -73,6 +77,17 @@ INST_ADMIN='GeneratedAdminPassw0rd24'
 printf 'MARGINCE_KEYVAULT_ROOT_KEY=%s\nMARGINCE_CONNECTOR_STATE_KEY=%s\nMARGINCE_WEBHOOK_KEY=%s\nMARGINCE_ADMIN_PASSWORD=%s\n' \
   "$INST_VAULT" "$INST_STATE" "$INST_WEBHOOK" "$INST_ADMIN" > "$SRV/shared/instance.env"
 chmod 600 "$SRV/shared/instance.env"
+
+# service_image <compose-file> <service> — the image: value of one top-level
+# service, with no variable expansion.
+service_image() {
+  awk -v svc="  $2:" '
+    /^[^ #]/ { in_svcs = ($0 == "services:"); cur = 0; next }
+    in_svcs && /^  [^ #]/ { cur = ($0 == svc); next }
+    cur && /^    image:/ { sub(/^    image:[ ]*/, ""); print; exit }
+  ' "$1"
+}
+CADDY_IMAGE="$(service_image "$SCRIPT_DIR/deploy/host/compose.yaml" caddy)"
 
 # rendered <release-dir> — the render.sh output directory for a release.
 rendered() { printf '%s/r/%s' "$TMP" "$(basename "$1")"; }
@@ -451,20 +466,20 @@ if [ "$rc" = 1 ]; then ok "db-init.sh fails without the DSNs"; else fail "db-ini
 
 # route_check — run the Caddyfile on a private Docker network (no internet)
 # with two stand-in upstreams named api and web, both `caddy respond` from
-# the local caddy:2 image, and check which one answers each path.
+# the local $CADDY_IMAGE image (compose.yaml's caddy), and check which one answers each path.
 route_check() {
   local net="render-test-$$-$RANDOM" c path want got
   local started=""
   docker network create --internal "$net" >/dev/null || { fail "create a test network"; return; }
   for c in api web; do
-    docker run -d --rm --name "$net-$c" --network "$net" --network-alias "$c" caddy:2 \
+    docker run -d --rm --name "$net-$c" --network "$net" --network-alias "$c" "$CADDY_IMAGE" \
       caddy respond --listen :8080 --body "$c" >/dev/null && started="$started $net-$c"
   done
   docker run -d --rm --name "$net-front" --network "$net" --network-alias front -e HOST_DOMAIN=http://front \
-    -v "$SRV/shared/caddy:/etc/caddy:ro" caddy:2 >/dev/null && started="$started $net-front"
+    -v "$SRV/shared/caddy:/etc/caddy:ro" "$CADDY_IMAGE" >/dev/null && started="$started $net-front"
   # route <path> — the body that answers <path>, or the status for a 404.
   route() {
-    docker run --rm --network "$net" caddy:2 sh -c \
+    docker run --rm --network "$net" "$CADDY_IMAGE" sh -c \
       'out="$(wget -q -O - "http://front$1" 2>&1)" && printf "%s" "$out" || { case "$out" in *404*) printf 404 ;; *) printf "error: %s" "$out" ;; esac; }' _ "$1"
   }
   for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(route /v1/x)" = api ] && break; sleep 1; done
@@ -620,19 +635,44 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     fail "an external release's app uses the external MARGINCE_DSN"
   fi
 
-  if docker image inspect caddy:2 >/dev/null 2>&1; then
+  if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
     if docker run --rm --network none -e HOST_DOMAIN=crm.example.test -v "$SRV/shared/caddy:/etc/caddy:ro" \
-        caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$TMP/out" 2>&1; then
+        "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$TMP/out" 2>&1; then
       ok "caddy validate accepts the Caddyfile"
     else
       fail "caddy validate accepts the Caddyfile: $(tail -5 "$TMP/out")"
     fi
     route_check
   else
-    echo "notice: caddy:2 is not in the local image store; the Caddyfile validation and routing checks are skipped"
+    echo "notice: $CADDY_IMAGE is not in the local image store; the Caddyfile validation and routing checks are skipped"
   fi
 else
   echo "notice: docker compose is not available; the compose file checks are skipped"
+fi
+
+# --- the image pins ---
+# postgres and redis use the image references core pins in its
+# docker-compose.dev.yml, exactly (tag and digest); caddy has a tag and a digest.
+HC="$SCRIPT_DIR/deploy/host/compose.yaml"
+for svc in postgres redis caddy; do
+  if [[ "$(service_image "$HC" "$svc")" =~ ^[^@\$]+:[^@]+@sha256:[0-9a-f]{64}$ ]]; then
+    ok "compose.yaml pins $svc by tag and digest"
+  else
+    fail "compose.yaml pins $svc by tag and digest: $(service_image "$HC" "$svc")"
+  fi
+done
+CORE_DC="$SCRIPT_DIR/../core/docker-compose.dev.yml"
+if [ -f "$CORE_DC" ]; then
+  for svc in postgres redis; do
+    want="$(service_image "$CORE_DC" "$svc")" got="$(service_image "$HC" "$svc")"
+    if [ -n "$want" ] && [ "$got" = "$want" ]; then
+      ok "compose.yaml's $svc image is core's ($want)"
+    else
+      fail "compose.yaml's $svc image is core's: compose.yaml has '$got', core/docker-compose.dev.yml has '$want'"
+    fi
+  done
+else
+  echo "notice: core/docker-compose.dev.yml is not checked out; the comparison with core's image pins is skipped"
 fi
 
 # --- the Caddyfile's routes ---

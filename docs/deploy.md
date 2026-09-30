@@ -204,6 +204,26 @@ The `host` adapter deploys the three images to one Linux server over SSH with
 Docker Compose, behind Caddy with an automatic HTTPS certificate. By default
 PostgreSQL and Redis run as containers on the same server.
 
+`scripts/deploy/host/compose.yaml` pins every image that is not an instance
+image by tag and digest:
+
+| Service | Image | Source of the pin |
+|---|---|---|
+| `postgres` | `pgvector/pgvector:pg16@sha256:<digest>` | The `postgres` image in `core/docker-compose.dev.yml`, exactly. |
+| `redis` | `redis:7.2@sha256:<digest>` | The `redis` image in `core/docker-compose.dev.yml`, exactly. |
+| `caddy` | `caddy:2.11.4@sha256:<digest>` | One Caddy 2 release, by its multi-arch index digest. |
+
+`scripts/deploy/host/render.test.sh` fails when the `postgres` or `redis`
+image differs from the one in `core/docker-compose.dev.yml`. Without a
+checked-out `core/`, it skips that comparison. To bump the images:
+
+1. Move the core pin with `make update-core REF=<tag>`.
+2. Copy the `postgres` and `redis` image references from
+   `core/docker-compose.dev.yml` to `scripts/deploy/host/compose.yaml`.
+3. To bump Caddy, set `caddy:<version>@sha256:<digest>`, where `<digest>` is
+   the `Docker-Content-Digest` of the image index for `caddy:<version>`.
+4. Run `make test-scripts`.
+
 ### 5.1 Server requirements
 
 | Requirement | Detail |

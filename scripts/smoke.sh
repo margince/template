@@ -5,8 +5,9 @@
 # VERSION=<version>`). The smoke test runs them the way core's deployment guide
 # (core/docs/deployment.md) describes, in its order of operations:
 #
-#   1. A private network margince-smoke-<random>, PostgreSQL (pgvector/pgvector:pg16)
-#      and Redis (redis:7) on it.
+#   1. A private network margince-smoke-<random>, PostgreSQL and Redis on it,
+#      from the images the host adapter pins (scripts/deploy/host/compose.yaml,
+#      the same digests as core's docker-compose.dev.yml).
 #   2. The database bootstrap, core/scripts/deploy/db-bootstrap.sql, run once as
 #      the superuser: the owner role, the app role, the database, the extensions.
 #   3. api (its entrypoint migrates as the owner role, then serves as the app
@@ -31,6 +32,16 @@
 #   REGISTRY       registry prefix of the image names (see image_repo in lib.sh)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+# The postgres and redis images of the host adapter's compose file: one pin,
+# checked against core by scripts/deploy/host/render.test.sh.
+compose_image() {
+  awk -v svc="  $1:" '$0 == svc { f = 1; next } f && $1 == "image:" { print $2; exit }' \
+    "$(dirname "${BASH_SOURCE[0]}")/deploy/host/compose.yaml"
+}
+PG_IMAGE="$(compose_image postgres)"
+REDIS_IMAGE="$(compose_image redis)"
+[ -n "$PG_IMAGE" ] && [ -n "$REDIS_IMAGE" ] || { echo "smoke: cannot read the postgres/redis images from scripts/deploy/host/compose.yaml" >&2; exit 1; }
 
 VERSION="${1:-}"
 is_release_version "$VERSION" \
@@ -181,8 +192,8 @@ printf 'smoke: %s/{api,worker,web}:%s on network %s\n' "$repo" "$VERSION" "$NET"
 docker network create "$NET" >/dev/null
 NET_CREATED=1
 
-start "$PG" 0 -e POSTGRES_PASSWORD pgvector/pgvector:pg16
-start "$REDIS" 0 redis:7
+start "$PG" 0 -e POSTGRES_PASSWORD "$PG_IMAGE"
+start "$REDIS" 0 "$REDIS_IMAGE"
 
 # Over TCP: the image's init phase serves on the socket only, then restarts.
 wait_for "PostgreSQL" "$PG" docker exec "$PG" pg_isready -q -h 127.0.0.1 -U postgres
