@@ -445,6 +445,29 @@ if [ -e "$RELEASE_WF" ]; then
     else
       fail "no step under if: vars.REGISTRY == '' writes 'images were not pushed: REGISTRY is not set' to image-list/images.txt"
     fi
+
+    # The all-in-one image (docs/superpowers/specs/2026-09-30-all-in-one-image-design.md,
+    # Section 11): built and smoke-tested after the role images' smoke test,
+    # pushed only in the registry step, and its install scripts uploaded.
+    aio_line="$(printf '%s\n' "$images_job" | grep -nE '^[[:space:]]*run:.*make aio VERSION' | head -1 | cut -d: -f1 || true)"
+    aio_smoke_line="$(printf '%s\n' "$images_job" | grep -nE '^[[:space:]]*run:.*make aio-smoke' | head -1 | cut -d: -f1 || true)"
+    if [ -n "$smk" ] && [ -n "$aio_line" ] && [ -n "$aio_smoke_line" ] && [ "$smk" -lt "$aio_line" ] && [ "$aio_line" -lt "$aio_smoke_line" ]; then
+      ok "images runs make aio after make smoke, then make aio-smoke"
+    else
+      fail "images does not run make aio after make smoke and then make aio-smoke (smoke ${smk:-none}, aio ${aio_line:-none}, aio-smoke ${aio_smoke_line:-none})"
+    fi
+    if printf '%s\n' "$push_step" | grep -qE 'make aio VERSION="\$VERSION" PUSH=1' \
+       && printf '%s\n' "$push_step" | grep -qF '/all-in-one:${VERSION}@${digest}'; then
+      ok "the push step pushes the all-in-one image and lists it by digest"
+    else
+      fail "the push step does not run make aio ... PUSH=1 and list <repo>/all-in-one:<v>@<digest>"
+    fi
+    if printf '%s\n' "$images_job" | grep -qE '^[[:space:]]*run:.*make aio-scripts' \
+       && printf '%s\n' "$images_job" | grep -qF 'name: margince-aio-scripts-${{ needs.version.outputs.version }}'; then
+      ok "images writes the install scripts and uploads them as margince-aio-scripts-<version>"
+    else
+      fail "images does not run make aio-scripts and upload margince-aio-scripts-\${{ needs.version.outputs.version }}"
+    fi
   fi
 
   publish_job="$(block_of publish "$RELEASE_WF")"
@@ -477,6 +500,12 @@ if [ -e "$RELEASE_WF" ]; then
     ok "publish builds the notes from image-list/images.txt and fails with ::error:: when it is missing or empty"
   else
     fail "publish does not refuse a missing or empty image-list/images.txt with ::error:: and build the notes from it"
+  fi
+  if printf '%s\n' "$publish_job" | grep -qF 'name: margince-aio-scripts-${{ needs.version.outputs.version }}' \
+     && [ "$(printf '%s\n' "$publish_job" | grep -cF 'dist/*.zip dist/install.sh dist/install.ps1')" -eq 2 ]; then
+    ok "publish attaches install.sh and install.ps1 to the release"
+  else
+    fail "publish does not download margince-aio-scripts-<version> and attach dist/install.sh and dist/install.ps1 on both paths"
   fi
   # --prerelease is added in exactly one place, behind the version job's flag.
   pre_lines="$(grep -c -- '--prerelease' "$RELEASE_WF" || true)"
