@@ -229,5 +229,13 @@ check "aio-down runs install.sh down with the container and volume" \
 if aio up >/dev/null 2>&1; then fail "aio-up without VERSION is refused"; else ok "aio-up without VERSION is refused"; fi
 rm -f "$STUB_BIN/sh"
 
+reset_log
+aio scripts v1.0.0 >/dev/null 2>&1 || true
+out="$INST/dist/aio/v1.0.0"
+check "aio-scripts writes install.sh and install.ps1" bash -c '[ -x "$1/install.sh" ] && [ -f "$1/install.ps1" ]' _ "$out"
+check "aio-scripts fills in the image, container and volume" bash -c 'for f in install.sh install.ps1; do grep -q "acme/all-in-one:v1.0.0" "$1/$f" && grep -q "margince-acme-data" "$1/$f" || exit 1; done' _ "$out"
+check "aio-scripts leaves no placeholder" bash -c '! grep -nE "@(IMAGE|CONTAINER|VOLUME)@" "$1"/install.*' _ "$out"
+if aio scripts v1 >/dev/null 2>&1; then fail "aio-scripts refuses a non-release version"; else ok "aio-scripts refuses a non-release version"; fi
+
 if [ "$FAILURES" -gt 0 ]; then printf '\naio.test.sh: %s failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\naio.test.sh: all passed\n'

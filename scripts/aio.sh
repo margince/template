@@ -208,9 +208,26 @@ cmd_up() {
   install_sh up --image "$(aio_image "$version")"
 }
 
+# ── install scripts ──
+
+cmd_scripts() {
+  local version="${1:-}" out f
+  require_version "$version"
+  out="$ROOT/dist/aio/$version"
+  mkdir -p "$out"
+  for f in install.sh install.ps1; do
+    sed -e "s|@IMAGE@|$(aio_image "$version")|g" -e "s|@CONTAINER@|$container|g" -e "s|@VOLUME@|$volume|g" \
+      "$AIO_SRC/$f" > "$out/$f"
+    if grep -qE '@(IMAGE|CONTAINER|VOLUME)@' "$out/$f"; then die "aio-scripts: a placeholder is left in $out/$f"; fi
+  done
+  chmod 755 "$out/install.sh"
+  say "wrote $out/install.sh and $out/install.ps1 for $(aio_image "$version")"
+}
+
 case "${1:-}" in
   build) shift; cmd_build "$@" ;;
   smoke) shift; cmd_smoke "$@" ;;
+  scripts) shift; cmd_scripts "$@" ;;
   up)      shift; cmd_up "$@" ;;
   down|reset|logins|logs) install_sh "$1" --image "$(aio_image v0.0.0)" ;;
   *) die "usage: bash scripts/aio.sh build|smoke|scripts|up <version> | down|reset|logins|logs" ;;

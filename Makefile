@@ -467,6 +467,8 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/trial.test.sh
 	@bash scripts/aio.test.sh
 	@bash scripts/aio-install.test.sh
+	@if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -NonInteractive -File scripts/aio-install.test.ps1; \
+	  else echo "aio-install.test.ps1: skipped (pwsh is not installed; CI runs it)"; fi
 	@bash scripts/deploy/host/render.test.sh
 	@bash scripts/deploy/host.test.sh
 	@bash scripts/deploy/host/bootstrap.test.sh
@@ -780,6 +782,9 @@ aio-logins: ## The address and the accounts of the running all-in-one container
 
 aio-logs: ## The last 200 log lines of the all-in-one container
 	@bash scripts/aio.sh logs
+
+aio-scripts: ## Write dist/aio/<v>/install.sh and install.ps1 for testers (VERSION=)
+	@bash scripts/aio.sh scripts "$(VERSION)"
 
 # ──────────────────────── using the desktop folder ────────────────────
 #
