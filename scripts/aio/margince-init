@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# margince-init — start, order and stop every process of the all-in-one image
+# (docs/superpowers/specs/2026-09-30-all-in-one-image-design.md, Section 6).
+#
+# Runs as root under tini. Order: PostgreSQL, Redis, api (which migrates),
+# worker, nginx, then the one-time demo seed in the background. When one of
+# the processes exits, the others are stopped in the reverse order and this
+# exits 1, so Docker's restart policy starts the container again. SIGTERM
+# (docker stop) stops them in the same order and exits 0.
+#
+# The container takes no configuration. Fixed settings are exported below;
+# generated values are in /data/secrets.env and reach only the api and the
+# worker, through their environment.
+set -euo pipefail
+
+DATA=/data
+SECRETS="$DATA/secrets.env"
+PGDATA="$DATA/postgres"
+SOCKET_DIR=/run/postgresql
+API_READY_TIMEOUT=300
+
+export MARGINCE_ENV=test
+export MARGINCE_CONFIG=/etc/margince/margince.yaml
+export MARGINCE_REDIS=127.0.0.1:6379
+export MARGINCE_BLOBSTORE_PATH="$DATA/blobs"
+OWNER_DSN="postgres://margince_owner@/margince?host=$SOCKET_DIR"
+APP_DSN="postgres://margince_app@/margince?host=$SOCKET_DIR"
+
+say() { printf 'margince: %s\n' "$*"; }
+
+as_user() { local user="$1"; shift; setpriv --reuid="$user" --regid="$user" --init-groups "$@"; }
+
+rand_b64_32() { head -c 32 /dev/urandom | base64 | tr -d '\n'; }
+rand_hex_32() { od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }
+# `|| true`: head closes the pipe early, and tr's SIGPIPE must not fail the
+# pipeline under pipefail.
+rand_alnum() { { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom || true; } | head -c "$1"; }
+
+# ── processes ──
+PIDS=()
+NAMES=()
+SEED_PID=""
+STOPPING=0
+trap 'STOPPING=1' TERM INT
+
+start() {
+  local name="$1"; shift
+  "$@" &
+  PIDS+=("$!")
+  NAMES+=("$name")
+}
+
+stop_all() {
+  local i sig
+  if [ -n "$SEED_PID" ]; then
+    kill -TERM -- "-$SEED_PID" 2>/dev/null || true
+    wait "$SEED_PID" 2>/dev/null || true
+  fi
+  for ((i = ${#PIDS[@]} - 1; i >= 0; i--)); do
+    # PostgreSQL's fast shutdown is SIGINT; SIGTERM would wait for clients.
+    sig=TERM
+    [ "${NAMES[i]}" = postgres ] && sig=INT
+    kill "-$sig" "${PIDS[i]}" 2>/dev/null || true
+    wait "${PIDS[i]}" 2>/dev/null || true
+  done
+}
+
+stop_if_asked() {
+  if [ "$STOPPING" = 1 ]; then
+    say "stopping"
+    stop_all
+    exit 0
+  fi
+}
+
+give_up() {
+  say "$*"
+  stop_all
+  exit 1
+}
+
+alive() { kill -0 "$1" 2>/dev/null; }
+
+# wait_for <seconds> <pid> <what> <command...> — until the command succeeds.
+wait_for() {
+  local seconds="$1" pid="$2" what="$3" i
+  shift 3
+  for ((i = 0; i < seconds; i++)); do
+    stop_if_asked
+    alive "$pid" || give_up "$what exited while starting"
+    "$@" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  give_up "$what did not start within $seconds seconds"
+}
+
+# ── directories ──
+mkdir -p "$DATA/blobs" "$DATA/redis"
+chown app:app "$DATA/blobs"
+chmod 700 "$DATA/blobs"
+chown redis:redis "$DATA/redis"
+install -d -o postgres -g postgres -m 2775 "$SOCKET_DIR"
+
+# ── generated values, once ──
+if [ ! -f "$SECRETS" ]; then
+  say "first start: generating this installation's keys and admin password"
+  tmp="$SECRETS.tmp"
+  ( umask 077
+    {
+      printf 'MARGINCE_KEYVAULT_ROOT_KEY=%s\n' "$(rand_b64_32)"
+      printf 'MARGINCE_CONNECTOR_STATE_KEY=%s\n' "$(rand_hex_32)"
+      printf 'MARGINCE_WEBHOOK_KEY=%s\n' "$(rand_b64_32)"
+      printf 'MARGINCE_ADMIN_PASSWORD=%s\n' "$(rand_alnum 24)"
+    } > "$tmp" )
+  mv "$tmp" "$SECRETS"
+fi
+
+# ── PostgreSQL ──
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+  say "first start: creating the database"
+  rm -rf "$PGDATA"
+  install -d -o postgres -g postgres -m 700 "$PGDATA"
+  as_user postgres initdb -D "$PGDATA" --username=postgres --auth-local=trust --auth-host=reject \
+    --encoding=UTF8 --locale=C.UTF-8 >/dev/null
+fi
+start postgres as_user postgres postgres -D "$PGDATA" -c listen_addresses= -c unix_socket_directories="$SOCKET_DIR"
+wait_for 60 "${PIDS[-1]}" PostgreSQL pg_isready -q -h "$SOCKET_DIR"
+
+# Idempotent (IF NOT EXISTS throughout), so it also completes a first start
+# that was interrupted. The role passwords are used once and not stored:
+# local connections use trust authentication and there is no TCP listener.
+MARGINCE_BOOTSTRAP_OWNER_PW="$(rand_alnum 32)" MARGINCE_BOOTSTRAP_APP_PW="$(rand_alnum 32)"
+export MARGINCE_BOOTSTRAP_OWNER_PW MARGINCE_BOOTSTRAP_APP_PW
+{
+  printf '\\getenv owner_pw MARGINCE_BOOTSTRAP_OWNER_PW\n\\getenv app_pw MARGINCE_BOOTSTRAP_APP_PW\n'
+  cat /usr/share/margince/db-bootstrap.sql
+} | as_user postgres psql -q -v ON_ERROR_STOP=1 -h "$SOCKET_DIR" -U postgres -d postgres >/dev/null \
+  || give_up "the database bootstrap failed"
+unset MARGINCE_BOOTSTRAP_OWNER_PW MARGINCE_BOOTSTRAP_APP_PW
+
+# ── Redis ──
+start redis as_user redis redis-server --bind 127.0.0.1 --port 6379 --dir "$DATA/redis" \
+  --appendonly yes --save '' --protected-mode yes --daemonize no
+wait_for 30 "${PIDS[-1]}" Redis redis-cli -h 127.0.0.1 -p 6379 ping
+
+# ── api and worker ──
+run_api() (
+  set -a
+  . "$SECRETS"
+  set +a
+  export MARGINCE_OWNER_DSN="$OWNER_DSN" MARGINCE_DSN="$APP_DSN"
+  cd /app
+  exec setpriv --reuid=app --regid=app --init-groups /usr/local/bin/margince-api-entrypoint
+)
+
+run_worker() (
+  set -a
+  . "$SECRETS"
+  set +a
+  unset MARGINCE_ADMIN_PASSWORD
+  export MARGINCE_DSN="$APP_DSN"
+  cd /app
+  exec setpriv --reuid=app --regid=app --init-groups /usr/local/bin/margince-worker-entrypoint
+)
+
+start api run_api
+say "starting the api (the first start migrates the database)"
+wait_for "$API_READY_TIMEOUT" "${PIDS[-1]}" "the api" curl -fsS -o /dev/null --max-time 2 http://127.0.0.1:8080/readyz
+start worker run_worker
+start nginx nginx -g 'daemon off;'
+say "ready"
+
+# ── demo data, once ──
+if [ -x /usr/local/bin/seed-demo ] && [ -d /opt/margince/demo ] && [ ! -f "$DATA/.seeded" ]; then
+  setsid /usr/local/bin/margince-seed &
+  SEED_PID=$!
+fi
+
+# ── supervise ──
+while :; do
+  set +e
+  wait -n "${PIDS[@]}"
+  set -e
+  stop_if_asked
+  for ((i = 0; i < ${#PIDS[@]}; i++)); do
+    alive "${PIDS[i]}" || give_up "${NAMES[i]} exited; stopping the container so Docker restarts it"
+  done
+done

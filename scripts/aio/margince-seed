@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# margince-seed — load the demo dataset once (design 2026-09-30, Section 7.3).
+#
+# Started by margince-init in the background, as root. Signs in as the
+# bootstrap admin with the generated password, or with the seeder's password
+# when an earlier, interrupted run already replaced it. Creates /data/.seeded
+# on success; on failure the next start tries again.
+set -euo pipefail
+
+API=http://127.0.0.1:8080
+EMAIL=admin@localhost
+SEEDED_PASSWORD=demo-password-123
+
+say() { printf 'margince: %s\n' "$*"; }
+
+# The password travels on standard input, never in curl's arguments.
+login_works() {
+  printf '{"email":"%s","password":"%s"}' "$EMAIL" "$1" \
+    | curl -fsS -o /dev/null --max-time 10 -X POST -H 'Content-Type: application/json' --data-binary @- \
+        "$API/v1/auth/login" 2>/dev/null
+}
+
+generated="$(sed -n 's/^MARGINCE_ADMIN_PASSWORD=//p' /data/secrets.env)"
+if login_works "$generated"; then
+  password="$generated"
+elif login_works "$SEEDED_PASSWORD"; then
+  password="$SEEDED_PASSWORD"
+else
+  say "loading the demo data failed: neither the generated nor the seeded password signs in as $EMAIL"
+  exit 1
+fi
+
+say "loading the demo data (a few minutes)"
+if MARGINCE_SEED_PASSWORD="$password" \
+   MARGINCE_SEED_DSN="postgres://margince_owner@/margince?host=/run/postgresql" \
+   MARGINCE_BLOBSTORE_PATH=/data/blobs \
+   setpriv --reuid=app --regid=app --init-groups \
+     /usr/local/bin/seed-demo -dataset /opt/margince/demo -api "$API" -email "$EMAIL"; then
+  touch /data/.seeded
+  say "demo data loaded"
+else
+  say "loading the demo data failed; the next start tries again"
+  exit 1
+fi

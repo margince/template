@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# margince-logins — the accounts that sign in to this installation (design
+# 2026-09-30, Section 8.3). Run with `docker exec <container> margince-logins`.
+set -euo pipefail
+
+EMAIL=admin@localhost
+SEEDED_PASSWORD=demo-password-123
+SEAT_PASSWORD=1234
+
+if [ -f /data/.seeded ]; then
+  printf '  Sign in as\n    %-32s password %s\n' "$EMAIL" "$SEEDED_PASSWORD"
+  seats="$(psql "postgres://margince_owner@/margince?host=/run/postgresql" -Atc \
+    "select email || '|' || display_name from app_user
+      where password_hash is not null and not is_agent and archived_at is null
+        and lower(email) <> lower('$EMAIL')
+      order by created_at" 2>/dev/null || true)"
+  if [ -n "$seats" ]; then
+    printf '\n  Demo colleagues (password %s)\n' "$SEAT_PASSWORD"
+    printf '%s\n' "$seats" | while IFS='|' read -r email name; do
+      printf '    %-32s %s\n' "$email" "$name"
+    done
+  fi
+  exit 0
+fi
+
+password="$(sed -n 's/^MARGINCE_ADMIN_PASSWORD=//p' /data/secrets.env 2>/dev/null || true)"
+if [ -z "$password" ]; then
+  printf '  Margince is still starting. Run this again in a minute.\n'
+  exit 0
+fi
+printf '  Sign in as\n    %-32s password %s\n\n' "$EMAIL" "$password"
+printf '  The first sign-in asks you to choose a new password.\n'
+printf '  After that, sign in with the password you chose.\n'
+if [ -x /usr/local/bin/seed-demo ]; then
+  printf '\n  The demo data is loading. When it is loaded, sign in with password %s.\n' "$SEEDED_PASSWORD"
+fi

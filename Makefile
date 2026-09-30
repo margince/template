@@ -464,6 +464,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/package.test.sh
 	@bash scripts/smoke.test.sh
 	@bash scripts/trial.test.sh
+	@bash scripts/aio.test.sh
 	@bash scripts/deploy/host/render.test.sh
 	@bash scripts/deploy/host.test.sh
 	@bash scripts/deploy/host/bootstrap.test.sh
