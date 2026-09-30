@@ -50,6 +50,13 @@ case "$1" in
     esac
     exit 0 ;;
   run)
+    if [ -f "$STATE/conflict-on-run" ]; then
+      # Another run created the container in the meantime, on 8080.
+      rm -f "$STATE/conflict-on-run"
+      echo "sha256:new" > "$STATE/container"; echo 8080 > "$STATE/port"; touch "$STATE/running"
+      echo 'docker: Error response from daemon: Conflict. The container name "/margince-acme" is already in use by container "abc". You have to remove (or rename) that container to be able to reuse that name.' >&2
+      exit 125
+    fi
     port="$(printf '%s\n' "$*" | sed -n 's/.*-p 127\.0\.0\.1:\([0-9]*\):80.*/\1/p')"
     echo "sha256:new" > "$STATE/container"
     echo "$port" > "$STATE/port"
@@ -140,6 +147,13 @@ if run_install up >"$TMP/out" 2>&1; then fail "all ports busy fails"; else
 reset; echo "sha256:new" > "$STATE/container"; echo 8080 > "$STATE/port"; touch "$STATE/busy-8080"
 run_install up >/dev/null 2>&1 || true
 check "a stopped container whose port is taken is recreated on a free port" grep -q -- '-p 127.0.0.1:8081:80' "$STUB_LOG"
+
+# 6b. Another run created the container between the check and docker run:
+# this run uses that container and removes nothing.
+reset; touch "$STATE/conflict-on-run"
+run_install up >"$TMP/out" 2>&1 || true
+check "a name conflict with a concurrent run removes nothing" bash -c '! grep -q "^docker rm" "$1"' _ "$STUB_LOG"
+check "a name conflict with a concurrent run uses that container's port" grep -q 'http://localhost:8080' "$TMP/out"
 
 # 7. macOS without Docker: Docker Desktop for the Mac's architecture.
 reset; touch "$STATE/docker-missing"

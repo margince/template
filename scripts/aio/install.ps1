@@ -86,11 +86,15 @@ function Confirm-Image {
     if ($LASTEXITCODE -ne 0) { Fail "Could not download $($Script:Image). Check the internet connection, then run this command again." }
 }
 
-function Test-PortError([string]$Text) { return ($Text -match 'already in use|already allocated|bind') }
+function Test-PortError([string]$Text) { return ($Text -match 'port is already allocated|address already in use|ports are not available') }
+function Test-NameConflict([string]$Text) { return ($Text -match 'container name .* is already in use') }
 
+# A name conflict means another run created the container meanwhile: use it,
+# and never remove a container this run did not create.
 function Start-On([string]$Port) {
     $err = docker run -d --name $Script:Container --restart unless-stopped -p "127.0.0.1:${Port}:80" -v "$($Script:Volume):/data" $Script:Image 2>&1 | Out-String
     if ($LASTEXITCODE -eq 0) { $Script:Port = $Port; return $true }
+    if (Test-NameConflict $err) { $Script:Port = Get-ContainerPort; return $true }
     if (-not (Test-PortError $err)) { Say $err; Fail 'Docker could not start Margince (see the message above).' }
     docker rm -f -v $Script:Container *> $null
     return $false

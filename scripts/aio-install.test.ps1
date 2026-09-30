@@ -12,7 +12,7 @@ $env:MARGINCE_AIO_NO_MAIN = '1'
 
 function Reset-Stub {
     $script:Log = [System.Collections.Generic.List[string]]::new()
-    $script:S = @{ DockerMissing = $false; DaemonDown = $false; Container = $null; Running = $false; Port = $null; Busy = @(); Health = 'healthy'; Answer = 'y'; WslOk = $true }
+    $script:S = @{ DockerMissing = $false; DaemonDown = $false; Container = $null; Running = $false; Port = $null; Busy = @(); Health = 'healthy'; Answer = 'y'; WslOk = $true; ConflictOnRun = $false }
 }
 function Get-Command { param([string]$Name, $ErrorAction)
     if ($Name -eq 'docker' -and $script:S.DockerMissing) { return $null }
@@ -32,6 +32,12 @@ function docker {
             if ($a -like '*Health*') { return $script:S.Health }
             return }
         'run' {
+            if ($script:S.ConflictOnRun) {
+                $script:S.ConflictOnRun = $false
+                $script:S.Container = 'sha256:new'; $script:S.Port = '8080'; $script:S.Running = $true
+                $global:LASTEXITCODE = 125
+                return 'docker: Error response from daemon: Conflict. The container name "/margince-acme" is already in use by container "abc".'
+            }
             $p = [regex]::Match($a, '127\.0\.0\.1:(\d+):80').Groups[1].Value
             $script:S.Container = 'sha256:new'; $script:S.Port = $p
             if ($script:S.Busy -contains $p) { $global:LASTEXITCODE = 125; return 'Error: address already in use' }
@@ -61,6 +67,11 @@ Check 'up opens the browser' ($script:Log -contains 'start http://localhost:8080
 Reset-Stub; $script:S.Busy = @('8080')
 Invoke-Aio (@('up') + $common) *>&1 | Out-Null
 Check 'a busy port is skipped' (@($script:Log | Where-Object { $_ -like '*127.0.0.1:8081:80*' }).Count -eq 1)
+
+Reset-Stub; $script:S.ConflictOnRun = $true
+$out = Invoke-Aio (@('up') + $common) *>&1 | Out-String
+Check 'a name conflict with a concurrent run removes nothing' (@($script:Log | Where-Object { $_ -like 'docker rm*' }).Count -eq 0)
+Check 'a name conflict with a concurrent run uses that container''s port' ($out -match 'http://localhost:8080')
 
 Reset-Stub; $script:S.Container = 'sha256:old'; $script:S.Port = '8085'
 Invoke-Aio (@('up') + $common) *>&1 | Out-Null

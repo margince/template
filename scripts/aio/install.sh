@@ -218,13 +218,20 @@ ensure_image() {
   $DOCKER pull "$IMAGE" || fail "Could not download $IMAGE. Check the internet connection, then run this command again."
 }
 
-port_error() { grep -qiE 'already in use|already allocated|bind' "$ERR_FILE"; }
+port_error() { grep -qiE 'port is already allocated|address already in use|ports are not available' "$ERR_FILE"; }
+name_conflict() { grep -qiE 'container name .* is already in use' "$ERR_FILE"; }
 
 # run_on <port> — create and start the container; 1 when the port is taken.
+# A name conflict means another run created the container meanwhile: use it,
+# and never remove a container this run did not create.
 run_on() {
   if $DOCKER run -d --name "$CONTAINER" --restart unless-stopped -p "127.0.0.1:$1:80" -v "$VOLUME:/data" "$IMAGE" \
       >/dev/null 2>"$ERR_FILE"; then
     PORT="$1"
+    return 0
+  fi
+  if name_conflict; then
+    PORT="$(container_port)"
     return 0
   fi
   port_error || { cat "$ERR_FILE" >&2; fail "Docker could not start Margince (see the message above)."; }
