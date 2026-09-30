@@ -525,6 +525,15 @@ trusting it), `make host-bootstrap ENV=production` and
 release built and pushed with `make release` (Section 9.2; see
 [docs/release.md](../../release.md)).
 
+### 9.9 All-in-One Image
+
+A non-technical tester runs the instance's Margince from one Docker image,
+`<repo>/all-in-one:<version>`, started by one pasted command that installs
+Docker when it is missing. The image runs in test mode and takes no
+configuration. `make aio`, `make aio-up`, and the other `make aio-*` targets
+wrap the same scripts. The design is
+[2026-09-30-all-in-one-image-design.md](2026-09-30-all-in-one-image-design.md).
+
 ## 10. Versioning
 
 | Version | Format | Used for |
@@ -578,8 +587,9 @@ versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`.
 | T12 | Guides: release, deploy (hook and host), license, trial. | Done |
 | T17 | Default setup (Section 9.7): generated instance keys and admin password, persistent file storage, the license check, `make deploy-init`, `make local-up`/`local-down`/`local-admin-password`, the desktop kit's and `make smoke`'s webhook key. | Done |
 | T18 | Default deployment environment (Section 9.8): `deploy-init` accepts a missing `DOMAIN`/`SSH`/`ADMIN_EMAIL` for the `host` adapter and writes placeholders; the `host` adapter's `check` refuses them; the template ships `deploy/production/` and `instance.yaml` lists it; `make new-instance` regenerates `deploy/production/` per instance. | Done |
+| T19 | All-in-one image (Section 9.9). | In progress |
 
-Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12 → T17 → T18. All complete.
+Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12 → T17 → T18 → T19.
 
 ## 14. Rejected Alternatives
 
