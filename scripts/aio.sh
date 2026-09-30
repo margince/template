@@ -192,7 +192,12 @@ cmd_smoke() {
   say "smoke: $url serves the app, hides /readyz, and admin@localhost signs in"
 
   before="$(docker exec "$SMOKE_C" sha256sum /data/secrets.env)"
-  docker restart "$SMOKE_C" >/dev/null
+  # docker stop sends SIGTERM and kills after 30s; exit 137 means something
+  # did not stop on SIGTERM.
+  docker stop -t 30 "$SMOKE_C" >/dev/null
+  code="$(docker inspect -f '{{.State.ExitCode}}' "$SMOKE_C")"
+  [ "$code" = 0 ] || smoke_fail "the container did not stop cleanly on docker stop (exit $code)"
+  docker start "$SMOKE_C" >/dev/null
   smoke_wait_healthy
   # A random host port (-p 127.0.0.1::80) changes on every start.
   port="$(docker port "$SMOKE_C" 80/tcp | head -n1 | sed 's/.*://')"
@@ -201,7 +206,7 @@ cmd_smoke() {
   [ "$before" = "$after" ] || smoke_fail "the restart replaced /data/secrets.env"
   code="$(smoke_login "$url")"
   [ "$code" = 200 ] || smoke_fail "admin@localhost could not sign in after a restart (HTTP $code)"
-  say "smoke: a restart keeps the data"
+  say "smoke: it stops cleanly, and a restart keeps the data"
   say "smoke: passed"
 }
 

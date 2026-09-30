@@ -30,6 +30,13 @@ say() { printf 'margince: %s\n' "$*"; }
 
 as_user() { local user="$1"; shift; setpriv --reuid="$user" --regid="$user" --init-groups "$@"; }
 
+# exec_as — the form for `start`: the backgrounded subshell becomes the
+# process, so the PID that start records is the one that receives the signal.
+exec_as() {
+  local user="$1"; shift
+  exec setpriv --reuid="$user" --regid="$user" --init-groups "$@"
+}
+
 rand_b64_32() { head -c 32 /dev/urandom | base64 | tr -d '\n'; }
 rand_hex_32() { od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }
 # `|| true`: head closes the pipe early, and tr's SIGPIPE must not fail the
@@ -123,7 +130,7 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
   as_user postgres initdb -D "$PGDATA" --username=postgres --auth-local=trust --auth-host=reject \
     --encoding=UTF8 --locale=C.UTF-8 >/dev/null
 fi
-start postgres as_user postgres postgres -D "$PGDATA" -c listen_addresses= -c unix_socket_directories="$SOCKET_DIR"
+start postgres exec_as postgres postgres -D "$PGDATA" -c listen_addresses= -c unix_socket_directories="$SOCKET_DIR"
 wait_for 60 "${PIDS[-1]}" PostgreSQL pg_isready -q -h "$SOCKET_DIR"
 
 # Idempotent (IF NOT EXISTS throughout), so it also completes a first start
@@ -139,21 +146,23 @@ export MARGINCE_BOOTSTRAP_OWNER_PW MARGINCE_BOOTSTRAP_APP_PW
 unset MARGINCE_BOOTSTRAP_OWNER_PW MARGINCE_BOOTSTRAP_APP_PW
 
 # ── Redis ──
-start redis as_user redis redis-server --bind 127.0.0.1 --port 6379 --dir "$DATA/redis" \
+start redis exec_as redis redis-server --bind 127.0.0.1 --port 6379 --dir "$DATA/redis" \
   --appendonly yes --save '' --protected-mode yes --daemonize no
 wait_for 30 "${PIDS[-1]}" Redis redis-cli -h 127.0.0.1 -p 6379 ping
 
 # ── api and worker ──
-run_api() (
+# Only ever run through `start`, in its backgrounded subshell: the variables
+# they set stay in that subshell, and exec makes it the process itself.
+run_api() {
   set -a
   . "$SECRETS"
   set +a
   export MARGINCE_OWNER_DSN="$OWNER_DSN" MARGINCE_DSN="$APP_DSN"
   cd /app
   exec setpriv --reuid=app --regid=app --init-groups /usr/local/bin/margince-api-entrypoint
-)
+}
 
-run_worker() (
+run_worker() {
   set -a
   . "$SECRETS"
   set +a
@@ -161,7 +170,7 @@ run_worker() (
   export MARGINCE_DSN="$APP_DSN"
   cd /app
   exec setpriv --reuid=app --regid=app --init-groups /usr/local/bin/margince-worker-entrypoint
-)
+}
 
 start api run_api
 say "starting the api (the first start migrates the database)"

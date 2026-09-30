@@ -55,6 +55,11 @@ check "no script puts a password in curl's arguments" bash -c '! grep -nE "curl 
 check "the Dockerfile's entrypoint is tini and margince-init" grep -q 'ENTRYPOINT \["/usr/bin/tini", "--", "/usr/local/bin/margince-init"\]' "$AIO/Dockerfile"
 check "the Dockerfile sets no ENV" bash -c '! grep -qE "^ENV " "$1"' _ "$AIO/Dockerfile"
 check "the health check asks the api for /readyz" grep -q 'http://127.0.0.1:8080/readyz' "$AIO/Dockerfile"
+# A process started in the background must BE the recorded PID: a wrapper
+# subshell would die on SIGTERM and leave the real process running.
+check "init starts every process through exec (no wrapper subshell)" \
+  bash -c 'grep -E "^start [a-z]+ " "$1" | grep -vqE "^start [a-z]+ (exec_as|run_api|run_worker|nginx)( |$)" && exit 1
+           for f in run_api run_worker exec_as; do sed -n "/^$f() {/,/^}/p" "$1" | grep -q "^  exec " || exit 1; done' _ "$init"
 for f in margince-init margince-seed margince-logins; do
   check "$f passes bash -n" bash -n "$AIO/$f"
 done
@@ -173,11 +178,13 @@ case "$1 ${2:-}" in
   "context show") echo stubctx; exit 0 ;;
   # A random host port changes when the container restarts.
   "port "*) if [ -f "$STUB_STATE/restarted" ]; then echo "127.0.0.1:49998"; else echo "127.0.0.1:49999"; fi; exit 0 ;;
-  "restart "*) touch "$STUB_STATE/restarted"; exit 0 ;;
+  "stop "*) exit 0 ;;
+  "start "*) touch "$STUB_STATE/restarted"; exit 0 ;;
   "inspect "*)
     case "$*" in
       *Health*) echo "${STUB_HEALTH:-healthy}" ;;
       *State.Status*) echo running ;;
+      *State.ExitCode*) echo "${STUB_EXIT_CODE:-0}" ;;
     esac
     exit 0 ;;
   "exec "*)
@@ -211,7 +218,7 @@ mkdir -p "$STUB_STATE"
 reset_log; : > "$STUB_STDIN_LOG"; rm -f "$STUB_STATE/restarted"
 if aio smoke v1.0.0 >"$TMP/out" 2>&1; then ok "smoke passes against a healthy image"; else fail "smoke passes against a healthy image"; cat "$TMP/out" >&2; fi
 check "smoke runs the image on a temporary volume, published on 127.0.0.1" bash -c 'grep "^docker run" "$1" | grep -q -- "-p 127.0.0.1::80" && grep "^docker run" "$1" | grep -qE -- "-v margince-aio-smoke-[0-9]+-data:/data acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
-check "smoke restarts the container once" grep -q '^docker restart margince-aio-smoke-' "$STUB_LOG"
+check "smoke stops the container with docker stop and starts it again" bash -c 'grep -qE "^docker stop -t 30 margince-aio-smoke-" "$1" && grep -qE "^docker start margince-aio-smoke-" "$1"' _ "$STUB_LOG"
 check "smoke removes the container and the volume" bash -c 'grep -q "^docker rm -f -v margince-aio-smoke-" "$1" && grep -q "^docker volume rm -f margince-aio-smoke-" "$1"' _ "$STUB_LOG"
 check "smoke never puts the password in an argument" bash -c '! grep -q generated-password "$1"' _ "$STUB_LOG"
 check "smoke sends the password on standard input" grep -q 'generated-password' "$STUB_STDIN_LOG"
@@ -219,6 +226,10 @@ check "smoke sends the password on standard input" grep -q 'generated-password' 
 reset_log; rm -f "$STUB_STATE/restarted"
 if STUB_LOGIN_FAIL=1 aio smoke v1.0.0 >"$TMP/out" 2>&1; then fail "smoke fails when sign-in fails"; else
   check "smoke fails when sign-in fails, prints the log, and still cleans up" bash -c 'grep -q "stub log line" "$1" && grep -q "^docker rm -f -v" "$2"' _ "$TMP/out" "$STUB_LOG"; fi
+
+reset_log; rm -f "$STUB_STATE/restarted"
+if STUB_EXIT_CODE=137 aio smoke v1.0.0 >"$TMP/out" 2>&1; then fail "smoke fails when docker stop has to kill the container"; else
+  check "smoke fails when docker stop has to kill the container" grep -q 'did not stop cleanly' "$TMP/out"; fi
 
 reset_log
 if STUB_MISSING="acme/all-in-one:v1.0.0" aio smoke v1.0.0 >/dev/null 2>"$TMP/err"; then fail "smoke without the image is refused"; else
