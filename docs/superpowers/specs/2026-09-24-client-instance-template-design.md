@@ -371,7 +371,7 @@ one), `HOST_KNOWN_HOSTS` (required; host key checking is never disabled),
 login).
 
 **Template files** in `scripts/deploy/host/`: `compose.yaml`, `Caddyfile`,
-and `db-init.sh`. The compose project is `margince-<name>`; every `docker
+`nginx.conf.template`, and `db-init.sh`. The compose project is `margince-<name>`; every `docker
 compose` invocation runs with `--env-file compose.env`. Services:
 
 - `api`, `web`, `worker` from `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER`, with
@@ -387,16 +387,25 @@ compose` invocation runs with `--env-file compose.env`. Services:
   started when `MARGINCE_DSN` and `MARGINCE_REDIS` are both set, for example
   for RDS and ElastiCache.
 - `caddy` on ports 80 and 443, with automatic HTTPS for `HOST_DOMAIN`. It
-  routes `/v1`, `/oauth`, `/mcp`, the two `/.well-known/oauth-*` metadata
+  passes every request to `nginx`, except `/healthz`, `/readyz`, and
+  `/metrics`, which are not routed.
+- `nginx` (core's web image base, `nginx-unprivileged`, no published port).
+  It routes `/v1`, `/oauth`, `/mcp`, the two `/.well-known/oauth-*` metadata
   paths, `/webhooks/gmail`, and `/webhooks/graph` to `api` — exact paths and
   slash-terminated prefixes, never a bare prefix match — and every other path
-  to `web`. `/healthz`, `/readyz`, and `/metrics` are not routed.
+  to `web`. It limits the credential endpoints (`/v1/auth/login`,
+  `/v1/auth/forgot-password`, `/v1/auth/reset-password`, `/oauth/token`,
+  `/oauth/register`) per client address to `AUTH_RATE_LIMIT_PER_MINUTE`
+  (`host.env`, default 30), because core keys its own per-address limits on
+  the direct peer, which behind a proxy is the proxy. The client address is
+  the `X-Forwarded-For` value Caddy writes.
   `MARGINCE_PUBLIC_BASE_URL` defaults to `https://$HOST_DOMAIN` unless
   `secrets` lists it.
 
 **Server layout:** `$HOST_DIR/releases/<v>/` holds `compose.yaml`,
-`config/margince.yaml`, `.env` (mode 600), and `compose.env` (the
-interpolation variables; no secret). `$HOST_DIR/shared/` holds
+`config/margince.yaml`, `nginx/default.conf.template` (so each deploy
+recreates `nginx` with the release's routes), `.env` (mode 600), and
+`compose.env` (the interpolation variables; no secret). `$HOST_DIR/shared/` holds
 `db-init.sh`, `db-bootstrap.sql`, `caddy/Caddyfile`, and `data.env` (the
 generated database passwords, created once and kept across releases, mode
 600) — mounted, unchanged, by `postgres` and `caddy` from every release, so

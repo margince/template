@@ -213,6 +213,23 @@ services:
       timeout: 5s
       retries: 30
 
+  # Routing and per-client-IP rate limits (nginx.conf.template). The image
+  # is core's web image base, pinned to the same digest as core's Dockerfile.
+  # Its template is part of the release, so a deployment recreates nginx with
+  # the release's routes; caddy retries while it restarts. No published port:
+  # only caddy reaches it.
+  nginx:
+    image: nginxinc/nginx-unprivileged:alpine@sha256:b54ac358b83fc6c965793fd271839b4ea4cdb6e99895bb19618cbc2ca152d972
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:?AUTH_RATE_LIMIT_PER_MINUTE is not set}
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - api
+      - web
+
   caddy:
     image: caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
     restart: unless-stopped
@@ -227,8 +244,7 @@ services:
       - caddydata:/data
       - caddyconfig:/config
     depends_on:
-      - api
-      - web
+      - nginx
 
 volumes:
   pgdata:

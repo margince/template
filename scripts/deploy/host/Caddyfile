@@ -1,21 +1,19 @@
 # Caddyfile — the host adapter's HTTPS entry point (design Section 9.6).
 #
-# One site, HOST_DOMAIN, with an automatic certificate. Routes follow
-# core/docs/deployment.md, "Routing": one host for both services, because the
-# SPA calls /v1 same-origin and the MCP OAuth flow crosses api and web.
+# One site, HOST_DOMAIN, with an automatic certificate. Caddy terminates TLS
+# and hands every request to nginx (nginx.conf.template), which routes to api
+# or web following core/docs/deployment.md, "Routing", and rate-limits the
+# credential endpoints per client address. Caddy has no rate limiting of its
+# own, and core keys its per-IP limits on the direct peer, which behind a
+# proxy is the proxy: the per-IP limiting has to happen in front of the api.
 #
-#   /healthz, /readyz, /metrics         404 here; they are for the server only
-#   /v1, /v1/*, /oauth/*, /mcp, /mcp/*  api
-#   /.well-known/oauth-authorization-server*,
-#   /.well-known/oauth-protected-resource*  api (the MCP OAuth metadata)
-#   /webhooks/gmail, /webhooks/graph    api (the provider calls them)
-#   every other path                    web
+#   /healthz, /readyz, /metrics   404 here; they are for the server only
+#   every other path              nginx
 #
-# Exact paths and slash-terminated prefixes, not bare prefixes: /v1x and /mcpx
-# are SPA paths, and /.well-known/acme-challenge/ is not the api's.
-#
-# `dynamic a` resolves the service name on each refresh, so requests are spread
-# over every replica that API_REPLICAS starts.
+# Caddy sets X-Forwarded-For to the client's address and ignores any value
+# the client sent (no trusted_proxies), so nginx can trust the header from
+# this container alone. lb_try_duration covers the moment nginx is recreated
+# by a deployment.
 
 {$HOST_DOMAIN} {
 	@internal path /healthz /healthz/* /readyz /readyz/* /metrics /metrics/*
@@ -23,23 +21,8 @@
 		respond 404
 	}
 
-	@api path /v1 /v1/* /oauth/* /mcp /mcp/* /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource* /webhooks/gmail /webhooks/graph
-	handle @api {
-		reverse_proxy {
-			dynamic a api 8080 {
-				refresh 5s
-			}
-			lb_policy round_robin
-			lb_try_duration 10s
-		}
-	}
-
 	handle {
-		reverse_proxy {
-			dynamic a web 8080 {
-				refresh 5s
-			}
-			lb_policy round_robin
+		reverse_proxy nginx:8080 {
 			lb_try_duration 10s
 		}
 	}

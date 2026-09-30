@@ -88,6 +88,7 @@ service_image() {
   ' "$1"
 }
 CADDY_IMAGE="$(service_image "$SCRIPT_DIR/deploy/host/compose.yaml" caddy)"
+NGINX_IMAGE="$(service_image "$SCRIPT_DIR/deploy/host/compose.yaml" nginx)"
 
 # rendered <release-dir> — the render.sh output directory for a release.
 rendered() { printf '%s/r/%s' "$TMP" "$(basename "$1")"; }
@@ -126,13 +127,13 @@ rc="$(render "$OUT")"
 if [ "$rc" = 0 ]; then ok "render succeeds"; else fail "render succeeds (rc=$rc): $(cat "$TMP/out")"; fi
 R1="$(rendered "$OUT")"
 listing="$(cd "$R1" && find . -type f | sort | tr '\n' ' ')"
-expected="./release/.env ./release/compose.env ./release/compose.yaml ./release/config/margince.yaml ./shared/caddy/Caddyfile ./shared/db-bootstrap.sql ./shared/db-init.sh ./shared/gen-env.sh "
+expected="./release/.env ./release/compose.env ./release/compose.yaml ./release/config/margince.yaml ./release/nginx/default.conf.template ./shared/caddy/Caddyfile ./shared/db-bootstrap.sql ./shared/db-init.sh ./shared/gen-env.sh "
 if [ "$listing" = "$expected" ]; then ok "the output has release/ and shared/ with exactly the expected files"; else fail "the output has release/ and shared/ with exactly the expected files: $listing"; fi
 if [ "$(mode_of "$R1/release/.env")" = 600 ]; then ok ".env has mode 600"; else fail ".env has mode 600 (got $(mode_of "$R1/release/.env"))"; fi
-for f in release/compose.yaml release/config/margince.yaml release/compose.env shared/caddy/Caddyfile shared/db-bootstrap.sql; do
+for f in release/compose.yaml release/config/margince.yaml release/compose.env release/nginx/default.conf.template shared/caddy/Caddyfile shared/db-bootstrap.sql; do
   if [ "$(mode_of "$R1/$f")" = 644 ]; then ok "$f has mode 644"; else fail "$f has mode 644 (got $(mode_of "$R1/$f"))"; fi
 done
-for d in . release release/config shared shared/caddy; do
+for d in . release release/config release/nginx shared shared/caddy; do
   if [ "$(mode_of "$R1/$d")" = 755 ]; then ok "directory $d has mode 755"; else fail "directory $d has mode 755 (got $(mode_of "$R1/$d"))"; fi
 done
 for f in shared/db-init.sh shared/gen-env.sh; do
@@ -156,7 +157,7 @@ fi
 if grep -qxF "MARGINCE_ADMIN_PASSWORD=$ADMIN_VALUE" "$OUT/.env"; then ok ".env holds a name listed with surrounding blanks"; else fail ".env holds a name listed with surrounding blanks"; fi
 for line in IMAGE_API=registry.example.test/acme/api:v1.0.0 IMAGE_WEB=registry.example.test/acme/web:v1.0.0 \
     IMAGE_WORKER=registry.example.test/acme/worker:v1.0.0 HOST_DOMAIN=crm.example.test \
-    API_REPLICAS=1 WORKER_REPLICAS=3 COMPOSE_PROFILES=local-data MARGINCE_PUBLIC_BASE_URL=https://crm.example.test; do
+    API_REPLICAS=1 WORKER_REPLICAS=3 AUTH_RATE_LIMIT_PER_MINUTE=30 COMPOSE_PROFILES=local-data MARGINCE_PUBLIC_BASE_URL=https://crm.example.test; do
   if grep -qxF "$line" "$OUT/.env"; then ok ".env has $line"; else fail ".env has $line: $(sed 's/=.*//' "$OUT/.env" | tr '\n' ' ')"; fi
   case "$line" in MARGINCE_PUBLIC_BASE_URL=*) continue ;; esac
   if grep -qxF "$line" "$OUT/compose.env"; then ok "compose.env has $line"; else fail "compose.env has $line"; fi
@@ -250,6 +251,12 @@ if [ "$rc" = 1 ] && grep -q 'HOST_DOMAIN' "$TMP/out"; then ok "a missing HOST_DO
 printf 'HOST_DOMAIN=crm.example.test\nAPI_REPLICAS=two\n' > "$INST/deploy/prod/host.env"
 rc="$(render "$SRV/releases/badreplicas")"
 if [ "$rc" = 1 ] && grep -q 'API_REPLICAS' "$TMP/out"; then ok "a non-numeric API_REPLICAS is refused"; else fail "a non-numeric API_REPLICAS is refused (rc=$rc)"; fi
+printf 'HOST_DOMAIN=crm.example.test\nAUTH_RATE_LIMIT_PER_MINUTE=0\n' > "$INST/deploy/prod/host.env"
+rc="$(render "$SRV/releases/badrate")"
+if [ "$rc" = 1 ] && grep -q 'AUTH_RATE_LIMIT_PER_MINUTE' "$TMP/out"; then ok "an AUTH_RATE_LIMIT_PER_MINUTE of 0 is refused"; else fail "an AUTH_RATE_LIMIT_PER_MINUTE of 0 is refused (rc=$rc)"; fi
+printf 'HOST_DOMAIN=crm.example.test\nAUTH_RATE_LIMIT_PER_MINUTE=12\n' > "$INST/deploy/prod/host.env"
+rc="$(render "$SRV/releases/rate12")"
+if [ "$rc" = 0 ] && grep -qxF 'AUTH_RATE_LIMIT_PER_MINUTE=12' "$(rendered "$SRV/releases/rate12")/release/compose.env"; then ok "AUTH_RATE_LIMIT_PER_MINUTE from host.env reaches compose.env"; else fail "AUTH_RATE_LIMIT_PER_MINUTE from host.env reaches compose.env (rc=$rc)"; fi
 printf 'HOST_DOMAIN=crm.example.test { respond 200 }\n' > "$INST/deploy/prod/host.env"
 rc="$(render "$SRV/releases/baddomain")"
 if [ "$rc" = 1 ] && grep -q 'HOST_DOMAIN' "$TMP/out"; then ok "a HOST_DOMAIN that is not a host name is refused"; else fail "a HOST_DOMAIN that is not a host name is refused (rc=$rc)"; fi
@@ -464,23 +471,28 @@ rc=0
 ( unset MARGINCE_DSN; MARGINCE_OWNER_DSN=x sh "$SRV/shared/db-init.sh" ) > "$TMP/out" 2>&1 || rc=$?
 if [ "$rc" = 1 ]; then ok "db-init.sh fails without the DSNs"; else fail "db-init.sh fails without the DSNs (rc=$rc)"; fi
 
-# route_check — run the Caddyfile on a private Docker network (no internet)
-# with two stand-in upstreams named api and web, both `caddy respond` from
-# the local $CADDY_IMAGE image (compose.yaml's caddy), and check which one answers each path.
+# route_check — run caddy and nginx on a private Docker network (no internet)
+# with two stand-in upstreams named api and web, both `caddy respond` from the
+# local $CADDY_IMAGE image, and check which one answers each path, the 404 for
+# the server-only paths, and nginx's 429 on a credential endpoint.
 route_check() {
-  local net="render-test-$$-$RANDOM" c path want got
+  local net="render-test-$$-$RANDOM" c path want got code
   local started=""
   docker network create --internal "$net" >/dev/null || { fail "create a test network"; return; }
   for c in api web; do
     docker run -d --rm --name "$net-$c" --network "$net" --network-alias "$c" "$CADDY_IMAGE" \
       caddy respond --listen :8080 --body "$c" >/dev/null && started="$started $net-$c"
   done
+  # A limit of 2 per minute with a burst of 2: the third request in a row is refused.
+  docker run -d --rm --name "$net-nginx" --network "$net" --network-alias nginx -e AUTH_RATE_LIMIT_PER_MINUTE=2 \
+    -v "$OUT/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro" "$NGINX_IMAGE" >/dev/null \
+    && started="$started $net-nginx"
   docker run -d --rm --name "$net-front" --network "$net" --network-alias front -e HOST_DOMAIN=http://front \
     -v "$SRV/shared/caddy:/etc/caddy:ro" "$CADDY_IMAGE" >/dev/null && started="$started $net-front"
-  # route <path> — the body that answers <path>, or the status for a 404.
+  # route <path> — the body that answers <path>, or the status for a 404 or 429.
   route() {
     docker run --rm --network "$net" "$CADDY_IMAGE" sh -c \
-      'out="$(wget -q -O - "http://front$1" 2>&1)" && printf "%s" "$out" || { case "$out" in *404*) printf 404 ;; *) printf "error: %s" "$out" ;; esac; }' _ "$1"
+      'out="$(wget -q -O - "http://front$1" 2>&1)" && printf "%s" "$out" || { case "$out" in *404*) printf 404 ;; *429*) printf 429 ;; *) printf "error: %s" "$out" ;; esac; }' _ "$1"
   }
   for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(route /v1/x)" = api ] && break; sleep 1; done
   for pair in /v1:api /v1/auth/capabilities:api /oauth/authorize:api /mcp:api /mcp/x:api \
@@ -490,8 +502,12 @@ route_check() {
       /healthz:404 /readyz:404 /metrics:404 /metrics/x:404; do
     path="${pair%:*}"; want="${pair##*:}"
     got="$(route "$path")"
-    if [ "$got" = "$want" ]; then ok "Caddy routes $path to $want"; else fail "Caddy routes $path to $want (got '$got')"; fi
+    if [ "$got" = "$want" ]; then ok "caddy and nginx route $path to $want"; else fail "caddy and nginx route $path to $want (got '$got')"; fi
   done
+  code=""
+  for _ in 1 2 3 4; do code="$(route /v1/auth/login)"; done
+  if [ "$code" = 429 ]; then ok "nginx answers 429 once a client passes the credential endpoint limit"; else fail "nginx answers 429 once a client passes the credential endpoint limit (got '$code')"; fi
+  if [ "$(route /v1/auth/capabilities)" = api ]; then ok "the credential limit leaves other api paths alone"; else fail "the credential limit leaves other api paths alone"; fi
   # shellcheck disable=SC2086 # the names contain no spaces
   docker rm -f $started >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
@@ -511,11 +527,11 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     fail "docker compose config -q passes with compose.env when a secret starts with a quote: $(cat "$TMP/out")"
   fi
   services="$(dc -f "$OUT/compose.yaml" --env-file "$OUT/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"
-  if [ "$services" = "api blobs-init caddy postgres redis web worker " ]; then ok "a local-data release runs postgres and redis"; else fail "a local-data release runs postgres and redis: $services"; fi
+  if [ "$services" = "api blobs-init caddy nginx postgres redis web worker " ]; then ok "a local-data release runs postgres and redis"; else fail "a local-data release runs postgres and redis: $services"; fi
   services="$(dc -f "$OUT3/compose.yaml" --env-file "$OUT3/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"
-  if [ "$services" = "api blobs-init caddy web worker " ]; then ok "an external release runs no postgres or redis"; else fail "an external release runs no postgres or redis: $services"; fi
+  if [ "$services" = "api blobs-init caddy nginx web worker " ]; then ok "an external release runs no postgres or redis"; else fail "an external release runs no postgres or redis: $services"; fi
   services="$(dc -f "$OUT6/compose.yaml" --env-file "$OUT6/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"
-  if [ "$services" = "api caddy postgres redis web worker " ]; then ok "an S3 file store release runs no blobs-init"; else fail "an S3 file store release runs no blobs-init: $services"; fi
+  if [ "$services" = "api caddy nginx postgres redis web worker " ]; then ok "an S3 file store release runs no blobs-init"; else fail "an S3 file store release runs no blobs-init: $services"; fi
   if dc -f "$OUT6/compose.yaml" --env-file "$OUT6/compose.env" config -q > "$TMP/out" 2>&1; then
     ok "docker compose config -q passes for an S3 file store release"
   else
@@ -635,6 +651,16 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     fail "an external release's app uses the external MARGINCE_DSN"
   fi
 
+  # nginx: its template comes from the release directory, so a deployment
+  # recreates it with the release's routes.
+  if sed -n '/^    "nginx": {/,/^    }/p' "$TMP/config.json" | grep -qF "$OUT/nginx/default.conf.template" \
+      && sed -n '/^    "nginx": {/,/^    }/p' "$TMP/config.json" | grep -qF '"AUTH_RATE_LIMIT_PER_MINUTE": "30"' \
+      && ! sed -n '/^    "nginx": {/,/^    }/p' "$TMP/config.json" | grep -q '"published"'; then
+    ok "nginx mounts the release's template, gets the default rate limit, and publishes no port"
+  else
+    fail "nginx mounts the release's template, gets the default rate limit, and publishes no port"
+  fi
+
   if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
     if docker run --rm --network none -e HOST_DOMAIN=crm.example.test -v "$SRV/shared/caddy:/etc/caddy:ro" \
         "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$TMP/out" 2>&1; then
@@ -642,9 +668,24 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     else
       fail "caddy validate accepts the Caddyfile: $(tail -5 "$TMP/out")"
     fi
+  else
+    echo "notice: $CADDY_IMAGE is not in the local image store; the Caddyfile validation is skipped"
+  fi
+  if docker image inspect "$NGINX_IMAGE" >/dev/null 2>&1; then
+    if docker run --rm --network none -e AUTH_RATE_LIMIT_PER_MINUTE=30 \
+        -v "$OUT/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+        "$NGINX_IMAGE" nginx -t > "$TMP/out" 2>&1; then
+      ok "nginx -t accepts the rendered template"
+    else
+      fail "nginx -t accepts the rendered template: $(tail -5 "$TMP/out")"
+    fi
+  else
+    echo "notice: $NGINX_IMAGE is not in the local image store; the nginx validation is skipped"
+  fi
+  if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1 && docker image inspect "$NGINX_IMAGE" >/dev/null 2>&1; then
     route_check
   else
-    echo "notice: $CADDY_IMAGE is not in the local image store; the Caddyfile validation and routing checks are skipped"
+    echo "notice: the routing and rate-limit checks need $CADDY_IMAGE and $NGINX_IMAGE locally; skipped"
   fi
 else
   echo "notice: docker compose is not available; the compose file checks are skipped"
@@ -654,7 +695,7 @@ fi
 # postgres and redis use the image references core pins in its
 # docker-compose.dev.yml, exactly (tag and digest); caddy has a tag and a digest.
 HC="$SCRIPT_DIR/deploy/host/compose.yaml"
-for svc in postgres redis caddy; do
+for svc in postgres redis caddy nginx; do
   if [[ "$(service_image "$HC" "$svc")" =~ ^[^@\$]+:[^@]+@sha256:[0-9a-f]{64}$ ]]; then
     ok "compose.yaml pins $svc by tag and digest"
   else
@@ -674,12 +715,37 @@ if [ -f "$CORE_DC" ]; then
 else
   echo "notice: core/docker-compose.dev.yml is not checked out; the comparison with core's image pins is skipped"
 fi
+# nginx is core's web image base, pinned to the digest core's Dockerfile uses.
+CORE_DF="$SCRIPT_DIR/../core/Dockerfile"
+if [ -f "$CORE_DF" ]; then
+  want="$(grep -oE 'nginxinc/nginx-unprivileged:[^ ]+@sha256:[0-9a-f]{64}' "$CORE_DF" | head -n1)" got="$(service_image "$HC" nginx)"
+  if [ -n "$want" ] && [ "$got" = "$want" ]; then ok "compose.yaml's nginx image is core's web base ($want)"; else fail "compose.yaml's nginx image is core's web base: '$got' vs '$want'"; fi
+else
+  echo "notice: core/Dockerfile is not checked out; the comparison with core's nginx pin is skipped"
+fi
 
-# --- the Caddyfile's routes ---
+# --- the Caddyfile hands everything but the server-only paths to nginx ---
 CF="$SCRIPT_DIR/deploy/host/Caddyfile"
-for p in '{$HOST_DOMAIN}' ' /v1 /v1/* /oauth/* /mcp /mcp/* ' '/.well-known/oauth-authorization-server*' '/.well-known/oauth-protected-resource*' 'dynamic a api 8080' 'dynamic a web 8080' '/healthz' '/readyz' '/metrics'; do
+for p in '{$HOST_DOMAIN}' 'reverse_proxy nginx:8080' '/healthz' '/readyz' '/metrics'; do
   if grep -qF -- "$p" "$CF"; then ok "the Caddyfile names $p"; else fail "the Caddyfile names $p"; fi
 done
+
+# --- nginx's routes and credential endpoint limits ---
+NT="$SCRIPT_DIR/deploy/host/nginx.conf.template"
+for p in 'location = /v1 ' 'location /v1/ ' 'location /oauth/ ' 'location = /mcp ' 'location /mcp/ ' \
+    'location /.well-known/oauth-authorization-server ' 'location /.well-known/oauth-protected-resource ' \
+    'location = /webhooks/gmail ' 'location = /webhooks/graph ' 'real_ip_recursive off;' \
+    'rate=${AUTH_RATE_LIMIT_PER_MINUTE}r/m'; do
+  if grep -qF -- "$p" "$NT"; then ok "nginx.conf.template names $p"; else fail "nginx.conf.template names $p"; fi
+done
+for p in /v1/auth/login /v1/auth/forgot-password /v1/auth/reset-password /oauth/token /oauth/register; do
+  if grep -E "^[[:space:]]*location = $p[[:space:]]" "$NT" | grep -q 'limit_req zone=auth'; then
+    ok "nginx rate-limits $p"
+  else
+    fail "nginx rate-limits $p"
+  fi
+done
+if grep -E '^[[:space:]]*location' "$NT" | grep 'oidc' | grep -q limit_req; then fail "nginx leaves Microsoft sign-in unlimited"; else ok "nginx leaves Microsoft sign-in unlimited"; fi
 
 echo
 if [ "$FAILURES" -eq 0 ]; then echo "render.test.sh: all passed"; else echo "render.test.sh: $FAILURES failure(s)" >&2; exit 1; fi

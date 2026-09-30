@@ -201,8 +201,10 @@ make deploy ENV=staging VERSION=v1.2.3
 ## 5. The host adapter
 
 The `host` adapter deploys the three images to one Linux server over SSH with
-Docker Compose, behind Caddy with an automatic HTTPS certificate. By default
-PostgreSQL and Redis run as containers on the same server.
+Docker Compose, behind Caddy with an automatic HTTPS certificate and nginx,
+which routes the requests and rate-limits the credential endpoints per client
+address (Section 5.10). By default PostgreSQL and Redis run as containers on
+the same server.
 
 `scripts/deploy/host/compose.yaml` pins every image that is not an instance
 image by tag and digest:
@@ -212,14 +214,17 @@ image by tag and digest:
 | `postgres` | `pgvector/pgvector:pg16@sha256:<digest>` | The `postgres` image in `core/docker-compose.dev.yml`, exactly. |
 | `redis` | `redis:7.2@sha256:<digest>` | The `redis` image in `core/docker-compose.dev.yml`, exactly. |
 | `caddy` | `caddy:2.11.4@sha256:<digest>` | One Caddy 2 release, by its multi-arch index digest. |
+| `nginx` | `nginxinc/nginx-unprivileged:alpine@sha256:<digest>` | The `web` stage's base image in `core/Dockerfile`, exactly. |
 
 `scripts/deploy/host/render.test.sh` fails when the `postgres` or `redis`
-image differs from the one in `core/docker-compose.dev.yml`. Without a
+image differs from the one in `core/docker-compose.dev.yml`, or the `nginx`
+image from the one in `core/Dockerfile`. Without a
 checked-out `core/`, it skips that comparison. To bump the images:
 
 1. Move the core pin with `make update-core REF=<tag>`.
 2. Copy the `postgres` and `redis` image references from
-   `core/docker-compose.dev.yml` to `scripts/deploy/host/compose.yaml`.
+   `core/docker-compose.dev.yml`, and the `nginx-unprivileged` reference from
+   `core/Dockerfile`, to `scripts/deploy/host/compose.yaml`.
 3. To bump Caddy, set `caddy:<version>@sha256:<digest>`, where `<digest>` is
    the `Docker-Content-Digest` of the image index for `caddy:<version>`.
 4. Run `make test-scripts`.
@@ -249,11 +254,12 @@ checked-out `core/`, it skips that comparison. To bump the images:
 | `HOST_DOMAIN` | yes | A host name. |
 | `HOST_DIR` | no | See Section 5.11. |
 | `API_REPLICAS`, `WORKER_REPLICAS` | no | Positive numbers, default 1. |
+| `AUTH_RATE_LIMIT_PER_MINUTE` | no | Positive number, default 30. Requests per minute per client address on the credential endpoints (Section 5.10). |
 
 A name in `secrets` must match `^[A-Z_][A-Z0-9_]*$` and have a value without a
 line break. It must not be one the adapter sets itself: `INSTANCE_NAME`,
 `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER`, `HOST_DOMAIN`, `API_REPLICAS`,
-`WORKER_REPLICAS`, `COMPOSE_PROFILES`.
+`WORKER_REPLICAS`, `AUTH_RATE_LIMIT_PER_MINUTE`, `COMPOSE_PROFILES`.
 
 ### 5.3 Credentials
 
@@ -388,7 +394,7 @@ not satisfy it.
 
 | Path on the server | Content |
 |---|---|
-| `$HOST_DIR/releases/<v>/` | `compose.yaml`, `compose.env`, `config/margince.yaml`, and `.env` (mode 600) of one release. |
+| `$HOST_DIR/releases/<v>/` | `compose.yaml`, `compose.env`, `config/margince.yaml`, `nginx/default.conf.template`, and `.env` (mode 600) of one release. Because the nginx template is part of the release, each deployment recreates `nginx`; Caddy retries while it restarts. |
 | `$HOST_DIR/current` | A symbolic link to the running release. |
 | `$HOST_DIR/shared/` | `db-init.sh`, `db-bootstrap.sql`, `caddy/Caddyfile`, `data.env`, and `instance.env`. Every release uses the same files, so `postgres` and `caddy` are not recreated on each deployment. |
 
@@ -399,12 +405,27 @@ and the previous release. Redeploying the running version keeps its old
 directory as `releases/.replaced-<v>` for `rollback`; the next `apply` removes
 it.
 
-Caddy sends `/v1`, `/v1/*`, `/oauth/*`, `/mcp`, `/mcp/*`, the
-`/.well-known/oauth-authorization-server*` and
+Caddy terminates HTTPS and passes every request to `nginx`, except
+`/healthz`, `/readyz`, and `/metrics`, which both answer with 404. nginx
+(`scripts/deploy/host/nginx.conf.template`) sends `/v1`, `/v1/*`, `/oauth/*`,
+`/mcp`, `/mcp/*`, the `/.well-known/oauth-authorization-server*` and
 `/.well-known/oauth-protected-resource*` paths, `/webhooks/gmail`, and
-`/webhooks/graph` to `api`, and every other path to `web`. It answers 404 for
-`/healthz`, `/readyz`, and `/metrics`. `MARGINCE_PUBLIC_BASE_URL` is
+`/webhooks/graph` to `api`, and every other path to `web`, following core's
+`docs/deployment.md`, "Routing". `MARGINCE_PUBLIC_BASE_URL` is
 `https://<HOST_DOMAIN>` unless `secrets` lists it.
+
+Core keys its own per-address limits (login, password reset, Microsoft
+sign-in) on the direct TCP peer and never reads `X-Forwarded-For`. Behind a
+proxy every client has the proxy's address, so those limits act as one bucket
+shared by all users. nginx therefore limits the credential endpoints per
+client address itself: `/v1/auth/login`, `/v1/auth/forgot-password`,
+`/v1/auth/reset-password`, `/oauth/token`, and `/oauth/register`, at
+`AUTH_RATE_LIMIT_PER_MINUTE` requests per minute with a burst of the same
+size, answering 429 above it. These are the same paths the standard stacks'
+WAF rules limit. Microsoft sign-in (`/v1/auth/oidc/*`) is not limited, so
+staff behind one office address do not share a bucket. The client address
+comes from the `X-Forwarded-For` header Caddy writes; nginx publishes no port,
+so only Caddy can set it.
 
 ### 5.11 Settings
 

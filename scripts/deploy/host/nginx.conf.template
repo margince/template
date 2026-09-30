@@ -1,0 +1,102 @@
+# nginx.conf.template — the host adapter's routing and rate-limiting layer
+# (design Section 9.6), between caddy and the application.
+#
+#   caddy (HTTPS, certificates) -> nginx :8080 -> api :8080 | web :8080
+#
+# Why nginx and not caddy alone: core keys its own per-IP limits (login,
+# password reset, OIDC) on the direct TCP peer and never reads
+# X-Forwarded-For (core's httpserver.ClientIP: "a deployment fronted by a
+# proxy terminates rate limiting there"). Behind a proxy every client is the
+# proxy's address, so the per-IP limiting has to happen here, keyed on the
+# real client address caddy passes on. Stock caddy has no rate limiting.
+#
+# The nginx image's entrypoint substitutes ${AUTH_RATE_LIMIT_PER_MINUTE}
+# (compose.yaml, from host.env) into this file at start. nginx's own
+# variables are left alone: envsubst replaces only variables defined in the
+# container's environment.
+#
+# Routes follow core/docs/deployment.md, "Routing", the same table as the
+# Caddyfile used before nginx took over routing.
+
+# Client address: caddy sets X-Forwarded-For to the address it accepted the
+# connection from, ignoring whatever the client sent (it trusts no upstream
+# proxy). nginx is reachable only from the compose network, so the private
+# ranges below are exactly the caddy container; real_ip_recursive off takes
+# the last entry, the one caddy wrote.
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 172.16.0.0/12;
+set_real_ip_from 192.168.0.0/16;
+real_ip_header X-Forwarded-For;
+real_ip_recursive off;
+
+# The credential endpoints, per client address: the same paths as the
+# standard stacks' WAF rate rules (waf_auth_paths). Microsoft sign-in
+# (/v1/auth/oidc/*) is not limited: Entra protects its own side, and staff
+# behind one office address would otherwise share one bucket.
+limit_req_zone $binary_remote_addr zone=auth:10m rate=${AUTH_RATE_LIMIT_PER_MINUTE}r/m;
+limit_req_status 429;
+limit_req_log_level warn;
+
+# Docker's embedded DNS. Resolving at request time, through variables, spreads
+# requests over every replica API_REPLICAS starts and follows recreated
+# containers without an nginx reload.
+resolver 127.0.0.11 valid=5s ipv6=off;
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ""      "";
+}
+
+server {
+    # 8080: the unprivileged image runs as uid 101 and cannot bind below 1024.
+    listen 8080 default_server;
+    server_name _;
+
+    # Attachments; caddy has no body limit of its own.
+    client_max_body_size 50m;
+
+    set $api http://api:8080;
+    set $web http://web:8080;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        $connection_upgrade;
+    # Streamed responses (MCP, server-sent events) reach the client as they
+    # are written.
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+
+    # For the server only, never through the public entry.
+    location ~ ^/(healthz|readyz|metrics)(/|$) {
+        return 404;
+    }
+
+    # ---- api, rate-limited credential endpoints ------------------------------
+    location = /v1/auth/login           { limit_req zone=auth burst=${AUTH_RATE_LIMIT_PER_MINUTE} nodelay; proxy_pass $api; }
+    location = /v1/auth/forgot-password { limit_req zone=auth burst=${AUTH_RATE_LIMIT_PER_MINUTE} nodelay; proxy_pass $api; }
+    location = /v1/auth/reset-password  { limit_req zone=auth burst=${AUTH_RATE_LIMIT_PER_MINUTE} nodelay; proxy_pass $api; }
+    location = /oauth/token             { limit_req zone=auth burst=${AUTH_RATE_LIMIT_PER_MINUTE} nodelay; proxy_pass $api; }
+    location = /oauth/register          { limit_req zone=auth burst=${AUTH_RATE_LIMIT_PER_MINUTE} nodelay; proxy_pass $api; }
+
+    # ---- api ------------------------------------------------------------------
+    # Exact paths and slash-terminated prefixes, not bare prefixes: /v1x and
+    # /mcpx are SPA paths.
+    location = /v1                     { proxy_pass $api; }
+    location /v1/                      { proxy_pass $api; }
+    location /oauth/                   { proxy_pass $api; }
+    location = /mcp                    { proxy_pass $api; }
+    location /mcp/                     { proxy_pass $api; }
+    location /.well-known/oauth-authorization-server { proxy_pass $api; }
+    location /.well-known/oauth-protected-resource   { proxy_pass $api; }
+    location = /webhooks/gmail         { proxy_pass $api; }
+    location = /webhooks/graph         { proxy_pass $api; }
+
+    # ---- web (the SPA) ----------------------------------------------------------
+    location / {
+        proxy_pass $web;
+    }
+}
