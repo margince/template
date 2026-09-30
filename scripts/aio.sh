@@ -83,7 +83,11 @@ cmd_build() {
   command -v docker >/dev/null || die "aio: docker is not installed"
   docker buildx version >/dev/null 2>&1 || die "aio: docker buildx is required"
 
-  local output=(--load)
+  # A loaded build reads the role images from the local image store. Only the
+  # docker-driver builder can see that store, and it is named after the
+  # current context; a docker-container builder (the default after
+  # setup-buildx-action in CI) would look for them in a registry.
+  local output=(--builder "$(docker context show)" --load)
   if [ "${PUSH:-}" = "1" ]; then
     [ -n "${REGISTRY:-}" ] || die "aio: PUSH=1 requires REGISTRY (the registry host the image is pushed to)"
     output=(--push --platform "${AIO_PLATFORMS:-linux/amd64,linux/arm64}")

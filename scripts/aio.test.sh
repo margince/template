@@ -80,6 +80,7 @@ case "$1 ${2:-}" in
     for m in ${STUB_MISSING:-}; do [ "$3" = "$m" ] && exit 1; done; exit 0 ;;
   "buildx version") exit 0 ;;
   "buildx build") exit 0 ;;
+  "context show") echo stubctx; exit 0 ;;
 esac
 exit 0
 EOF
@@ -113,6 +114,10 @@ aio build v1.0.0 >/dev/null 2>&1 || true
 check "build with all role images present does not run make package" bash -c '! grep -q "^make .*package" "$1"' _ "$STUB_LOG"
 check "build passes the three role images" grep -q -- '--build-arg API_IMAGE=acme/api:v1.0.0 --build-arg WORKER_IMAGE=acme/worker:v1.0.0 --build-arg WEB_IMAGE=acme/web:v1.0.0' "$STUB_LOG"
 check "build tags acme/all-in-one:v1.0.0 and loads it" bash -c 'grep "buildx build" "$1" | grep -q -- "--load" && grep "buildx build" "$1" | grep -q -- "-t acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
+# A loaded build reads the role images from the local image store, which only
+# the docker-driver builder of the current context can see (a docker-container
+# builder, the default after setup-buildx-action, cannot).
+check "a loaded build uses the current context's docker-driver builder" bash -c 'grep "buildx build" "$1" | grep -q -- "--builder stubctx --load"' _ "$STUB_LOG"
 check "build labels the image with the instance and core" bash -c 'grep "buildx build" "$1" | grep -q "com.margince.instance.name=acme" && grep "buildx build" "$1" | grep -q "com.margince.core.version=v0.0.2"' _ "$STUB_LOG"
 check "the context holds the scripts, the configuration and db-bootstrap.sql" bash -c 'for f in Dockerfile nginx.conf margince-init margince-seed margince-logins margince.yaml db-bootstrap.sql; do [ -f "$1/build/aio/$f" ] || exit 1; done' _ "$INST"
 check "the context's configuration signs in as admin@localhost" grep -q 'admin@localhost' "$INST/build/aio/margince.yaml"
@@ -129,6 +134,7 @@ if (export PUSH=1; aio build v1.0.0) >/dev/null 2>"$TMP/err"; then fail "PUSH=1 
 reset_log
 (export PUSH=1 REGISTRY=registry.example.test/acme; aio build v1.0.0) >/dev/null 2>&1 || true
 check "PUSH=1 pushes both platforms under the registry" bash -c 'grep "buildx build" "$1" | grep -q -- "--push --platform linux/amd64,linux/arm64" && grep "buildx build" "$1" | grep -q -- "-t registry.example.test/acme/acme/all-in-one:v1.0.0"' _ "$STUB_LOG"
+check "PUSH=1 uses the default builder" bash -c '! grep "buildx build" "$1" | grep -q -- "--builder"' _ "$STUB_LOG"
 check "PUSH=1 does not look for local role images" bash -c '! grep -q "image inspect" "$1"' _ "$STUB_LOG"
 
 # A dataset checkout with the seeder's source.
@@ -161,6 +167,7 @@ case "$1 ${2:-}" in
   "image inspect")
     for m in ${STUB_MISSING:-}; do [ "$3" = "$m" ] && exit 1; done; exit 0 ;;
   "buildx version"|"buildx build") exit 0 ;;
+  "context show") echo stubctx; exit 0 ;;
   "port "*) echo "127.0.0.1:49999"; exit 0 ;;
   "inspect "*)
     case "$*" in
