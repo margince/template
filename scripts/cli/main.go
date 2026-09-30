@@ -4,6 +4,7 @@
 //	cli check [-file instance.yaml] [-core core]
 //	cli get [-file instance.yaml] <key>
 //	cli validate [-file instance.yaml]
+//	cli aio-config [-file margince.yaml] [-display-name text]
 package main
 
 import (
@@ -22,7 +23,7 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-const usage = "usage: cli check [-file instance.yaml] [-core core] | cli get [-file instance.yaml] <key> | cli validate [-file instance.yaml]"
+const usage = "usage: cli check [-file instance.yaml] [-core core] | cli get [-file instance.yaml] <key> | cli validate [-file instance.yaml] | cli aio-config [-file margince.yaml] [-display-name text]"
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -36,6 +37,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGet(args[1:], stdout, stderr)
 	case "validate":
 		return runValidate(args[1:], stdout, stderr)
+	case "aio-config":
+		return runAIOConfig(args[1:], stdout, stderr)
 	}
 	fmt.Fprintln(stderr, usage)
 	return 2
