@@ -12,6 +12,13 @@ with Docker Compose) or `hook` (`scripts/deploy/hook.sh`, which runs the
 environment's own hook scripts). `instance.yaml` names the adapter of each
 environment. See [deploy.md](deploy.md).
 
+## all-in-one image
+
+The Docker image `<repo>/all-in-one:<v>` that runs all of an instance's
+Margince in one container, in test mode, for a tester on one computer. It is
+built by `make aio` from the role images of the same version. See
+[try-margince.md](try-margince.md).
+
 ## composition
 
 The generated tree that combines core with the staged units. `make compose`
@@ -90,6 +97,13 @@ submodule checks. See [release.md](release.md#9-ci-workflows).
 A `make` target that fails when a rule is broken, for example `ext-imports`,
 `arch`, `check-manifests`, `drift`, `check-composition`, or `secret-scan`.
 `make check` runs all gates; `make u` runs the fast gates for one unit.
+
+## install command
+
+The one-line command that a tester pastes to install Docker when it is
+missing and start the all-in-one image: `install.sh` for macOS and Ubuntu,
+`install.ps1` for Windows, written by `make aio-scripts`. See
+[try-margince.md](try-margince.md).
 
 ## instance
 

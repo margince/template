@@ -662,6 +662,84 @@ then `make local-up VERSION=<v>`. This deletes the local data.
 service are printed as `license: the license service answered <code>: <message>`
 ([license.md](license.md#6-behavior)).
 
+## 12. All-in-one image
+
+### `error: aio: pass VERSION=<release version>, e.g. make aio VERSION=v0.1.0 (got '<value>')`
+
+**Cause:** `VERSION` is missing or is not a release version.
+
+**Fix:** Pass a release version, for example `make aio VERSION=v0.1.0`.
+
+### `error: aio: PUSH=1 requires REGISTRY (the registry host the image is pushed to)`
+
+**Cause:** Without `REGISTRY` the image name has no registry host.
+
+**Fix:** Set `REGISTRY=<registry>` ([try-margince.md](try-margince.md#3-build-the-image)).
+
+### `aio: notice: the workspace's base_currency is <code> and the demo dataset is euro-based, so the image has no demo data.`
+
+**Cause:** The demo dataset needs a workspace with the base currency `EUR`.
+
+**Fix:** Set `workspace.base_currency: EUR` in
+`deploy/production/config/margince.yaml`, or build without demo data.
+
+### `error: aio-smoke: no image <repo>/all-in-one:<v> — run make aio VERSION=<v> first`
+
+**Cause:** The image is not in the local image store.
+
+**Fix:** Run `make aio VERSION=<v>`, then `make aio-smoke VERSION=<v>` again.
+
+### `aio-smoke: FAIL: <check>`
+
+**Cause:** The image started, but a check failed. The last 100 log lines of
+the container follow the message.
+
+**Fix:** Read the log lines. `margince: <process> exited` names the process
+that stopped.
+
+### `Error: Docker is installed but not running. Start Docker Desktop, then run this command again.`
+
+**Cause:** The install command found Docker but could not start it.
+
+**Fix:** Start Docker Desktop, wait until it reports that it is running, and
+run the command again.
+
+### `Error: Docker did not start within 3 minutes. ...`
+
+**Cause:** Docker Desktop is still starting, or waits for the tester to accept
+its terms.
+
+**Fix:** Open Docker Desktop, accept its terms, wait until it is running, and
+run the command again.
+
+### `Error: Ports 8080 to 8099 are all in use. ...`
+
+**Cause:** Other programs use every port that the install command tries.
+
+**Fix:** Stop one of those programs, then run the command again.
+
+### `Error: Margince did not start within 10 minutes. ...`
+
+**Cause:** The container did not become healthy.
+
+**Fix:** Run the command with the `logs` action and read the lines that start
+with `margince:`. Send them to the instance owner.
+
+### `Error: This system (<name>) is not supported. ...`
+
+**Cause:** The install command installs Docker only on macOS, Windows, and
+Ubuntu 22.04 and 24.04.
+
+**Fix:** Install Docker from the page the message names, then run the command
+again. The command then only starts Margince.
+
+### `Error: ... There is no terminal to answer in. ...`
+
+**Cause:** The command must ask before it installs Docker, and it runs
+without a terminal.
+
+**Fix:** Add `--yes` at the end (`sh -s -- up --yes`, or `-Yes` on Windows).
+
 ## Related guides
 
 - [create-an-instance.md](create-an-instance.md): setup, template sync, core
@@ -671,3 +749,4 @@ service are printed as `license: the license service answered <code>: <message>`
 - [deploy.md](deploy.md): deployment.
 - [desktop-build.md](desktop-build.md): the desktop folder.
 - [trial.md](trial.md) and [license.md](license.md): trials and licenses.
+- [try-margince.md](try-margince.md): the all-in-one image.

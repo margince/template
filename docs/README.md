@@ -28,6 +28,7 @@ link to it.
 | [Deploy](deploy.md) | The deployment contract, `make deploy-init`, the `host` adapter, the `hook` adapter, and `deploy.yml`. |
 | [License](license.md) | Obtain a trial or production license with `make license`, and the license service API. |
 | [Trial](trial.md) | Build a trial desktop bundle with a trial license with `make trial`. |
+| [Try Margince](try-margince.md) | Build the all-in-one image with `make aio` and give testers the one-line install command. |
 
 ## Reference
 

@@ -587,9 +587,9 @@ versioning: `vX.Y.Z-rc.N` is older than `vX.Y.Z`.
 | T12 | Guides: release, deploy (hook and host), license, trial. | Done |
 | T17 | Default setup (Section 9.7): generated instance keys and admin password, persistent file storage, the license check, `make deploy-init`, `make local-up`/`local-down`/`local-admin-password`, the desktop kit's and `make smoke`'s webhook key. | Done |
 | T18 | Default deployment environment (Section 9.8): `deploy-init` accepts a missing `DOMAIN`/`SSH`/`ADMIN_EMAIL` for the `host` adapter and writes placeholders; the `host` adapter's `check` refuses them; the template ships `deploy/production/` and `instance.yaml` lists it; `make new-instance` regenerates `deploy/production/` per instance. | Done |
-| T19 | All-in-one image (Section 9.9). | In progress |
+| T19 | All-in-one image (Section 9.9). | Done |
 
-Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12 → T17 → T18 → T19.
+Order: T13 → T7, T15, T16 → T8 → T10 part 2 → T12 → T17 → T18 → T19. All complete.
 
 ## 14. Rejected Alternatives
 

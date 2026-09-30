@@ -111,6 +111,20 @@ For a private registry, also set `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`.
 See [docs/deploy.md](docs/deploy.md) for every step, the `hook` adapter, and
 deployment from GitHub Actions.
 
+### Let a tester try Margince
+
+A tester who is not a developer runs your instance's Margince from one Docker
+image, started by one pasted command that installs Docker when it is missing:
+
+```sh
+make aio VERSION=v0.1.0
+make aio-smoke VERSION=v0.1.0
+make aio-scripts VERSION=v0.1.0
+```
+
+See [docs/try-margince.md](docs/try-margince.md) for pushing the image,
+hosting the install scripts, and what the tester sees.
+
 ## Commands
 
 `make help` lists every target, including the individual gates, the frontend
@@ -153,6 +167,10 @@ and infrastructure lanes, and the desktop lanes.
 | Local | `make local-up VERSION=<v>` | Run a built release on `https://localhost`. |
 | Local | `make local-down` | Stop the local stack (`WIPE=1` also removes its data and `.local/`). |
 | Local | `make local-admin-password` | Print the generated first admin password of the local stack. |
+| Try | `make aio VERSION=<v>` | Build the all-in-one image for testers (`PUSH=1` pushes it). |
+| Try | `make aio-smoke VERSION=<v>` | Start the all-in-one image on a temporary volume and check it. |
+| Try | `make aio-scripts VERSION=<v>` | Write the testers' install scripts to `dist/aio/<v>/`. |
+| Try | `make aio-up VERSION=<v>` | Start the all-in-one image on this computer, as a tester would. |
 | Core | `make core-status` | Show where `core/` is: branch, pinned commit, ahead and behind, changes. |
 | Core | `make core-branch NAME=<type>/<slug>` | Start a core contribution branch in `core/`. |
 | Core | `make core-pr` | Verify the sign-off, push the core branch, and open the pull request. |
@@ -204,4 +222,5 @@ template-owned path differs from the merged template commit. See
 | [Deploy](docs/deploy.md) | Deploy a release with the `host` or `hook` adapter. |
 | [License](docs/license.md) | Obtain a trial or production license. |
 | [Trial](docs/trial.md) | Build a trial bundle. |
+| [Try Margince](docs/try-margince.md) | Build the all-in-one image and give testers the install command. |
 | [Troubleshooting](docs/troubleshooting.md) | Known errors and their fixes. |
