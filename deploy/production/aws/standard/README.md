@@ -1,47 +1,56 @@
 # Margince on AWS
 
-ECS Fargate (api, worker, web), RDS for PostgreSQL, ElastiCache (Valkey 7.2, Redis protocol), S3,
-EFS (for the mounted `margince.yaml`), SSM Parameter Store (SecureString), one
-customer-managed KMS key, one ALB fronted by a WAFv2 web ACL, and baseline
-CloudWatch alarms into an SNS topic. See the [shared
-README](../README.md) for the cross-cloud design notes and what is
-deliberately out of scope (autoscaling policies, multi-region/HA, DR
-runbooks).
+Terraform root module that deploys Margince into your own AWS account, sized
+for a small team (about 40 users). It deploys the images that the template's
+`make release` builds (Section 3), the same flow as the Azure standard stack.
 
-![Architecture diagram — Margince on AWS, full stack](../docs/diagrams/aws-architecture.png)
+## What it creates
 
-*Solid arrows: the request/data path (Route 53 → ALB → ECS services →
-RDS/ElastiCache). Dashed: image pulls from ECR, EFS config mounts, Secrets
-Manager/S3 access, logs shipped to CloudWatch. Dotted red: the
-customer-managed KMS key encrypting RDS/ElastiCache/EFS/Secrets Manager/S3.
-The diagram predates the move from Secrets Manager to SSM Parameter Store.
-Regenerate from `docs/diagrams/aws.py` after a real architecture change —
-see `docs/diagrams/README.md`.*
-
-### Versions
-
-| Component | Version |
+| Area | Resources |
 |---|---|
-| Terraform CLI | >= 1.10 (S3 backend native locking, `versions.tf`) |
-| PostgreSQL (RDS) | 16 (`db_engine_version`, major only) |
-| Cache (ElastiCache) | Valkey 7.2 (`cache_engine_version`): Redis 7.2 protocol, the same series as dev's `redis:7.2` and the Azure stacks |
-| api / worker / web images | Built by `make release` or `make package` from core's `Dockerfile`, named `<registry>/<instance_name>/<role>:<release_version>` (see [Releases](#6-releases)) |
+| Edge | Application Load Balancer: the only public entry. TLS 1.2/1.3 with the ACM certificate `acm_certificate_arn`, HTTP to HTTPS redirect, deletion protection, access logs. AWS WAF web ACL (six AWS managed rule groups, two per-IP rate limits), `waf_mode` count or block. See "WAF rollout". |
+| Compute | ECS Fargate cluster: **api** (2 to 4 tasks, CPU autoscaling), **worker** (1 to 3 tasks), **web** (nginx + SPA, 2 tasks). Each has its own security group, task role and least-privilege execution role. |
+| Data | RDS PostgreSQL 16 (Multi-AZ, gp3 with storage autoscaling, 7-day backups, deletion protection, Performance Insights), ElastiCache Valkey 7.2 (two nodes, automatic failover, TLS required, AUTH token), S3 attachment bucket (versioned, SSE-KMS enforced), EFS for `margince.yaml` |
+| Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; ECR, SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
+| Secrets | SSM Parameter Store SecureStrings under `/<name_prefix>/`, one customer-managed KMS key (rotation on) for everything stored at rest |
+| Delivery | ECR repositories `<instance_name>/api|web|worker` (IMMUTABLE tags, enhanced scanning, lifecycle policy), a bootstrap host security group and instance profile |
+| Protection | CloudWatch alarms to a CMK-encrypted SNS topic, `prevent_destroy` on the stateful resources, EFS backup, CloudWatch log groups (30 days) |
 
-## 1. Provision
+```
+Internet ──HTTPS──> ALB + AWS WAF ──HTTP (private subnets)──> web (nginx :8080, SPA)
+                         │
+                         └── /v1*, /oauth/*, /mcp*, /webhooks/*, /healthz ──> api (:8080) ──> RDS PostgreSQL (TLS, verify-full)
+                                                                                 │          ElastiCache Valkey (TLS)
+worker (no ingress) ─────────────────────────────────────────────────────────────┤          S3 (SSE-KMS), EFS config
+                                                                                 └─> NAT ─> Graph, LLM, SMTP
+```
+
+## Before you start
+
+- **AWS**: an identity that may create VPC, ECS, RDS, ElastiCache, S3, EFS,
+  KMS, IAM, WAF, ALB, SSM and CloudWatch resources in the target account.
+- **TLS certificate**: an ACM certificate in `aws_region` for the host in
+  `public_base_url`, validated in your DNS zone.
+- **Tools**: Terraform 1.10 or newer, AWS CLI with the Session Manager
+  plugin, `jq`, `psql`; Docker with buildx for a manual image push
+  (Section 3).
+- **Margince**: a licence token, and this instance repository with its `core/`
+  submodule checked out (`git submodule update --init`). The images come from
+  `make release`; the bootstrap SQL and `margince.example.yaml` come from
+  `core/`.
+- **Remote state**: state holds every generated password. Create a protected
+  state bucket first (`backend.hcl.example`) and never keep state on a laptop.
+
+## 1. Provision (services off)
 
 ```bash
 cd deploy/production/aws/standard
-cp backend.hcl.example backend.hcl             # your protected state bucket
-cp terraform.tfvars.example terraform.tfvars   # fill in acm_certificate_arn, public_base_url, admin_bootstrap_password, instance_name, release_version
+cp backend.hcl.example backend.hcl            # fill in
+cp terraform.tfvars.example terraform.tfvars  # fill in
 terraform init -backend-config=backend.hcl
-terraform plan
 
-# Everything EXCEPT the 3 ECS services first — they reference release_version,
-# and nothing has pushed it yet. A plain `terraform apply` here creates the
-# services anyway, pointed at a tag ECR does not have, and they sit
-# unhealthy until you catch up with steps 2-4 below and re-apply. Targeting
-# past them avoids that round trip entirely; it is not required, just
-# cheaper than watching ECS retry a pull that cannot succeed yet.
+# Everything the database bootstrap and the image push need, but not the ECS
+# services: they would start pointed at a tag ECR does not have yet.
 terraform apply \
   -target=aws_ecr_repository.api -target=aws_ecr_repository.worker -target=aws_ecr_repository.web \
   -target=aws_db_instance.this -target=aws_elasticache_replication_group.this \
@@ -52,21 +61,16 @@ terraform apply \
   -target=aws_iam_role_policy.ops_efs -target=aws_iam_role_policy_attachment.ops_ssm
 ```
 
-This creates the VPC, KMS key, RDS instance, ElastiCache replication group,
-S3 bucket, EFS filesystem and access point, the two DSN parameters and the
-RDS master password parameter that step 2 reads, the bootstrap host's security group and instance profile (`ops.tf`),
-and the 3 ECR repos. The final untargeted apply creates the other parameters. Do
-steps 2–4 next — bootstrap the database, push the images, mount
-`margince.yaml` — then run a final untargeted `terraform apply` to create
-the ALB and the 3 ECS services, which by then have an image to pull and a
-database to migrate against.
+`terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
+`release_version`, `license_token` and `admin_bootstrap_password`, and
+usually `alert_email`. See "Variables".
 
 ## 2. Bootstrap the database (once)
 
-RDS's master user is `dbadmin` (see `rds.tf` for why it is not named
-`margince_owner`). The RDS instance has no public IP, and its security group
-admits only ECS tasks and the bootstrap host (`ops.tf`). Launch that host
-once, for steps 2 and 4, and terminate it afterwards:
+RDS's master user is `dbadmin` (`rds.tf`). RDS has no public IP, and its
+security group admits only the api and worker tasks and the bootstrap host
+(`ops.tf`). Launch that host once, for steps 2 and 4, and terminate it
+afterwards:
 
 ```bash
 OPS_ID="$(aws ec2 run-instances \
@@ -89,12 +93,11 @@ aws ssm start-session --target "$OPS_ID" \
   --parameters "host=$(terraform output -raw rds_endpoint),portNumber=5432,localPortNumber=5432"
 ```
 
-Then, on your machine, run the bootstrap SQL. The three passwords come from
-SSM Parameter Store (SecureString, decrypted with the stack CMK), so your AWS
-identity needs `ssm:GetParameter` on `/<name_prefix>/*` and `kms:Decrypt` on
-`terraform output -raw kms_key_arn`; nothing is read out of Terraform state.
-`hostaddr=127.0.0.1` sends the connection through the tunnel while
-`sslmode=verify-full` still checks the certificate against the RDS host name:
+Then run core's bootstrap SQL. The passwords come from SSM Parameter Store,
+so your identity needs `ssm:GetParameter` on `/<name_prefix>/*` and
+`kms:Decrypt` on `terraform output -raw kms_key_arn`. `hostaddr=127.0.0.1`
+sends the connection through the tunnel while `sslmode=verify-full` still
+checks the certificate against the RDS host name:
 
 ```bash
 curl -o /tmp/rds-ca-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
@@ -109,77 +112,16 @@ psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432
   -f ../../../../core/scripts/deploy/db-bootstrap.sql   # core's SQL, at the pinned core version
 ```
 
-(`aws rds describe-db-instances` never returns the master password; it only
-exists as this Terraform-generated value, copied into the
-`/<name_prefix>/rds-master-password` parameter for exactly this step. No ECS
-task or execution role can read that parameter.)
+The master password exists only as the `/<name_prefix>/rds-master-password`
+parameter, for this step; no ECS task or execution role can read it.
 
-## 3. Push the first release
+## 3. Build and push the images
 
-The ECR repositories from step 1 are named `<instance_name>/api`,
-`<instance_name>/web` and `<instance_name>/worker`, the names `make release`
-gives the images. Push the release that `release_version` names as described
-in [Releases](#6-releases), steps 1 to 3.
-
-## 4. Mount `margince.yaml` onto EFS (once)
-
-Terraform provisions the EFS filesystem and access point; it does not write
-into it. On the bootstrap host from step 2 (`aws ssm start-session --target
-"$OPS_ID"`). The file-system policy allows only IAM-authorised mounts, so
-`iam` is required; the host's instance profile grants mount and write. Copy
-`margince.yaml` and the RDS CA bundle to the host first (for example through
-S3, or paste them), then:
-
-```bash
-sudo dnf install -y amazon-efs-utils
-sudo mkdir -p /mnt/margince-config
-sudo mount -t efs -o tls,iam,accesspoint=<efs_config_access_point_id> \
-  <efs_file_system_id>:/ /mnt/margince-config
-# The two ids are `terraform output -raw efs_config_access_point_id` and
-# `terraform output -raw efs_file_system_id` on your machine.
-sudo cp ./margince.yaml /mnt/margince-config/margince.yaml   # from core/config/margince.example.yaml
-# edit /mnt/margince-config/margince.yaml — set password_file to
-# secrets/admin-password (the api's working dir is /app) per core/docs/deployment.md
-
-# The api and worker DSNs (secrets.tf) name this file at
-# /app/config/rds-ca-bundle.pem — the same mount, so it goes on beside
-# margince.yaml rather than needing a mount of its own.
-sudo cp ./rds-ca-bundle.pem /mnt/margince-config/rds-ca-bundle.pem
-
-sudo umount /mnt/margince-config
-```
-
-Terminate the bootstrap host on your machine when steps 2 and 4 are done:
-
-```bash
-aws ec2 terminate-instances --instance-ids "$OPS_ID"
-```
-
-## 5. DNS + first boot
-
-Point `public_base_url`'s host at `terraform output -raw alb_dns_name` (a CNAME
-or an ALIAS record) and confirm `acm_certificate_arn` covers that host. Once
-the api task can reach a healthy `/healthz` on the target group, it applies
-migrations and bootstraps the organization from `MARGINCE_ADMIN_PASSWORD` —
-after which, per `core/docs/deployment.md`, remove `bootstrap_admin` from
-`margince.yaml` and overwrite the admin password parameter with something inert
-(`secrets.tf` ignores later changes to its value, so apply will not put the
-bootstrap password back):
-
-```bash
-aws ssm put-parameter --overwrite --type SecureString \
-  --key-id "$(terraform output -raw kms_key_arn)" \
-  --name "$(terraform output -json ssm_parameter_names | jq -r .admin_password)" \
-  --value "$(openssl rand -base64 32)"
-```
-
-## 6. Releases
-
-The Azure standard stack uses the same flow. The images are the ones
-`make release` (the `release.yml` workflow) or `make package` builds from
-core's `Dockerfile`, named `<REGISTRY>/<instance_name>/<role>:<VERSION>`
-(the instance repository's `docs/release.md`, Section 6). This stack
-deploys `<registry>/<instance_name>/<role>:<release_version>`
+The images are the ones `make release` (the `release.yml` workflow) or
+`make package` builds from core's `Dockerfile`, named
+`<REGISTRY>/<instance_name>/<role>:<VERSION>` (the instance repository's
+`docs/release.md`, Section 6). This stack deploys
+`<registry>/<instance_name>/<role>:<release_version>`
 (`terraform output image_refs`).
 
 1. Set the image registry. `REGISTRY` is this account's ECR registry host:
@@ -194,8 +136,7 @@ deploys `<registry>/<instance_name>/<role>:<release_version>`
 
 2. Log in to the registry. `release.yml` logs in with the repository
    secrets `REGISTRY_USERNAME` (`AWS`) and `REGISTRY_PASSWORD`. An ECR
-   password is a token that expires after 12 hours, so refresh the secret
-   right before each release:
+   password expires after 12 hours, so refresh it right before each release:
 
    ```sh
    aws ecr get-login-password --region <aws_region> | gh secret set REGISTRY_PASSWORD
@@ -218,94 +159,114 @@ deploys `<registry>/<instance_name>/<role>:<release_version>`
    done                                             # manual push
    ```
 
-4. Set `release_version = "v0.3.0"` in `terraform.tfvars` and run
-   `terraform apply`. All three ECS services get a new task definition in the
-   same apply; api, worker and web always move together.
-
-The identity that pushes (the one whose token is in `REGISTRY_PASSWORD`, or
-your own) needs `ecr:GetAuthorizationToken` on `*`, and
+The identity that pushes needs `ecr:GetAuthorizationToken` on `*`, and
 `ecr:BatchCheckLayerAvailability`, `ecr:InitiateLayerUpload`,
 `ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage` and
-`ecr:BatchGetImage` on the three repository ARNs, plus `kms:GenerateDataKey`
-and `kms:Decrypt` on the stack key (`kms_key_arn`), because the repositories
-are encrypted with it.
-
-The repositories are `IMMUTABLE`: a pushed tag is never overwritten, and a
-second push of the same release is refused. The lifecycle policy keeps the
-most recent `ecr_tagged_image_retain_count` releases. The ECS tasks run
-`cpu_architecture` (default `X86_64`), the platform `release.yml` builds by
-default. For `ARM64`, set the repository variable
+`ecr:BatchGetImage` on the three repositories, plus `kms:GenerateDataKey`
+and `kms:Decrypt` on `kms_key_arn` (the repositories are encrypted with it).
+The repositories are `IMMUTABLE`: a pushed tag is never overwritten. The
+tasks run `cpu_architecture` (default `X86_64`, what `release.yml` builds by
+default); for `ARM64`, set the repository variable
 `PLATFORMS = "linux/amd64,linux/arm64"` first.
 
-### Turning on the Redis-TLS / S3-SSE-KMS enforcement, safely
+## 4. Upload `margince.yaml` (once)
 
-`elasticache.tf`'s `transit_encryption_mode = "required"` and `s3.tf`'s
-`DenyWrongEncryption`/`DenyWrongKMSKey` bucket-policy statements only work
-because the api/worker images now negotiate TLS and send an SSE-KMS header
-(`MARGINCE_REDIS_TLS`, `MARGINCE_BLOBSTORE_KMS_KEY_ID`, both in `ecs.tf`).
-Terraform has no way to express "wait until every old task has drained" —
-`aws_ecs_service` returns as soon as the API call to update it succeeds, not
-once the rollout finishes — so a single untargeted `apply` can flip
-ElastiCache to `required` or the S3 policy to enforcing while an OLD task
-revision (no TLS, no SSE header) is still serving traffic. That old task
-loses Redis connectivity, or has every upload denied, until it's replaced.
-
-Two-step apply avoids it:
+On the bootstrap host (`aws ssm start-session --target "$OPS_ID"`). The file
+system policy allows only IAM-authorised TLS mounts; the host's instance
+profile grants mount and write. Copy `margince.yaml` (from
+`core/config/margince.example.yaml`) and the RDS CA bundle to the host first,
+then:
 
 ```bash
-# 1. Roll the new images out and WAIT for the rollout to finish before
-#    touching ElastiCache/S3 enforcement.
-CLUSTER="$(terraform output -raw ecs_cluster_name)"
-PREFIX="${CLUSTER%-cluster}"   # cluster is "${name_prefix}-cluster"; services are "${name_prefix}-api"/"-worker"
-terraform apply -target=aws_ecs_service.api -target=aws_ecs_service.worker
-aws ecs wait services-stable --cluster "$CLUSTER" --services "${PREFIX}-api" "${PREFIX}-worker"
+sudo dnf install -y amazon-efs-utils
+sudo mkdir -p /mnt/margince-config
+sudo mount -t efs -o tls,iam,accesspoint=<efs_config_access_point_id> \
+  <efs_file_system_id>:/ /mnt/margince-config
+# the ids: terraform output -raw efs_config_access_point_id / efs_file_system_id
+sudo cp ./margince.yaml /mnt/margince-config/margince.yaml
+# edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
+# seeds.ai_routing for your LLM provider
+sudo cp ./rds-ca-bundle.pem /mnt/margince-config/rds-ca-bundle.pem   # the DSNs verify RDS against it
+sudo umount /mnt/margince-config
+```
 
-# 2. Only now apply everything else — this is what actually flips
-#    transit_encryption_mode and the S3 deny statements live.
+Terminate the bootstrap host when steps 2 and 4 are done:
+
+```bash
+aws ec2 terminate-instances --instance-ids "$OPS_ID"
+```
+
+## 5. Start the services
+
+```bash
 terraform apply
 ```
 
-This only matters the FIRST time you turn either flag on (or after any gap
-where an old, non-TLS/non-SSE image was running). A steady-state release
-that already has both flags set can apply untargeted as usual.
+This creates everything else: the ALB with its web ACL, the three ECS
+services, the remaining parameters and the alarms. Point `public_base_url`'s
+host at `terraform output -raw alb_dns_name` (CNAME or ALIAS record). The api
+applies migrations on start and bootstraps the organization from
+`MARGINCE_ADMIN_PASSWORD`.
+
+Check the entry point:
+
+```bash
+curl -s https://crm.example.com/readyz                                                  # 200 when dependencies are healthy
+curl -s -o /dev/null -w '%{http_code}\n' https://crm.example.com/metrics                # not routed to the api
+curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                        # 301 to HTTPS
+```
+
+## 6. First login
+
+1. Sign in with the bootstrap admin and set the permanent password.
+2. Remove `bootstrap_admin` from `margince.yaml` and overwrite the admin
+   password parameter with an inert value (`secrets.tf` ignores later changes
+   to it, so an apply does not put the bootstrap password back):
+
+   ```bash
+   aws ssm put-parameter --overwrite --type SecureString \
+     --key-id "$(terraform output -raw kms_key_arn)" \
+     --name "$(terraform output -json ssm_parameter_names | jq -r .admin_password)" \
+     --value "$(openssl rand -base64 32)"
+   ```
+
+3. Confirm the `alert_email` subscription (AWS sends a confirmation mail), or
+   subscribe your own endpoint to `terraform output -raw alerts_topic_arn`.
+
+## 7. Releases
+
+Follow Section 3 for each new version, then set `release_version` in
+`terraform.tfvars` and run `terraform apply`. All three services get a new
+task definition in the same apply; api, worker and web move together.
 
 ## WAF rollout
 
-`alb.tf`'s web ACL, in priority order: optional geo allow-list
-(`waf_allowed_country_codes`, default off; the provider webhook paths are
-always exempt), `AmazonIpReputationList`, a per-IP rate limit on the
-credential endpoints (`waf_auth_paths`, default `/v1/auth/login`,
-`/v1/auth/forgot-password`, `/v1/auth/reset-password`, `/oauth/token`,
-`/oauth/register`; `waf_auth_rate_limit_per_ip`, default 100 per 5 min), a
-global per-IP rate limit (`waf_rate_limit_per_ip`, default 2000 per 5 min)
-that excludes `/webhooks/gmail|graph|hubspot` (HMAC-verified provider
-traffic from shared provider IPs), `AnonymousIpList` (always count-only,
-informational: labels VPN/Tor/hosting traffic in the logs), `CommonRuleSet`
-(`SizeRestrictions_BODY` always count), `KnownBadInputsRuleSet`,
-`SQLiRuleSet`, `LinuxRuleSet`, and optionally `BotControlRuleSet`
-(`enable_waf_bot_control`, default off: it adds a monthly fee plus a
-per-request charge; `CategoryHttpLibrary` and `SignalNonBrowserUserAgent`
-are always counted because MCP/OAuth/API clients are legitimate non-browser
-traffic). Rate-limited requests get HTTP 429.
+`alb.tf`'s web ACL, the counterpart of the Azure standard stack's WAF policy
+with the same rate rules, in priority order: `AmazonIpReputationList`, a
+per-IP rate limit of 100 requests per 5 minutes on the credential endpoints
+(`/v1/auth/login`, `/v1/auth/forgot-password`, `/v1/auth/reset-password`,
+`/oauth/token`, `/oauth/register`), a global per-IP rate limit of 2000 per
+5 minutes that excludes `/webhooks/gmail|graph|hubspot` (HMAC-verified
+provider traffic from shared provider IPs), `AnonymousIpList` (always
+count-only: labels VPN, Tor and hosting traffic in the logs),
+`CommonRuleSet` (`SizeRestrictions_BODY` always count), `KnownBadInputsRuleSet`,
+`SQLiRuleSet` and `LinuxRuleSet`. Rate-limited requests get HTTP 429. The
+rule set uses about 1,405 WCU, inside the 1,500 included in the web ACL price.
 
 `waf_mode` defaults to `"count"`: every rule only counts, nothing is
 blocked. Run like that for about a week of real traffic, then review what
-WOULD have been blocked:
+would have been blocked (CloudWatch Logs Insights on
+`aws-waf-logs-<name_prefix>`):
 
-```bash
-# CloudWatch Logs Insights on aws-waf-logs-<name_prefix>. In count mode a
-# would-be block is an ALLOW record whose nonTerminatingMatchingRules names
-# the rule (or rule group); ruleGroupList carries the rule inside the group.
-# 1. Which web ACL rules would have blocked (top-level counted rules: rate
-#    limits, geo, and each managed rule group running in count mode):
+```
+# Which web ACL rules would have blocked (a would-be block is an ALLOW record
+# whose nonTerminatingMatchingRules names the rule or rule group):
 fields @timestamp, httpRequest.clientIp, httpRequest.uri, nonTerminatingMatchingRules.0.ruleId as rule
 | filter ispresent(nonTerminatingMatchingRules.0.ruleId)
 | stats count(*) as hits by rule, httpRequest.uri
 | sort hits desc
 
-# 2. Which managed rule inside a group matched. Every matching managed rule
-#    adds a label (awswaf:managed:aws:<group>:<rule>), in count and block
-#    mode alike, whatever group it sits in:
+# Which managed rule inside a group matched (awswaf:managed:aws:<group>:<rule>):
 fields @timestamp, httpRequest.uri, @message
 | parse @message /"labels":\[(?<labels>[^\]]*)\]/
 | filter labels like /awswaf:managed:aws/
@@ -313,329 +274,111 @@ fields @timestamp, httpRequest.uri, @message
 | sort hits desc
 ```
 
-(or the web ACL's "Sampled requests" in the console). For every legitimate
-request that matched, add a `rule_action_override` (count) for that rule in
-`local.waf_managed_rule_groups` (the CRM's rich-text bodies are a likely
-`CrossSiteScripting_BODY` candidate). Then set `waf_mode = "block"` and apply.
+For every legitimate request that matched, add a `rule_action_override`
+(count) for that rule in `local.waf_managed_rule_groups` (rich-text bodies
+are a likely `CrossSiteScripting_BODY` candidate), then set
+`waf_mode = "block"` and apply. The blocked-requests alarm (above 500 per
+5 minutes) reports spikes once blocking.
 
 Logging: every request goes to the CMK-encrypted `aws-waf-logs-<name_prefix>`
-group (`waf_log_retention_days`, default 30) with the `authorization` and
-`cookie` headers and the query string redacted. In block mode a logging
-filter keeps only BLOCK / COUNT / EXCLUDED_AS_COUNT records and drops plain
-ALLOW traffic, which is most of the volume and already in the ALB access
-logs; in count mode everything is kept, since the would-be blocks are ALLOW
-records with non-terminating matches.
+group, kept 30 days, with the `authorization` and `cookie` headers and the
+query string redacted. In block mode a logging filter keeps only BLOCK,
+COUNT and EXCLUDED_AS_COUNT records; plain ALLOW traffic is already in the
+ALB access logs.
 
-## Upgrading an existing deployment
+## Variables
 
-### Moving to `release_version` and the release image names
+Only what you must set or what genuinely sizes the installation is a
+variable (`variables.tf`); everything else is a fixed value in the file that
+uses it.
 
-`image_tag` is replaced by `release_version`, and a plan that still sets
-`image_tag` fails with a message that names the replacement. The ECR
-repositories are renamed from `<name_prefix>/<role>` to
-`<instance_name>/<role>`. ECR cannot rename a repository, so the plan
-replaces all three, and the delete of a repository that holds images fails.
-Before the apply:
+| Variable | Default | Purpose |
+|---|---|---|
+| `public_base_url` | required | `https://<host>` the ALB serves |
+| `acm_certificate_arn` | required | ACM certificate for that host |
+| `release_version` | required | Release to deploy (image tag) |
+| `license_token` | required | Licence token |
+| `admin_bootstrap_password` | required | First-boot admin password |
+| `alert_email` | `""` | Alert subscription |
+| `aws_region`, `name_prefix`, `instance_name` | `eu-central-1`, `margince`, `margince-default` | Placement and names |
+| `az_count` | `2` | Availability Zones (one NAT gateway each) |
+| `cpu_architecture` | `X86_64` | Fargate architecture of the images |
+| `db_instance_class`, `db_multi_az` | `db.t4g.medium`, `true` | Postgres size and HA |
+| `api_min_replicas`, `api_max_replicas` | `2`, `4` | api scale bounds |
+| `waf_mode` | `count` | `count` then `block` |
 
-1. Push the release to the new names (the repositories are created in the
-   same apply, so run `terraform apply -target=aws_ecr_repository.api
-   -target=aws_ecr_repository.worker -target=aws_ecr_repository.web` first,
-   then [Releases](#6-releases), steps 1 to 3).
-2. Keep the old repositories out of the delete:
-   `terraform state rm` is not possible for the renamed resources, so delete
-   the old images (`aws ecr batch-delete-image`) or the old repositories
-   (`aws ecr delete-repository --force`) once no task runs from them.
-3. `cpu_architecture` now defaults to `X86_64`. Set `ARM64` explicitly to
-   keep Graviton, with multi-platform images (Section 6).
+## Redis
 
-### Moving from the Secrets Manager version
+ElastiCache runs Valkey 7.2, the Redis 7.2 fork: the same protocol series as
+core's `redis:7.2` and the Azure stacks (ElastiCache has no Redis OSS 7.2).
+Two nodes with automatic failover, `noeviction` (Redis is the outbox relay:
+an evicted key is a lost event), TLS required and an AUTH token, 7-day
+snapshots and slow-log delivery to CloudWatch Logs.
 
-Moving from the Secrets Manager version of this stack, one `terraform apply`:
+## Security notes
 
-| Change | Effect |
-|---|---|
-| Secrets | The `aws_secretsmanager_secret` resources are destroyed (30-day recovery window) and SSM parameters are created with the same values. The api and worker task definitions get a new revision that reads SSM, and ECS rolls the services. |
-| VPC endpoints | The `secretsmanager` interface endpoint is replaced by `ssm`. The endpoint security group is replaced (`create_before_destroy`), so running tasks keep their connections. Plan the apply for a quiet window: tasks started during it may retry their first SSM read. |
-| Variables | `enable_deep_monitoring` is now `enable_alarms` (default `true`). An old entry in `terraform.tfvars` fails the plan with that message; delete it. |
-| WAF | `waf_mode` defaults to `count`: a web ACL that blocked before only counts after the upgrade. Set `waf_mode = "block"` in the same apply to keep blocking, or follow "WAF rollout". |
+- **Public surface**: the ALB only, behind the WAF. Tasks, RDS, ElastiCache
+  and EFS sit in private subnets with no public IP. The ALB drops invalid
+  header fields and does not route `/metrics`.
+- **Encryption at rest**: one customer-managed KMS key (`kms.tf`, rotation
+  on) for RDS, ElastiCache, S3 (SSE-KMS with Bucket Keys, other keys denied),
+  EFS, every SSM parameter, the ECR repositories, the SNS topic and the WAF
+  log group. The ALB log bucket uses SSE-S3, the only option ELB access
+  logging supports.
+- **Encryption in transit**: TLS 1.2/1.3 at the ALB, HTTP to HTTPS redirect;
+  HTTP from the ALB to the tasks inside the private subnets (`cmd/api`
+  serves plain HTTP). RDS refuses plaintext (`rds.force_ssl`) and the DSNs
+  use `sslmode=verify-full` against the pinned `rds-ca-rsa2048-g1` CA;
+  ElastiCache requires TLS; EFS mounts use TLS; the S3 bucket denies
+  non-TLS requests.
+- **Network**: one security group per tier. `web` reaches only the VPC
+  endpoints and S3 (no path to RDS, ElastiCache, EFS or the internet); the
+  data tiers have no egress rules; api and worker egress is in-VPC plus
+  443 and SMTP. VPC endpoints accept only this account's principals. VPC
+  flow logs record all traffic.
+- **IAM**: separate task and execution roles per service, ECS trust policies
+  with `aws:SourceAccount`/`aws:SourceArn`, no
+  `AmazonECSTaskExecutionRolePolicy`. `web` reads no secrets. The RDS master
+  password parameter is readable by no task.
+- **Containers**: all Linux capabilities dropped, explicit
+  `runtime_platform`, `stopTimeout = 60` for api and worker.
+- **Images**: IMMUTABLE ECR tags, so `release_version` pins the deployed
+  images; continuous enhanced scanning (Amazon Inspector, metered) for this
+  instance's repositories; untagged images expire after 14 days, and the 30
+  most recent releases are kept.
+- **Sign-in**: the WAF's auth-path rate rule is the one fleet-wide login
+  limit; the api's own login limiters are per task.
+- **Protection**: RDS and ALB deletion protection; `prevent_destroy` on the
+  KMS key, S3 bucket, EFS and ElastiCache; final snapshots with a random
+  suffix; EFS in AWS Backup; S3 versioning with 90-day noncurrent expiry.
+- **Alarms**: always on, to the CMK-encrypted SNS topic, on ALARM and OK:
+  ALB 5xx (over 25 per 5 minutes), unhealthy targets, p95 latency (over 2 s),
+  ECS CPU and memory (over 85%), RDS storage, CPU, connections (over 320,
+  sized for `db.t4g.medium`: raise it in `alarms.tf` with a larger class) and
+  CPU credits, ElastiCache memory, CPU and credits, WAF blocked requests.
 
-Check `terraform output waf_capacity` after the apply: up to 1,500 WCU is
-included in the web ACL price.
+## Known limitations
 
-## Security posture
+- **Destroying the stack**: remove the `prevent_destroy` guards and RDS/ALB
+  deletion protection by hand first; they exist to make that deliberate.
+- **Credential rotation**: the DSN parameters and the blobstore IAM user's
+  access key have no managed rotation (the app reads DSN strings and a
+  static key). Rotate them by hand.
+- **Not included**: GuardDuty, Shield Advanced, network ACLs beyond the
+  default, multi-region or DR. Each is an account-level or cost decision for
+  the operator.
+- **Two AZs by default**: `az_count = 3` adds a third NAT gateway; verify it
+  in a test account first.
+- **Recreating RDS or ElastiCache in the same state**: replace the final
+  snapshot suffix with it (`terraform apply -replace=random_id.final_snapshot
+  -replace=aws_db_instance.this`, `random_id.redis_final_snapshot` for
+  ElastiCache), or the second delete collides with the first snapshot.
 
-**Encryption at rest** — one customer-managed KMS key (`kms.tf`, rotation
-enabled) covers everything this stack stores: RDS, ElastiCache, S3 (SSE-KMS
-with Bucket Keys), EFS, every SSM SecureString parameter, all 3 ECR repos,
-the SNS alert topic and the WAF log group.
-IAM grants are scoped to exactly who needs the key — the ECS execution role
-(SSM parameter reads + its own ECR image), `execution_web`'s own narrower
-grant (its ECR image only, no secrets), and the blobstore IAM user (S3
-object encrypt/decrypt) — nobody else can use it. One key, not one per
-service: see `kms.tf` for why a single CMK is the right blast-radius
-boundary here rather than six to separately grant.
+## Tests
 
-**Encryption in transit** — every hop is enforced, not just requested:
-
-| Hop | Enforcement |
-|---|---|
-| Client → ALB | TLS 1.2 and TLS 1.3 (`ELBSecurityPolicy-TLS13-1-2-2021-06` — the name is the policy's, not a claim that 1.2 is refused), HTTP redirects to HTTPS |
-| ALB → api/web tasks | Plaintext HTTP inside the VPC's private subnets — matches the product's own architecture: `cmd/api` serves plain HTTP and terminates TLS ahead of itself (`docs/reference/configuration.md`) |
-| Task → RDS | `rds.force_ssl=1` (server refuses plaintext) + `sslmode=verify-full` on both DSNs — encrypted AND authenticated against the RDS CA bundle (step 4), not merely encrypted; `sslmode=require` alone lets pgx accept any certificate, including an attacker's |
-| Task → ElastiCache (Valkey 7.2) | `transit_encryption_enabled = true`, `transit_encryption_mode = "required"` + AUTH token. The Redis client (`backend/internal/platform/events/relay.go`) negotiates TLS when `MARGINCE_REDIS_TLS=true` (set for api and worker in `ecs.tf`); see "Turning on the Redis-TLS / S3-SSE-KMS enforcement, safely" for the rollout order. Both settings apply to Valkey 7.2 exactly as to Redis OSS |
-| Task → EFS | `transit_encryption = "ENABLED"` on the mount |
-| Task → S3 | Bucket policy denies any request where `aws:SecureTransport = false`, independent of the client's own `MARGINCE_BLOBSTORE_USE_SSL` setting |
-
-**Other hardening in this stack**: ECR repos are `image_tag_mutability =
-IMMUTABLE` (a pushed tag can't be silently overwritten) with a lifecycle
-policy expiring untagged images after 14 days; the `db`/`redis`/`efs`
-security groups carry no egress rule at all (they never originate outbound
-traffic, so allow-all egress bought nothing); `ecs_tasks`' own egress is
-scoped to in-VPC traffic plus the specific external ports the product
-genuinely calls out on (443 HTTPS, 25/465/587 SMTP) rather than every
-port/protocol to anywhere; VPC endpoints (S3 Gateway + Interface endpoints
-for ECR/SSM/KMS/CloudWatch Logs, `vpc-endpoints.tf`) keep that
-AWS-internal traffic off the NAT/public path entirely; the `web` ECS
-service has its own security group (`aws_security_group.web`, `network.tf`)
-separate from api/worker's `ecs_tasks`: ingress 8080 from the ALB only,
-egress 443 only to the interface endpoints SG (ECR, CloudWatch Logs) and the
-S3 gateway endpoint's prefix list (ECR image layers), so it has no path to
-RDS, ElastiCache, EFS or the internet; the `web` ECS task
-uses its own execution role with no SSM parameter access, since it reads
-no secrets — only `api` and `worker`'s shared execution role can, and
-neither execution role carries the `AmazonECSTaskExecutionRolePolicy`
-managed policy (its `Resource: "*"` ECR/logs grants would have overridden
-the scoped statements sitting next to it, not narrowed them); the S3
-bucket has `object_ownership = BucketOwnerEnforced` (ACLs disabled outright,
-so access runs through IAM/bucket policy alone); the api and worker task
-definitions set `stopTimeout = 60` so an in-flight request or job finishes
-draining rather than being cut off at Fargate's 30s default; every task
-definition declares `runtime_platform` explicitly (`var.cpu_architecture`,
-default `X86_64`, the platform `release.yml` builds by default; see the
-variable's own description).
-
-**IAM**: every ECS trust policy (`iam.tf`'s `ecs_assume`) carries
-`aws:SourceAccount` and `aws:SourceArn` conditions per AWS's own confused-deputy
-guidance for ECS task roles — without them, any AWS account's ECS control
-plane could reference one of these role ARNs in a task definition it
-registers and assume it, since a bare `Principal: {Service:
-ecs-tasks.amazonaws.com}` trusts the service, not which account's tasks call
-it. Each of `api`/`worker`/`web` gets its own task role (`task_api`,
-`task_worker`, `task_web`) rather than one shared role, mirroring
-`execution`/`execution_web`'s existing split — `task_api`/`task_worker`
-additionally carry the one grant EFS's IAM-authorized mount requires
-(`elasticfilesystem:ClientMount`, scoped to the config access point via the
-`elasticfilesystem:AccessPointArn` condition — EFS denies an IAM-authorized
-mount by default until an explicit Allow exists somewhere, and the file
-system's own policy carries only a Deny); `task_web` stays empty, since web
-mounts nothing and calls no other AWS API.
-
-**EFS**: `aws_efs_backup_policy` turns on AWS Backup coverage for the config
-filesystem — otherwise a new EFS filesystem defaults to none, and the
-operator-provisioned `margince.yaml` (step 4) would be unrecoverable from
-anything but redoing that step by hand.
-
-**Bucket names**: S3 bucket names are global across all AWS accounts, so
-both buckets carry an account+region suffix:
-`<name_prefix>-blobstore-<account_id>-<aws_region>` and
-`<name_prefix>-alb-logs-<account_id>-<aws_region>` (read the real names from
-`terraform output s3_blobstore_bucket` / `alb_access_log_bucket`).
-`name_prefix` is validated so the longer one stays within S3's 63-character
-limit.
-
-**ALB**: access logging is on by default, to a dedicated same-region,
-SSE-S3-only bucket (`aws_s3_bucket.alb_logs` — Elastic Load Balancing does not
-support SSE-KMS for this destination, unlike every other bucket in this
-stack) with a 90-day expiry and a bucket policy scoped to this account's
-load balancers only. An `aws_wafv2_web_acl` sits in front of it; see "WAF
-rollout" below for the rule set and the count-then-block procedure. The
-auth-path rate rule exists because
-`backend/internal/modules/identity/handlers.go`'s own login limiters are, by
-their own comment, "single-binary scope": in-memory per api task, so
-`api_autoscaling_max_count` scaling out raises the *effective* fleet-wide
-login-attempt budget. The WAF is the one point that sees traffic before it
-fans out to any task.
-
-**VPC endpoints** (`vpc-endpoints.tf`): every endpoint (the S3 Gateway
-endpoint and all 5 interface endpoints: ecr.api, ecr.dkr, ssm, kms, logs) now carries a policy restricting use
-to THIS account's own IAM principals (`aws:PrincipalAccount`) — actions and
-resources are deliberately left to IAM (already scoped per role in
-`iam.tf`; duplicating that here would drift). What this adds that IAM can't:
-if a task ever ended up holding another account's credentials (a
-copy-pasted key, a supply-chain compromise), those credentials could still
-authenticate to AWS, but this condition refuses them at the endpoint before
-the call reaches the service. Deliberately NOT an `s3:ResourceAccount`-style
-restriction on the S3 endpoint specifically — that same Gateway endpoint
-also carries ECR's own image-layer blob storage, which lives in AWS-owned
-buckets outside this account; restricting by resource account would break
-every image pull.
-
-**Tags**: every resource that supports tags carries `Project`/`ManagedBy`
-(provider `default_tags`, `versions.tf`) plus a per-stack `Environment`
-(`var.environment`), and most resources additionally carry `Name` and
-`Component` (`network`, `compute-api`/`compute-worker`/`compute-web`,
-`database`, `cache`, `storage`, `security`, `observability`, `edge`,
-`container-registry`, `secrets`) — enough to filter Cost Explorer or an
-automation script by function without parsing resource names.
-
-**RDS**: Performance Insights (7-day retention, this stack's own CMK) and
-Enhanced Monitoring (60s, via `aws_iam_role.rds_enhanced_monitoring`) are on
-by default — query-level and instance-level visibility respectively, neither
-of which existed before. `enabled_cloudwatch_logs_exports = ["postgresql"]`
-ships `postgresql.log` (connection failures, deadlocks, slow queries once
-`log_min_duration_statement` is set) to a Terraform-managed, retention-bound
-log group — RDS creates this group itself on first flush with NO retention
-otherwise, i.e. kept forever. `copy_tags_to_snapshot = true` so every
-snapshot carries the same `Component`/`Environment` tags the instance does.
-
-**ElastiCache**: `log_delivery_configuration` ships slow-log entries to
-CloudWatch Logs — previously the only signal for "the outbox relay stalled"
-was an application-side timeout, with nothing from Redis itself explaining
-why.
-
-**ECS**: `aws_appautoscaling_target`/`_policy` on `api` and `worker`
-(target-tracking on `ECSServiceAverageCPUUtilization`, 70%) — `desired_count`
-was a fixed ceiling with no way to absorb a traffic spike or a backlog
-without a manual `terraform apply`. Both services' `desired_count` is now
-`ignore_changes`d so a routine apply doesn't fight the autoscaler back down
-to the floor. `web` is left un-autoscaled (static SPA/nginx, not
-CPU-bound the way api/worker are) — add it the same way if that stops
-being true.
-
-**ECR**: `aws_ecr_registry_scanning_configuration` turns on Amazon
-Inspector's continuous, enhanced scanning for this stack's three repos
-(scoped by a `${name_prefix}/*` filter — this setting is account+region-wide,
-so an unscoped rule would have started scanning and billing for every OTHER
-repo in the account too). This is metered (Inspector charges per image
-scanned) on top of the scan-on-push each repo already had, which only ever
-scanned once, at push time — enhanced scanning re-scans on every new CVE
-disclosure against an image already sitting in the repo.
-
-**VPC Flow Logs**: every security group in `network.tf` is a claim about
-what traffic is allowed; nothing recorded what traffic actually flowed,
-accepted or rejected, until `aws_flow_log.this` (`ALL` traffic, to
-CloudWatch Logs, via its own confused-deputy-protected IAM role) — the one
-thing an incident investigation needs and this stack didn't have.
-
-**S3 access logging**: the blobstore bucket now delivers its own server
-access logs into the ALB's log bucket (`alb.tf`'s `aws_s3_bucket.alb_logs`,
-under a `s3/` prefix) — same SSE-S3-only, same-region, same-account
-constraints as ALB access logging, so one bucket serves both rather than a
-second bucket standing up to hold nothing but a different prefix.
-
-**Production-readiness pass** (on top of everything above):
-
-- **RDS**: `aws_db_parameter_group.this` now sets `log_min_duration_statement`
-  (1000ms), `log_connections`, `log_disconnections`, `log_lock_waits` — the
-  `enabled_cloudwatch_logs_exports = ["postgresql"]` export otherwise ships an
-  empty log, since none of Postgres' own logging GUCs default to on.
-  `ca_cert_identifier` is pinned to `rds-ca-rsa2048-g1` rather than left at
-  whatever the account default is — RDS has rotated that default before, and
-  `secrets.tf`'s `sslmode=verify-full` needs the CA bundle an operator
-  downloaded (README step 4) to actually recognize the server's certificate.
-- **ElastiCache**: `final_snapshot_identifier` (ElastiCache has no
-  `deletion_protection` flag the way RDS does) plus a Terraform-level
-  `lifecycle { prevent_destroy = true }` as the closest available guard
-  against an accidental `terraform destroy`.
-- **EFS and S3 blobstore**: same `prevent_destroy` reasoning — neither has an
-  AWS-native deletion-protection flag, only Terraform's own.
-- **ECS containers**: every one of `api`/`worker`/`web` now sets
-  `linuxParameters.capabilities.drop = ["ALL"]` — none of the three images
-  needs any Linux capability (the Go binaries are non-root, statically
-  linked, zero cgo; nginx-unprivileged already runs capability-free), and
-  Fargate's own restrictions (no privileged mode, no capability additions
-  beyond `CAP_SYS_PTRACE`) mean this only narrows further, never conflicts.
-- **WAF**: see "WAF rollout" above.
-
-**Deliberately not done**:
-
-- **GuardDuty.** VPC Flow Logs (`network.tf`) and the WAF logs above are raw
-  signal, not analysis — nothing in this stack currently looks at either for
-  an actual threat pattern. GuardDuty is the service that does (it consumes
-  Flow Logs, DNS logs, and CloudTrail directly, no VPC placement needed),
-  and it would put those Flow Logs added this round to first use. Not
-  enabled here because it's a new account/region-level service with its own
-  ongoing per-GB-analyzed billing — an operator's own opt-in, not a default
-  this stack picks silently the way a resource-level Terraform tweak can.
-- **Network ACLs.** Left at the account default (allow all), on purpose —
-  every security group in `network.tf` is already scoped to exactly the
-  traffic each resource needs; a NACL adds a second, stateless enforcement
-  layer on top with its own rule-numbering and return-traffic bookkeeping to
-  keep in sync by hand, for marginal incremental narrowing over what the
-  SGs already refuse. A real add for a compliance mandate that specifically
-  asks for defense-in-depth at the subnet layer, not a default.
-- **Shield Advanced.** Metered per-month L3/L4 DDoS option with a
-  cost-protection SLA; left for an operator whose threat model calls for it.
-  WAF Bot Control is available behind `enable_waf_bot_control` (off by
-  default, also metered).
-- **Credential rotation** for `owner_dsn`/`app_dsn`. Parameter Store has no
-  managed rotation, and Secrets Manager's canned single-user rotation
-  templates rotate a JSON secret shaped `{host, username, password, ...}`,
-  not the DSN URL strings the app consumes, so either path needs a custom
-  rotation Lambda. The blobstore IAM user's access key
-  (`s3.tf`) has the same gap for the same underlying reason: no native
-  rotation for a long-lived IAM access key, and the blobstore client
-  (`credentials.NewStaticV4`) has no path to assume a role instead. Writing
-  and maintaining that Lambda (or a scheduled key-rotation script) is real
-  software this reference stack doesn't ship — a `status: needs-decision`
-  item for whoever owns this fork, not an oversight.
-- **Remote state.** State holds every `random_password` result in plain
-  text. `versions.tf` requires the S3 backend (`backend.hcl`), so the stack
-  does not run on local state. Restrict the state bucket to deployment
-  identities; that bucket is the operator's own and this stack cannot create
-  it for them.
-- **3-AZ spread.** `az_count` defaults to 2, matching RDS Multi-AZ's own
-  standby model (one standby, not two) and ElastiCache's `num_cache_clusters
-  = 2` — raising it spreads ECS tasks across a third AZ (surviving a full-AZ
-  outage with more headroom) at the cost of a third NAT gateway. A capacity
-  and cost decision for the operator, not a default this stack picks. Bumping
-  it is untested against this stack's own ALB target-group/subnet wiring —
-  verify it before relying on it, not just before applying it.
-
-**Cache engine**: `elasticache.tf` runs Valkey (`engine = "valkey"`,
-`engine_version = var.cache_engine_version`, default `"7.2"`, parameter
-group family `valkey7`), not Redis OSS. 7.2 rather than the newest Valkey
-keeps every environment on the Redis 7.2 protocol series: dev runs
-`redis:7.2` and the Azure stacks run Redis 7.2, and ElastiCache offers no
-Redis OSS 7.2 (it stops at 7.1), while Valkey 7.2 is the Redis 7.2 fork.
-Valkey is a fresh create, not an in-place engine conversion, so none of the
-harder Redis-to-Valkey upgrade-path issues apply. AWS's own new ElastiCache
-capability (vector search, durability modes) lands on Valkey going forward;
-Redis OSS 7.1 is the last version on a shared roadmap. Every "redis" name
-elsewhere in this stack (the security group, the subnet group, secret names)
-still correctly names the protocol this thing speaks, not the engine binary —
-see `elasticache.tf`'s own comment.
-
-**Alerting, on by default** (`alarms.tf`, `var.enable_alarms = true`): one
-SNS topic encrypted with the stack CMK (`alerts_topic_arn` output), paged on
-ALARM and OK by:
-
-| Area | Alarm |
-|---|---|
-| ALB | `HTTPCode_ELB_5XX_Count` and `HTTPCode_Target_5XX_Count` over `alarm_alb_5xx_threshold` per 5 min; `UnHealthyHostCount > 0` for 3 min on the api and web target groups; `TargetResponseTime` p95 over `alarm_alb_p95_latency_seconds` for 15 min |
-| ECS | `CPUUtilization` and `MemoryUtilization` > 85% for 15 min on api, worker, web |
-| RDS | `FreeStorageSpace` under 5% of the initial allocation; `CPUUtilization` > 85%; `DatabaseConnections` over `alarm_rds_max_connections`; `CPUCreditBalance` < 20 (burstable classes only) |
-| ElastiCache | per node: `DatabaseMemoryUsagePercentage` > 80%, `EngineCPUUtilization` > 80%, `CPUCreditBalance` < 20 (burstable only) |
-| WAF | `BlockedRequests` (Rule=ALL) over `alarm_waf_blocked_requests_threshold` per 5 min; quiet while `waf_mode = "count"` |
-
-Set `alert_email` for an email subscription (AWS sends a confirmation mail;
-nothing is delivered until it is clicked), or subscribe your own endpoint:
-`aws sns subscribe --topic-arn "$(terraform output -raw alerts_topic_arn)" --protocol https --notification-endpoint ...`.
-Thresholds are starting points, not tuned values. Traffic-driven alarms treat
-missing data as OK; RDS storage and CPU credits treat it as breaching.
-
-**S3 SSE-KMS enforcement**: `s3.tf`'s bucket policy denies any `PutObject`
-that isn't `aws:kms`-encrypted under this stack's own key
-(`MARGINCE_BLOBSTORE_KMS_KEY_ID`, wired in `ecs.tf`) — paired with the Go
-change in `backend/internal/platform/blobstore/s3.go` that sends the
-matching SSE-KMS header on every write. Both sides shipped together;
-landing the policy alone would have refused every upload the app makes.
-
-**S3 versioning** is enabled with a 90-day noncurrent-version expiry, so an
-accidental delete/overwrite on this CRM's attachment store is recoverable.
-
-**Left out, deliberately** (see the [shared README](../README.md)): S3
-Object Lock / MFA delete, autoscaling beyond a fixed desired count,
-multi-region/HA, and DR runbooks. Each is a real option, not a gap this stack
-missed — they cost something (a stricter retention posture, a chosen RPO/RTO)
-that belongs to a deployment decision rather than a default.
+```bash
+cd deploy/production/aws/standard
+terraform init -backend=false
+terraform validate
+terraform test          # offline plan checks with mocked providers (tests/)
+```

@@ -15,22 +15,12 @@ mock_provider "aws" {
 
 mock_provider "random" {}
 
-# The web ACL's capacity is known only after apply; pin the estimate so the
-# waf_capacity_within_included check can run at plan time.
-override_resource {
-  target          = aws_wafv2_web_acl.alb
-  override_during = plan
-  values = {
-    capacity = 1405
-    arn      = "arn:aws:wafv2:eu-central-1:123456789012:regional/webacl/margince-waf/00000000-0000-0000-0000-000000000000"
-  }
-}
-
 variables {
   public_base_url          = "https://crm.example.com"
   release_version          = "v0.1.0"
   admin_bootstrap_password = "test-only-password-not-real"
   acm_certificate_arn      = "arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+  license_token            = "test-licence"
 }
 
 run "fixes_hold" {
@@ -51,7 +41,7 @@ run "fixes_hold" {
   }
 
   assert {
-    condition     = var.db_engine_version == "16"
+    condition     = aws_db_instance.this.engine_version == "16"
     error_message = "Postgres must be pinned to the major version only."
   }
 
@@ -104,7 +94,7 @@ run "defaults_plan" {
       "RateLimitAuthPaths",
       "RateLimitPerIP",
     ])
-    error_message = "Unexpected default WAF rule set (geo and Bot Control must be off by default)."
+    error_message = "Unexpected WAF rule set: six managed rule groups and two rate rules."
   }
 
   assert {
@@ -124,7 +114,7 @@ run "defaults_plan" {
 
   assert {
     condition     = aws_cloudwatch_log_group.waf.name == "aws-waf-logs-margince" && aws_cloudwatch_log_group.waf.retention_in_days == 30
-    error_message = "WAF log group must carry the aws-waf-logs- prefix and default 30-day retention."
+    error_message = "WAF log group must carry the aws-waf-logs- prefix and 30-day retention."
   }
 
   assert {
@@ -133,39 +123,32 @@ run "defaults_plan" {
         aws_ssm_parameter.owner_dsn, aws_ssm_parameter.app_dsn, aws_ssm_parameter.redis_password,
         aws_ssm_parameter.keyvault_root_key, aws_ssm_parameter.webhook_key, aws_ssm_parameter.connector_state_key,
         aws_ssm_parameter.admin_password, aws_ssm_parameter.blobstore_access_key, aws_ssm_parameter.blobstore_secret_key,
-        aws_ssm_parameter.rds_master_password,
+        aws_ssm_parameter.rds_master_password, aws_ssm_parameter.license,
       ] : p.type == "SecureString" && p.tier == "Standard" && startswith(p.name, "/margince/")
     ])
     error_message = "Every credential must be a Standard-tier SecureString under /<name_prefix>/."
   }
 
   assert {
-    condition     = length(aws_ssm_parameter.license) == 0
-    error_message = "No license parameter when license_token is empty (SSM refuses empty values)."
-  }
-
-  assert {
     condition = (
-      length(aws_sns_topic.alerts) == 1 &&
       length(aws_sns_topic_subscription.alert_email) == 0 &&
-      length(aws_cloudwatch_metric_alarm.alb_elb_5xx) == 1 &&
-      length(aws_cloudwatch_metric_alarm.alb_target_5xx) == 1 &&
+      aws_cloudwatch_metric_alarm.alb_elb_5xx.threshold == 25 &&
+      aws_cloudwatch_metric_alarm.alb_target_5xx.threshold == 25 &&
       length(aws_cloudwatch_metric_alarm.alb_unhealthy_hosts) == 2 &&
-      length(aws_cloudwatch_metric_alarm.alb_p95_latency) == 1 &&
+      aws_cloudwatch_metric_alarm.alb_p95_latency.threshold == 2 &&
       length(aws_cloudwatch_metric_alarm.ecs_cpu) == 3 &&
       length(aws_cloudwatch_metric_alarm.ecs_memory) == 3 &&
-      length(aws_cloudwatch_metric_alarm.rds_free_storage) == 1 &&
-      length(aws_cloudwatch_metric_alarm.rds_cpu) == 1 &&
-      length(aws_cloudwatch_metric_alarm.rds_connections) == 1 &&
+      aws_cloudwatch_metric_alarm.rds_connections.threshold == 320 &&
+      length(aws_cloudwatch_metric_alarm.rds_cpu_credit_balance) == 1 &&
       length(aws_cloudwatch_metric_alarm.redis_memory) == 2 &&
       length(aws_cloudwatch_metric_alarm.redis_engine_cpu) == 2 &&
-      length(aws_cloudwatch_metric_alarm.waf_blocked_requests) == 1
+      aws_cloudwatch_metric_alarm.waf_blocked_requests.threshold == 500
     )
-    error_message = "Baseline alarms and the SNS topic must exist by default, with no email subscription unless alert_email is set."
+    error_message = "Baseline alarms must always exist, with no email subscription unless alert_email is set."
   }
 
   assert {
-    condition     = aws_cloudwatch_metric_alarm.waf_blocked_requests[0].dimensions["Rule"] == "ALL" && aws_cloudwatch_metric_alarm.waf_blocked_requests[0].namespace == "AWS/WAFV2"
+    condition     = aws_cloudwatch_metric_alarm.waf_blocked_requests.dimensions["Rule"] == "ALL" && aws_cloudwatch_metric_alarm.waf_blocked_requests.namespace == "AWS/WAFV2"
     error_message = "WAF blocked-requests alarm must watch the web-ACL-wide aggregate."
   }
 
@@ -209,24 +192,24 @@ run "defaults_encryption_and_wiring" {
         aws_ssm_parameter.owner_dsn, aws_ssm_parameter.app_dsn, aws_ssm_parameter.redis_password,
         aws_ssm_parameter.keyvault_root_key, aws_ssm_parameter.webhook_key, aws_ssm_parameter.connector_state_key,
         aws_ssm_parameter.admin_password, aws_ssm_parameter.blobstore_access_key, aws_ssm_parameter.blobstore_secret_key,
-        aws_ssm_parameter.rds_master_password,
+        aws_ssm_parameter.rds_master_password, aws_ssm_parameter.license,
       ] : p.key_id == aws_kms_key.data.arn
     ])
     error_message = "Every SSM parameter must be encrypted with the stack CMK."
   }
 
   assert {
-    condition     = aws_cloudwatch_log_group.waf.kms_key_id == aws_kms_key.data.arn && aws_sns_topic.alerts[0].kms_master_key_id == aws_kms_key.data.arn
+    condition     = aws_cloudwatch_log_group.waf.kms_key_id == aws_kms_key.data.arn && aws_sns_topic.alerts.kms_master_key_id == aws_kms_key.data.arn
     error_message = "WAF log group and SNS alert topic must be encrypted with the stack CMK."
   }
 
   assert {
     condition = (
-      length(local.shared_secrets) == 9 &&
+      length(local.shared_secrets) == 10 &&
       anytrue([for s in local.shared_secrets : s.name == "MARGINCE_OWNER_DSN" && s.valueFrom == aws_ssm_parameter.owner_dsn.arn]) &&
-      !contains(keys(local.task_ssm_parameters), "MARGINCE_LICENSE")
+      contains(keys(local.task_ssm_parameters), "MARGINCE_LICENSE")
     )
-    error_message = "Task secrets must be the 9 task SSM parameters (no license when unset); the RDS master password is never one of them."
+    error_message = "Task secrets must be the 10 task SSM parameters; the RDS master password is never one of them."
   }
 }
 
@@ -335,15 +318,12 @@ run "long_name_prefix_is_refused" {
   expect_failures = [var.name_prefix]
 }
 
-run "block_mode_and_options" {
+run "block_mode_and_alert_email" {
   command = plan
 
   variables {
-    waf_mode                  = "block"
-    enable_waf_bot_control    = true
-    waf_allowed_country_codes = ["DE", "AT"]
-    alert_email               = "ops@example.com"
-    license_token             = "lic-test"
+    waf_mode    = "block"
+    alert_email = "ops@example.com"
   }
 
   override_resource {
@@ -373,46 +353,14 @@ run "block_mode_and_options" {
   }
 
   assert {
-    condition     = length(aws_wafv2_web_acl.alb.rule) == 10
-    error_message = "Geo allow-list and Bot Control rules must be added when enabled."
-  }
-
-  assert {
     condition     = length(aws_wafv2_web_acl_logging_configuration.alb.logging_filter) == 1
     error_message = "Block mode drops plain ALLOW records from WAF logs."
   }
 
   assert {
-    condition     = length(aws_sns_topic_subscription.alert_email) == 1 && length(aws_ssm_parameter.license) == 1
-    error_message = "alert_email subscribes; a license token creates its parameter."
+    condition     = length(aws_sns_topic_subscription.alert_email) == 1
+    error_message = "alert_email subscribes to the alerts topic."
   }
-}
-
-run "alarms_off" {
-  command = plan
-
-  variables {
-    enable_alarms = false
-  }
-
-  override_resource {
-    target          = aws_security_group.ops
-    override_during = plan
-    values          = { id = "sg-0ops0000000000000" }
-  }
-
-  assert {
-    condition     = length(aws_sns_topic.alerts) == 0 && length(aws_cloudwatch_metric_alarm.alb_elb_5xx) == 0 && length(aws_cloudwatch_metric_alarm.ecs_cpu) == 0
-    error_message = "enable_alarms = false removes the topic and alarms."
-  }
-}
-
-run "removed_variable_is_refused" {
-  command = plan
-  variables {
-    enable_deep_monitoring = true
-  }
-  expect_failures = [var.enable_deep_monitoring]
 }
 
 run "images_follow_the_release_naming" {
@@ -484,12 +432,12 @@ run "release_version_must_be_a_release" {
   expect_failures = [var.release_version]
 }
 
-run "removed_image_tag_is_refused" {
+run "missing_licence_is_refused" {
   command = plan
   variables {
-    image_tag = "v0.1.0"
+    license_token = ""
   }
-  expect_failures = [var.image_tag]
+  expect_failures = [var.license_token]
 }
 
 run "security_group_and_iam_descriptions_are_ascii" {

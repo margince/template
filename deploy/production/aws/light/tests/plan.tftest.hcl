@@ -63,21 +63,12 @@ run "single_ubuntu_instance" {
 run "arm64" {
   command = plan
   variables {
-    cpu_architecture = "arm64"
-    instance_type    = "t4g.large"
+    instance_type = "t4g.large"
   }
   assert {
     condition     = strcontains(data.aws_ssm_parameter.ubuntu.name, "/current/arm64/")
-    error_message = "arm64 picks the arm64 AMI."
+    error_message = "A Graviton instance type picks the arm64 AMI."
   }
-}
-
-run "architecture_mismatch_refused" {
-  command = plan
-  variables {
-    instance_type = "t4g.large"
-  }
-  expect_failures = [var.instance_type]
 }
 
 run "firewall" {
@@ -141,14 +132,14 @@ run "cloud_init" {
   }
 }
 
-run "backup_and_alarms_default_on" {
+run "backup_and_alarms" {
   command = plan
   assert {
-    condition     = length(aws_dlm_lifecycle_policy.daily) == 1 && aws_dlm_lifecycle_policy.daily[0].policy_details[0].schedule[0].retain_rule[0].count == 7
-    error_message = "Daily snapshots with 7 kept are on by default."
+    condition     = aws_dlm_lifecycle_policy.daily.state == "ENABLED" && aws_dlm_lifecycle_policy.daily.policy_details[0].schedule[0].retain_rule[0].count == 7
+    error_message = "Daily snapshots, 7 kept."
   }
   assert {
-    condition     = aws_dlm_lifecycle_policy.daily[0].policy_details[0].target_tags["Backup"] == "margince-light-daily" && length(aws_dlm_lifecycle_policy.daily[0].policy_details[0].target_tags) == 1
+    condition     = aws_dlm_lifecycle_policy.daily.policy_details[0].target_tags["Backup"] == "margince-light-daily" && length(aws_dlm_lifecycle_policy.daily.policy_details[0].target_tags) == 1
     error_message = "The snapshots select the volumes tagged Backup = <name_prefix>-daily."
   }
   assert {
@@ -156,32 +147,16 @@ run "backup_and_alarms_default_on" {
     error_message = "The data volume and the root volume carry the backup tag."
   }
   assert {
-    condition     = length(aws_cloudwatch_metric_alarm.system_status_check_failed) == 1 && length(aws_cloudwatch_metric_alarm.instance_status_check_failed) == 1 && length(aws_cloudwatch_metric_alarm.cpu_high) == 1
-    error_message = "The alarms are on by default."
-  }
-  assert {
-    condition     = aws_cloudwatch_metric_alarm.cpu_high[0].threshold == 90 && aws_cloudwatch_metric_alarm.cpu_high[0].period * aws_cloudwatch_metric_alarm.cpu_high[0].evaluation_periods == 900
+    condition     = aws_cloudwatch_metric_alarm.cpu_high.threshold == 90 && aws_cloudwatch_metric_alarm.cpu_high.period * aws_cloudwatch_metric_alarm.cpu_high.evaluation_periods == 900
     error_message = "CPU alarm: over 90% for 15 minutes."
   }
   assert {
-    condition     = aws_cloudwatch_metric_alarm.instance_status_check_failed[0].period * aws_cloudwatch_metric_alarm.instance_status_check_failed[0].evaluation_periods == 300
+    condition     = aws_cloudwatch_metric_alarm.instance_status_check_failed.period * aws_cloudwatch_metric_alarm.instance_status_check_failed.evaluation_periods == 300
     error_message = "Instance status alarm: failed for 5 minutes."
   }
   assert {
-    condition     = contains(aws_cloudwatch_metric_alarm.system_status_check_failed[0].alarm_actions, "arn:aws:automate:eu-central-1:ec2:recover")
+    condition     = contains(aws_cloudwatch_metric_alarm.system_status_check_failed.alarm_actions, "arn:aws:automate:eu-central-1:ec2:recover")
     error_message = "The system status alarm recovers the instance."
-  }
-}
-
-run "backup_and_alarms_off" {
-  command = plan
-  variables {
-    enable_backup = false
-    enable_alarms = false
-  }
-  assert {
-    condition     = length(aws_dlm_lifecycle_policy.daily) == 0 && length(aws_iam_role.dlm) == 0 && length(aws_sns_topic.alerts) == 0
-    error_message = "enable_backup and enable_alarms turn the resources off."
   }
 }
 
@@ -231,44 +206,15 @@ run "empty_ssh_allowed_cidrs_refused" {
 run "ssh_from_anywhere_refused" {
   command = plan
   variables {
-    ssh_allowed_cidrs = ["0.0.0.0/0"]
+    ssh_allowed_cidrs = ["203.0.113.10/32", "0.0.0.0/0"]
   }
   expect_failures = [var.ssh_allowed_cidrs]
 }
 
-run "ssh_from_anywhere_explicit" {
+run "ssh_from_anywhere_ipv6_refused" {
   command = plan
   variables {
-    ssh_allowed_cidrs       = ["0.0.0.0/0"]
-    allow_ssh_from_anywhere = true
+    ssh_allowed_cidrs = ["::/0"]
   }
-  assert {
-    condition     = [for r in aws_vpc_security_group_ingress_rule.ssh : r.cidr_ipv4] == ["0.0.0.0/0"]
-    error_message = "allow_ssh_from_anywhere opens SSH on purpose."
-  }
-}
-
-run "removed_variables_refused" {
-  command = plan
-  variables {
-    aws_region      = "eu-central-1"
-    public_base_url = "https://crm.example.com"
-    image_tag       = "v0.1.0"
-    # Removed variable, set only to prove the plan refuses it; not a credential.
-    admin_bootstrap_password = "not-real" # gitleaks:allow
-    margince_source_dir      = "../margince"
-    enable_waf               = true
-    enable_deep_monitoring   = true
-    db_instance_class        = "db.t4g.micro"
-  }
-  expect_failures = [
-    var.aws_region,
-    var.public_base_url,
-    var.image_tag,
-    var.admin_bootstrap_password,
-    var.margince_source_dir,
-    var.enable_waf,
-    var.enable_deep_monitoring,
-    var.db_instance_class,
-  ]
+  expect_failures = [var.ssh_allowed_cidrs]
 }

@@ -8,14 +8,20 @@ resource "random_string" "suffix" {
 }
 
 locals {
-  suffix        = random_string.suffix.result
-  global_prefix = "${var.name_prefix}-${local.suffix}"
+  global_prefix = "${var.name_prefix}-${random_string.suffix.result}"
+
+  # Fixed settings. Change them here if you really need to.
+  resource_group_name = "${var.name_prefix}-light"
+  vnet_cidr           = "10.30.0.0/16"
+  admin_username      = "azureadmin" # passwordless sudo, which make host-bootstrap needs
+  os_disk_gb          = 30
+  data_disk_type      = "StandardSSD_LRS"
 
   common_tags = {
-    Project     = "margince"
-    Flavour     = "light"
-    Environment = var.environment
-    ManagedBy   = "terraform"
+    Project   = "margince"
+    Flavour   = "light"
+    Stack     = var.name_prefix
+    ManagedBy = "terraform"
   }
 
   public_base_url = "https://${var.domain}"

@@ -26,9 +26,10 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = "margince"
-      ManagedBy   = "terraform"
-      Environment = var.environment
+      Project   = "margince"
+      Flavour   = "standard"
+      ManagedBy = "terraform"
+      Stack     = var.name_prefix
     }
   }
 }

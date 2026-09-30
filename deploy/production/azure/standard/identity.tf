@@ -7,10 +7,9 @@
 # storage account key, not an identity, so no storage-mount role is granted.
 
 resource "azurerm_user_assigned_identity" "data_cmk" {
-  # Shared by the Storage Account (storage.tf), Postgres Flexible Server
-  # (postgres.tf) and ACR (acr.tf) customer_managed_key/encryption blocks.
-  # One key, one identity: all three only wrap/unwrap under this stack's
-  # single data key, so none needs a separate privilege.
+  # Shared by the Storage Account (storage.tf) and Postgres Flexible Server
+  # (postgres.tf) customer_managed_key blocks. One key, one identity: both
+  # only wrap/unwrap under this stack's single data key.
   name                = "${var.name_prefix}-data-cmk"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name

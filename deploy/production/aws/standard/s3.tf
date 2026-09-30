@@ -150,11 +150,10 @@ resource "aws_s3_bucket_policy" "blobstore_tls_only" {
         # The bucket default (apply_server_side_encryption_by_default, above)
         # does not stop an explicit request from overriding it — S3 honors
         # whatever encryption header a PutObject carries over the bucket's
-        # default. backend/internal/platform/blobstore/s3.go now sends
+        # default. backend/internal/platform/blobstore/s3.go sends
         # ServerSideEncryption: encrypt.NewSSEKMS(keyID, nil) on every write
-        # (MARGINCE_BLOBSTORE_KMS_KEY_ID, ecs.tf), so this deny can land
-        # without refusing the app's own uploads — the invariant's other
-        # writer. Denies AES256 and any KMS key that isn't this stack's own.
+        # (MARGINCE_BLOBSTORE_KMS_KEY_ID, ecs.tf), so the app's own uploads
+        # pass. Denies AES256 and any KMS key that isn't this stack's own.
         Sid       = "DenyWrongEncryption"
         Effect    = "Deny"
         Principal = "*"
@@ -217,7 +216,7 @@ resource "aws_iam_user_policy" "blobstore" {
         # encrypted under. Without this, every GetObject/PutObject the
         # blobstore client makes fails.
         #
-        # kms:DescribeKey specifically: blobstore/s3.go's PutObject now names
+        # kms:DescribeKey specifically: blobstore/s3.go's PutObject names
         # this key explicitly (x-amz-server-side-encryption-aws-kms-key-id,
         # required by s3.tf's DenyWrongKMSKey below) rather than relying on
         # the bucket's implicit default encryption — S3 validates the named

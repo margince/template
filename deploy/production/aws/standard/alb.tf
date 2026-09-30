@@ -301,28 +301,32 @@ resource "aws_lb_listener_rule" "api_mcp_oauth" {
 # "WAF rollout" has the queries to run.
 #
 # Priority order (lower runs first):
-#    0  GeoAllowList            only when waf_allowed_country_codes is set
 #   10  AmazonIpReputationList  known-malicious sources, before anything else
-#   20  RateLimitAuthPaths      stricter per-IP bound on credential endpoints
-#   30  RateLimitPerIP          global per-IP bound, webhooks excluded
+#   20  RateLimitAuthPaths      100 per IP per 5 minutes on credential endpoints
+#   30  RateLimitPerIP          2000 per IP per 5 minutes, webhooks excluded
 #   40  AnonymousIpList         ALWAYS count-only: VPN/Tor/hosting-provider
 #                               labels for the logs, real users use VPNs
 #   50  CommonRuleSet           SizeRestrictions_BODY always count
 #   60  KnownBadInputsRuleSet
 #   70  SQLiRuleSet
 #   80  LinuxRuleSet            the api/worker images are Linux (LFI etc.)
-#   90  BotControlRuleSet       only when enable_waf_bot_control
 #
-# WCU budget: about 1400 without Bot Control, about 1450 with it; the
-# included allowance is 1500 WCU per web ACL (verify against current AWS WAF
-# pricing before adding more rule groups).
+# About 1,405 WCU, inside the 1,500 included in the web ACL price (each
+# further 500 WCU adds a per-request charge). Check AWS's figure before
+# adding a rule group.
 
 locals {
   # Exactly the paths the api_webhooks listener rule forwards. Provider
   # webhook traffic (Google, Microsoft Graph, HubSpot) is HMAC-verified by
   # the api and arrives in bursts from shared provider IPs, so it is exempt
-  # from the per-IP global rate limit and from the geo allow-list.
+  # from the per-IP global rate limit.
   webhook_paths = ["/webhooks/gmail", "/webhooks/graph", "/webhooks/hubspot"]
+
+  # The api's credential-accepting endpoints (identity module middleware), the
+  # same list as the Azure stack: password login, forgot/reset password, OAuth
+  # token and dynamic client registration. An optional trailing slash is
+  # matched too.
+  waf_auth_paths = ["/v1/auth/login", "/v1/auth/forgot-password", "/v1/auth/reset-password", "/oauth/token", "/oauth/register"]
 
   waf_block = var.waf_mode == "block"
 
@@ -330,7 +334,7 @@ locals {
   # fewer WCUs than an or_statement of byte matches, each with its own
   # text transformation.
   waf_webhook_regex = "^(${join("|", [for p in local.webhook_paths : replace(p, "/[.+*?^$(){}|\\[\\]\\\\]/", "\\$0")])})$"
-  waf_auth_regex    = "^(${join("|", [for p in var.waf_auth_paths : replace(p, "/[.+*?^$(){}|\\[\\]\\\\]/", "\\$0")])})/?$"
+  waf_auth_regex    = "^(${join("|", [for p in local.waf_auth_paths : replace(p, "/[.+*?^$(){}|\\[\\]\\\\]/", "\\$0")])})/?$"
 
   waf_managed_rule_groups = [
     { name = "AWSManagedRulesAmazonIpReputationList", priority = 10, metric = "ip-reputation", count_only = false, count_rules = [] },
@@ -352,65 +356,11 @@ locals {
 
 resource "aws_wafv2_web_acl" "alb" {
   name        = "${var.name_prefix}-alb"
-  description = "Managed-rule, rate-limit and optional geo protection for the ${var.name_prefix} public ALB (mode: ${var.waf_mode})"
+  description = "Managed-rule and rate-limit protection for the ${var.name_prefix} public ALB (mode: ${var.waf_mode})"
   scope       = "REGIONAL"
 
   default_action {
     allow {}
-  }
-
-  # Block (or count) anything from outside the allowed countries, except the
-  # provider webhook paths.
-  dynamic "rule" {
-    for_each = length(var.waf_allowed_country_codes) > 0 ? [1] : []
-    content {
-      name     = "GeoAllowList"
-      priority = 0
-      action {
-        dynamic "block" {
-          for_each = local.waf_block ? [1] : []
-          content {}
-        }
-        dynamic "count" {
-          for_each = local.waf_block ? [] : [1]
-          content {}
-        }
-      }
-      statement {
-        and_statement {
-          statement {
-            not_statement {
-              statement {
-                geo_match_statement {
-                  country_codes = var.waf_allowed_country_codes
-                }
-              }
-            }
-          }
-          statement {
-            not_statement {
-              statement {
-                regex_match_statement {
-                  regex_string = local.waf_webhook_regex
-                  field_to_match {
-                    uri_path {}
-                  }
-                  text_transformation {
-                    priority = 0
-                    type     = "NONE"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-      visibility_config {
-        cloudwatch_metrics_enabled = true
-        sampled_requests_enabled   = true
-        metric_name                = "${var.name_prefix}-geo-allow-list"
-      }
-    }
   }
 
   dynamic "rule" {
@@ -477,7 +427,7 @@ resource "aws_wafv2_web_acl" "alb" {
     }
     statement {
       rate_based_statement {
-        limit              = var.waf_auth_rate_limit_per_ip
+        limit              = 100
         aggregate_key_type = "IP"
         scope_down_statement {
           regex_match_statement {
@@ -500,7 +450,7 @@ resource "aws_wafv2_web_acl" "alb" {
     }
   }
 
-  # Global per-IP bound (default 2000 per 5-minute window): generous for a
+  # Global per-IP bound (2000 per 5-minute window): generous for a
   # real user driving the SPA, tight enough to bound one client hammering the
   # api. The scope-down EXCLUDES the exact webhook paths. No text
   # transformation there on purpose: an encoded webhook path simply fails
@@ -525,7 +475,7 @@ resource "aws_wafv2_web_acl" "alb" {
     }
     statement {
       rate_based_statement {
-        limit              = var.waf_rate_limit_per_ip
+        limit              = 2000
         aggregate_key_type = "IP"
         scope_down_statement {
           not_statement {
@@ -552,72 +502,6 @@ resource "aws_wafv2_web_acl" "alb" {
     }
   }
 
-  # Optional, metered. Webhook paths are scoped out (provider callers are
-  # HTTP libraries by definition), and CategoryHttpLibrary plus
-  # SignalNonBrowserUserAgent are counted in both modes: MCP clients, OAuth
-  # clients and API scripts are legitimate non-browser traffic to this api.
-  dynamic "rule" {
-    for_each = var.enable_waf_bot_control ? [1] : []
-    content {
-      name     = "AWS-AWSManagedRulesBotControlRuleSet"
-      priority = 90
-      override_action {
-        dynamic "none" {
-          for_each = local.waf_block ? [1] : []
-          content {}
-        }
-        dynamic "count" {
-          for_each = local.waf_block ? [] : [1]
-          content {}
-        }
-      }
-      statement {
-        managed_rule_group_statement {
-          name        = "AWSManagedRulesBotControlRuleSet"
-          vendor_name = "AWS"
-          managed_rule_group_configs {
-            aws_managed_rules_bot_control_rule_set {
-              inspection_level = "COMMON"
-            }
-          }
-          rule_action_override {
-            name = "CategoryHttpLibrary"
-            action_to_use {
-              count {}
-            }
-          }
-          rule_action_override {
-            name = "SignalNonBrowserUserAgent"
-            action_to_use {
-              count {}
-            }
-          }
-          scope_down_statement {
-            not_statement {
-              statement {
-                regex_match_statement {
-                  regex_string = local.waf_webhook_regex
-                  field_to_match {
-                    uri_path {}
-                  }
-                  text_transformation {
-                    priority = 0
-                    type     = "NONE"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-      visibility_config {
-        cloudwatch_metrics_enabled = true
-        sampled_requests_enabled   = true
-        metric_name                = "${var.name_prefix}-bot-control"
-      }
-    }
-  }
-
   visibility_config {
     cloudwatch_metrics_enabled = true
     sampled_requests_enabled   = true
@@ -638,7 +522,7 @@ resource "aws_wafv2_web_acl_association" "alb" {
 # group's ARN by encryption context) is what lets CloudWatch Logs use the key.
 resource "aws_cloudwatch_log_group" "waf" {
   name              = local.waf_log_group_name
-  retention_in_days = var.waf_log_retention_days
+  retention_in_days = 30
   kms_key_id        = aws_kms_key.data.arn
   tags              = { Name = "${var.name_prefix}-waf-logs", Component = "observability" }
 }
@@ -695,17 +579,5 @@ resource "aws_wafv2_web_acl_logging_configuration" "alb" {
         }
       }
     }
-  }
-}
-
-# Rule groups and rules cost WAF capacity units (WCU). Up to 1,500 WCU is
-# included in the web ACL price; each further 500 WCU adds a per-request
-# charge (limit 5,000). Estimated from AWS's published costs: about 1,405 WCU
-# by default, about 1,482 with the geo allow-list and Bot Control. AWS
-# reports the real value after apply; this check warns when it passes 1,500.
-check "waf_capacity_within_included" {
-  assert {
-    condition     = aws_wafv2_web_acl.alb.capacity <= 1500
-    error_message = "The WAF web ACL uses ${aws_wafv2_web_acl.alb.capacity} WCU, above the 1,500 included in its price; requests are billed at a higher rate. Drop a rule group (for example AWSManagedRulesLinuxRuleSet, 200 WCU) to get back under."
   }
 }

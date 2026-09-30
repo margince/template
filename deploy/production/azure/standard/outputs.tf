@@ -14,7 +14,7 @@ output "environment_static_ip" {
 }
 
 output "public_certificate_secret_id" {
-  description = "Key Vault secret ID the Application Gateway reads its TLS certificate from. Import the certificate under public_certificate_name (README.md, step 6)."
+  description = "Key Vault secret ID the Application Gateway reads its TLS certificate from. Import the certificate as public-tls (README.md, step 6)."
   value       = local.public_certificate_secret_id
 }
 
@@ -38,7 +38,7 @@ output "entra_client_id" {
 }
 
 output "entra_redirect_uris" {
-  description = "Redirect URIs the app registration must list (set by entra.tf when create_entra_app = true; enter by hand otherwise)."
+  description = "Redirect URIs of the app registration (set by entra.tf)."
   value       = local.entra_redirect_uris
 }
 
@@ -53,10 +53,6 @@ output "dataverse_identity_principal_id" {
 
 output "container_app_environment_name" {
   value = azurerm_container_app_environment.this.name
-}
-
-output "acr_login_server" {
-  value = azurerm_container_registry.this.login_server
 }
 
 output "registry" {
@@ -99,16 +95,15 @@ output "acr_name" {
 }
 
 output "jumpbox_name" {
-  description = "Empty when enable_jumpbox is false."
-  value       = var.enable_jumpbox ? azurerm_linux_virtual_machine.jumpbox[0].name : ""
+  value = azurerm_linux_virtual_machine.jumpbox.name
 }
 
 output "jumpbox_private_ip" {
-  value = var.enable_jumpbox ? azurerm_linux_virtual_machine.jumpbox[0].private_ip_address : ""
+  value = azurerm_linux_virtual_machine.jumpbox.private_ip_address
 }
 
 output "jumpbox_admin_username" {
-  value = var.jumpbox_admin_username
+  value = local.jumpbox_admin_username
 }
 
 # ---- Database bootstrap (README.md step 3) --------------------------------------

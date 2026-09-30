@@ -1,11 +1,10 @@
-# Azure Backup of the VM with its data disk (var.enable_backup, on by
-# default): daily at 02:00 UTC, 7 daily recovery points. Trusted Launch VMs
+# Azure Backup of the VM with its data disk, always on:
+# daily at 02:00 UTC, 7 daily recovery points. Trusted Launch VMs
 # need the Enhanced (V2) policy. versions.tf keeps the recovery points when
 # the VM is replaced or the protection is removed. Soft delete keeps deleted
 # backup data for 14 days, which delays deleting the vault.
 
 resource "azurerm_recovery_services_vault" "this" {
-  count               = var.enable_backup ? 1 : 0
   name                = "${var.name_prefix}-rsv"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
@@ -15,10 +14,9 @@ resource "azurerm_recovery_services_vault" "this" {
 }
 
 resource "azurerm_backup_policy_vm" "daily" {
-  count               = var.enable_backup ? 1 : 0
   name                = "${var.name_prefix}-daily"
   resource_group_name = azurerm_resource_group.this.name
-  recovery_vault_name = azurerm_recovery_services_vault.this[0].name
+  recovery_vault_name = azurerm_recovery_services_vault.this.name
   policy_type         = "V2"
   timezone            = "UTC"
 
@@ -35,11 +33,10 @@ resource "azurerm_backup_policy_vm" "daily" {
 }
 
 resource "azurerm_backup_protected_vm" "this" {
-  count               = var.enable_backup ? 1 : 0
   resource_group_name = azurerm_resource_group.this.name
-  recovery_vault_name = azurerm_recovery_services_vault.this[0].name
+  recovery_vault_name = azurerm_recovery_services_vault.this.name
   source_vm_id        = azurerm_linux_virtual_machine.this.id
-  backup_policy_id    = azurerm_backup_policy_vm.daily[0].id
+  backup_policy_id    = azurerm_backup_policy_vm.daily.id
 
   # The data disk is part of the backup.
   depends_on = [azurerm_virtual_machine_data_disk_attachment.data]

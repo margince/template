@@ -2,8 +2,16 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+locals {
+  vpc_cidr = "10.20.0.0/16"
+
+  # CloudWatch Logs retention for every log group this stack creates, except
+  # the WAF's (alb.tf).
+  log_retention_days = 30
+}
+
 resource "aws_vpc" "this" {
-  cidr_block           = var.vpc_cidr
+  cidr_block           = local.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
 
@@ -18,7 +26,7 @@ resource "aws_vpc" "this" {
 # and got refused" during an incident has no answer at all.
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
   name              = "/vpc-flow-logs/${var.name_prefix}"
-  retention_in_days = var.log_retention_days
+  retention_in_days = local.log_retention_days
   tags              = { Name = "${var.name_prefix}-vpc-flow-logs", Component = "observability" }
 }
 
@@ -96,7 +104,7 @@ resource "aws_internet_gateway" "this" {
 resource "aws_subnet" "public" {
   count                   = var.az_count
   vpc_id                  = aws_vpc.this.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 4, count.index)
+  cidr_block              = cidrsubnet(local.vpc_cidr, 4, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags                    = { Name = "${var.name_prefix}-public-${count.index}" }
@@ -105,7 +113,7 @@ resource "aws_subnet" "public" {
 resource "aws_subnet" "private" {
   count             = var.az_count
   vpc_id            = aws_vpc.this.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 4, var.az_count + count.index)
+  cidr_block        = cidrsubnet(local.vpc_cidr, 4, var.az_count + count.index)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags              = { Name = "${var.name_prefix}-private-${count.index}" }
 }
@@ -195,7 +203,7 @@ resource "aws_security_group" "alb" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = [local.vpc_cidr]
   }
 
   # Explicit rule for the web tasks' own SG (aws_security_group.web below).
@@ -240,7 +248,7 @@ resource "aws_security_group" "ecs_tasks" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [var.vpc_cidr]
+    cidr_blocks = [local.vpc_cidr]
   }
   # 2. Specific ports the app genuinely calls out to the internet for, and
   #    nothing else: HTTPS (AI provider APIs, Nominatim, VIES, crt.sh, OAuth

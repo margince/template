@@ -20,13 +20,10 @@
 
 data "azuread_client_config" "current" {}
 
-data "azuread_application_published_app_ids" "well_known" {
-  count = var.create_entra_app ? 1 : 0
-}
+data "azuread_application_published_app_ids" "well_known" {}
 
 data "azuread_service_principal" "msgraph" {
-  count     = var.create_entra_app ? 1 : 0
-  client_id = data.azuread_application_published_app_ids.well_known[0].result["MicrosoftGraph"]
+  client_id = data.azuread_application_published_app_ids.well_known.result["MicrosoftGraph"]
 }
 
 locals {
@@ -44,28 +41,15 @@ locals {
     "${local.public_base_url}/v1/connectors/graphcal/callback",
   ]
 
-  entra_client_id     = var.create_entra_app ? azuread_application.margince[0].client_id : var.entra_client_id
-  entra_client_secret = var.create_entra_app ? azuread_application_password.margince[0].value : var.entra_client_secret
+  entra_client_id     = azuread_application.margince.client_id
+  entra_client_secret = azuread_application_password.margince.value
   entra_tenant_id     = data.azuread_client_config.current.tenant_id
-}
 
-# Fails the plan, not the first sign-in, when the inputs for the chosen mode
-# are missing.
-resource "terraform_data" "entra_inputs" {
-  lifecycle {
-    precondition {
-      condition     = !var.create_entra_app || length(trimspace(var.entra_access_group_object_id)) > 0
-      error_message = "create_entra_app = true needs entra_access_group_object_id: the security group that already gates the Dataverse environment."
-    }
-    precondition {
-      condition     = var.create_entra_app || (length(trimspace(var.entra_client_id)) > 0 && length(var.entra_client_secret) > 0)
-      error_message = "create_entra_app = false needs entra_client_id and entra_client_secret from the hand-made app registration."
-    }
-  }
+  # The client secret is replaced on the first apply after this many days.
+  entra_secret_rotation_days = 180
 }
 
 resource "azuread_application" "margince" {
-  count            = var.create_entra_app ? 1 : 0
   display_name     = "Margince (${var.name_prefix})"
   owners           = [data.azuread_client_config.current.object_id]
   sign_in_audience = "AzureADMyOrg" # this tenant only
@@ -79,23 +63,20 @@ resource "azuread_application" "margince" {
   }
 
   required_resource_access {
-    resource_app_id = data.azuread_application_published_app_ids.well_known[0].result["MicrosoftGraph"]
+    resource_app_id = data.azuread_application_published_app_ids.well_known.result["MicrosoftGraph"]
 
     dynamic "resource_access" {
       for_each = local.graph_delegated_scopes
       content {
-        id   = data.azuread_service_principal.msgraph[0].oauth2_permission_scope_ids[resource_access.value]
+        id   = data.azuread_service_principal.msgraph.oauth2_permission_scope_ids[resource_access.value]
         type = "Scope"
       }
     }
   }
-
-  depends_on = [terraform_data.entra_inputs]
 }
 
 resource "azuread_service_principal" "margince" {
-  count     = var.create_entra_app ? 1 : 0
-  client_id = azuread_application.margince[0].client_id
+  client_id = azuread_application.margince.client_id
   owners    = [data.azuread_client_config.current.object_id]
 
   # "Assignment required": only principals assigned below (the security group)
@@ -109,27 +90,24 @@ resource "azuread_service_principal" "margince" {
 }
 
 resource "azuread_app_role_assignment" "access_group" {
-  count               = var.create_entra_app ? 1 : 0
   app_role_id         = "00000000-0000-0000-0000-000000000000" # default access, no app roles defined
   principal_object_id = var.entra_access_group_object_id
-  resource_object_id  = azuread_service_principal.margince[0].object_id
+  resource_object_id  = azuread_service_principal.margince.object_id
 }
 
 resource "time_rotating" "entra_secret" {
-  count         = var.create_entra_app ? 1 : 0
-  rotation_days = var.entra_secret_rotation_days
+  rotation_days = local.entra_secret_rotation_days
 }
 
 resource "azuread_application_password" "margince" {
-  count          = var.create_entra_app ? 1 : 0
-  application_id = azuread_application.margince[0].id
+  application_id = azuread_application.margince.id
   display_name   = "terraform (${var.name_prefix})"
   # Valid a little longer than the rotation period, so the apply that rotates
   # it has room to happen late without an outage.
-  end_date_relative = "${(var.entra_secret_rotation_days + 30) * 24}h"
+  end_date_relative = "${(local.entra_secret_rotation_days + 30) * 24}h"
 
   rotate_when_changed = {
-    rotation = time_rotating.entra_secret[0].id
+    rotation = time_rotating.entra_secret.id
   }
 
   # The new secret exists before the old one is removed. Run make deploy
@@ -137,11 +115,4 @@ resource "azuread_application_password" "margince" {
   lifecycle {
     create_before_destroy = true
   }
-}
-
-resource "azuread_service_principal_delegated_permission_grant" "admin_consent" {
-  count                                = var.create_entra_app && var.entra_grant_admin_consent ? 1 : 0
-  service_principal_object_id          = azuread_service_principal.margince[0].object_id
-  resource_service_principal_object_id = data.azuread_service_principal.msgraph[0].object_id
-  claim_values                         = local.graph_delegated_scopes
 }

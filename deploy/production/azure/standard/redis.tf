@@ -28,7 +28,7 @@ resource "random_password" "redis" {
 resource "azurerm_storage_share" "redis" {
   name               = "${var.name_prefix}-redis"
   storage_account_id = azurerm_storage_account.this.id
-  quota              = var.redis_share_quota_gb
+  quota              = 16 # GiB; billed on use, not quota
 }
 
 resource "azurerm_container_app_environment_storage" "redis" {
@@ -97,10 +97,11 @@ resource "azurerm_container_app" "redis" {
     }
 
     container {
-      name   = "redis"
-      image  = var.redis_image
-      cpu    = var.redis_cpu
-      memory = var.redis_memory
+      name = "redis"
+      # The image core's docker-compose.dev.yml uses, pinned by digest.
+      image  = "docker.io/library/redis:7.2@sha256:6461ca4ac0c5c9d81d53685c3bf76aa81f464a9de6cf3a97b80a1da8d1bb1de4"
+      cpu    = 0.5
+      memory = "1Gi"
       # sh -c so $REDIS_PASSWORD expands. This skips the image entrypoint,
       # whose chown to the redis user fails on an SMB mount, so Redis runs
       # as the container's root user.
@@ -108,7 +109,8 @@ resource "azurerm_container_app" "redis" {
       args = [join(" ", [
         "exec redis-server --requirepass \"$REDIS_PASSWORD\"",
         "--appendonly yes --appendfsync everysec --dir /data",
-        "--maxmemory ${var.redis_maxmemory} --maxmemory-policy noeviction --protected-mode yes",
+        # Well below the container's 1Gi, so writes fail before an OOM kill.
+        "--maxmemory 768mb --maxmemory-policy noeviction --protected-mode yes",
       ])]
 
       env {

@@ -9,12 +9,12 @@ the AWS standard stack.
 
 | Area | Resources |
 |---|---|
-| Edge | Application Gateway WAF v2 with a static public IP: the only public entry. TLS with the Key Vault certificate `public_certificate_name`, HTTP to HTTPS redirect, WAF policy (Microsoft Default Rule Set 2.1, Bot Manager 1.1, per-IP rate limits, optional geo allow-list), `waf_mode` count or block. See "WAF rollout". |
+| Edge | Application Gateway WAF v2 with a static public IP: the only public entry. TLS with the Key Vault certificate `public-tls`, HTTP to HTTPS redirect, WAF policy (Microsoft Default Rule Set 2.1, Bot Manager 1.1, two per-IP rate limits), `waf_mode` count or block. See "WAF rollout". |
 | Compute | Container Apps environment (internal: private IP only, workload profiles, Consumption profile, zone-redundant). **api** app (3 to 6 replicas, CPU and HTTP scale rules): `cmd/api` plus an **edge** nginx container that serves the SPA; its ingress is reachable only from the gateway. **worker** app: no ingress. **redis** app: Redis 7.2, one replica, internal TCP only. |
 | Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
 | Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, registry, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
 | Identity | Entra app registration (single tenant, assignment required, your security group), managed identities for api, worker, Dataverse and customer-managed keys |
-| Delivery | Container Registry Premium (images from `make release`), optional jumpbox VM with Azure Bastion Developer |
+| Delivery | Container Registry Premium (images from `make release`, private endpoint), jumpbox VM with Azure Bastion Developer |
 | Protection | Share soft delete and daily Azure Backup (attachments, redis), delete locks on the stateful resources, diagnostic settings on every resource that has them, metric alerts, Log Analytics (90 days) |
 
 ```
@@ -40,16 +40,15 @@ unsubscribe), which the app protects with tokens.
   `export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)`: the
   azurerm 4.x provider requires a subscription ID and this stack does not
   hardcode one.
-- **Subscription features, once**: encryption at host for the jumpbox
-  (or set `encryption_at_host = false`):
+- **Subscription features, once**: encryption at host for the jumpbox:
   `az feature register --namespace Microsoft.Compute --name EncryptionAtHost`,
   wait until `az feature show` reports `Registered`, then
   `az provider register --namespace Microsoft.Compute`. VNet flow logs need
   Network Watcher in the region (`NetworkWatcher_<region>` in
   `NetworkWatcherRG`), which Azure creates with the first VNet unless the
   subscription opted out.
-- **Entra ID**: Application Administrator for whoever runs Terraform (or
-  `create_entra_app = false`, see step 2). Conditional Access needs Entra ID
+- **Entra ID**: Application Administrator for whoever runs Terraform, and an
+  Entra admin for admin consent (step 2). Conditional Access needs Entra ID
   P1.
 - **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`; Docker with buildx for
   a manual image push (Section 4).
@@ -73,11 +72,11 @@ terraform init -backend-config=backend.hcl
 terraform apply                               # deploy_apps = false
 ```
 
-`terraform.tfvars` needs at least `release_version`, `public_base_url`,
-`admin_bootstrap_password`, `license_token`, `entra_access_group_object_id`,
-`break_glass_cidrs`, `operator_ip_allowlist` (your public IP, from
-`curl -s https://api.ipify.org`) and `jumpbox_ssh_public_key`
-(`ssh-keygen -t ed25519`; RSA also works).
+`terraform.tfvars` needs `release_version`, `public_base_url`,
+`admin_bootstrap_password`, `license_token`, `entra_access_group_object_id`
+and `jumpbox_ssh_public_key` (`ssh-keygen -t ed25519`; RSA also works), and
+usually `break_glass_cidrs` and `operator_ip_allowlist` (your public IP, from
+`curl -s https://api.ipify.org`). See "Variables".
 
 This creates everything except the Container Apps: network, Key Vault and its
 secrets, Postgres, the redis app, storage and shares, registry, private
@@ -87,17 +86,12 @@ Key Vault secrets and file shares from your machine; it is closed in step 7.
 ## 2. Entra ID (Entra admin, once)
 
 1. **Admin consent**: Enterprise applications → Margince (`<name_prefix>`) →
-   Permissions → Grant admin consent (skip if `entra_grant_admin_consent`).
+   Permissions → Grant admin consent.
 2. **Conditional Access**: add the app (`terraform output -raw entra_client_id`)
    to the policy that protects Dataverse, so both apps share MFA and device
    rules.
 3. **Check access**: Properties → Assignment required = Yes; Users and groups
    lists only your security group.
-
-If Terraform may not create apps, an Entra admin registers one by hand with
-the redirect URIs in `terraform output entra_redirect_uris` and the delegated
-Graph permissions in `entra.tf`, then set `create_entra_app = false`,
-`entra_client_id` and `entra_client_secret`.
 
 ## 3. Bootstrap the database (jumpbox, once)
 
@@ -155,7 +149,7 @@ only, the platform `release.yml` builds by default.
    `operator_ip_allowlist` and the VNet (the jumpbox). GitHub-hosted runners
    are neither, so `release.yml` can push here only from a self-hosted runner
    in the VNet or with the runner's address added to `operator_ip_allowlist`
-   for the release. `release.yml` logs in with the repository secrets
+   for the release; the registry is never open to every source. `release.yml` logs in with the repository secrets
    `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`: create a repository-scoped
    token with push rights for them:
 
@@ -214,8 +208,7 @@ rm margince.yaml
 # DNS, in your zone: an A record for the host in public_base_url
 #   crm.example.com  A  $(terraform output -raw public_ip_address)
 
-# The gateway serves the Key Vault certificate public_certificate_name (default
-# public-tls). Import it once, from an operator_ip_allowlist address; renewals
+# The gateway serves the Key Vault certificate public-tls. Import it once, from an operator_ip_allowlist address; renewals
 # are new versions of the same certificate, which the gateway picks up within
 # four hours without an apply.
 az keyvault certificate import --vault-name "$(terraform output -raw key_vault_name)" \
@@ -261,14 +254,13 @@ run `terraform apply` from the jumpbox or an allowlisted machine.
 ## WAF rollout
 
 `appgw.tf`'s WAF policy, the counterpart of the AWS standard stack's web ACL
-with the same variable names: optional geo allow-list
-(`waf_allowed_country_codes`, default off; the provider webhook paths are
-always exempt), a per-IP rate limit on the credential endpoints
-(`waf_auth_paths`, `waf_auth_rate_limit_per_ip` per 5 minutes), a global
-per-IP rate limit (`waf_rate_limit_per_ip` per 5 minutes) that excludes
+with the same rules: a per-IP rate limit of 100 requests per 5 minutes on the
+credential endpoints (`/v1/auth/login`, `/v1/auth/forgot-password`,
+`/v1/auth/reset-password`, `/oauth/token`, `/oauth/register`), a global
+per-IP rate limit of 2000 per 5 minutes that excludes
 `/webhooks/gmail|graph|hubspot` (HMAC-verified provider traffic from shared
 provider IPs), then the managed rule sets Microsoft Default Rule Set 2.1
-(OWASP-based) and Bot Manager 1.1. Request bodies are inspected up to 2000 KB;
+(OWASP-based) and Bot Manager 1.1, always on. Request bodies are inspected up to 2000 KB;
 file uploads are allowed up to 50 MB.
 
 `waf_mode` defaults to `"count"`: the policy runs in Detection mode and the
@@ -286,8 +278,36 @@ AGWFirewallLogs
 Add an exclusion or a rule override in `appgw.tf` for each false positive
 (the commented example there), then set `waf_mode = "block"` (Prevention
 mode, custom rules block) and apply. The blocked-requests alert
-(`alarms.tf`) reports spikes in either mode. Diagnostics send the firewall
-and access logs to Log Analytics for `waf_log_retention_days`.
+(`alarms.tf`, above 500 blocked requests per 5 minutes) reports spikes once
+blocking. Diagnostics send the firewall and access logs to Log Analytics,
+kept 30 days, with authorization and cookie headers, cookies and argument
+values scrubbed.
+
+## Variables
+
+Only what you must set or what genuinely sizes the installation is a
+variable (`variables.tf`); everything else is a fixed value in the file that
+uses it.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `public_base_url` | required | `https://<host>` the gateway serves |
+| `release_version` | required | Release to deploy (image tag) |
+| `license_token` | required | Licence token |
+| `admin_bootstrap_password` | required | First-boot admin password |
+| `entra_access_group_object_id` | required | Security group allowed to sign in |
+| `jumpbox_ssh_public_key` | required | SSH key for the jumpbox |
+| `deploy_apps` | `false` | Two-phase apply: `true` once prerequisites exist (step 6) |
+| `break_glass_cidrs` | `[]` | Networks allowed to use password login |
+| `operator_ip_allowlist` | `[]` | Setup IPs through the Key Vault, Storage and registry firewalls |
+| `key_vault_admin_principal_ids` | `[]` (the applying identity) | Key Vault Administrators |
+| `alert_email` | `""` | Alert receiver |
+| `include_bootstrap_admin` | `true` | `false` after the first admin login (step 7) |
+| `azure_region`, `name_prefix`, `instance_name` | `westeurope`, `margince`, `margince-default` | Placement and names (`name_prefix` is also the resource group) |
+| `db_sku_name`, `db_zone_redundant_ha` | `B_Standard_B2s`, `false` | Postgres size and HA |
+| `api_min_replicas`, `api_max_replicas` | `3`, `6` | api scale bounds |
+| `waf_mode` | `count` | `count` then `block` |
+| `enable_resource_locks` | `true` | `false` and apply before `terraform destroy` |
 
 ## Dataverse (optional)
 
@@ -317,7 +337,7 @@ Rough list prices in West Europe, per month, before usage-based traffic:
 
 | Item | EUR |
 |---|---|
-| Application Gateway WAF v2 (fixed charge, autoscale from `appgw_min_capacity`) | 250-350 |
+| Application Gateway WAF v2 (fixed charge, autoscale 1 to 10 units) | 250-350 |
 | Container Apps: api (3 replicas), worker, redis | 170-260 |
 | Postgres B_Standard_B2s, 64 GiB, backups | 65 |
 | Container Registry Premium | 45 |
@@ -330,27 +350,7 @@ Rough list prices in West Europe, per month, before usage-based traffic:
 
 Microsoft recommends General Purpose for production Postgres:
 `db_sku_name = "GP_Standard_D2ds_v5"` adds about EUR 75, and
-`db_zone_redundant_ha = true` on top adds about EUR 140. Compared with the
-earlier stack, the redis app (about EUR 15-25) replaces Azure Cache for Redis
-Standard C1 (about EUR 87) and its private endpoint (about EUR 7), and the
-third api replica adds about EUR 55.
-
-## Upgrading an existing deployment
-
-From the version without the gateway: the Container Apps environment becomes
-internal, which Azure applies by replacing the environment and every app in
-it, including the redis app (let the worker drain the outbox first). Import
-the certificate (step 6) and move the DNS record to `public_ip_address` in
-the same window. `image_tag` is now `release_version`, and `bind_custom_domain`
-is removed; a plan that still sets either fails with a message.
-
-This version uses azurerm 4.x. On a stack applied with the 3.x version,
-read the plan before applying: the file shares and blob container now use
-the Resource Manager API (`storage_account_id`), the jumpbox gains Trusted
-Launch, and Azure Cache for Redis is replaced by the redis app (let the
-worker drain the outbox first). If the plan replaces a share, move it
-instead with `terraform state rm` and `terraform import` using its
-Resource Manager ID; the storage lock also refuses the delete.
+`db_zone_redundant_ha = true` on top adds about EUR 140.
 
 ## Security notes
 
@@ -370,17 +370,15 @@ Resource Manager ID; the storage lock also refuses the delete.
 - **Secrets**: each app identity may read only the Key Vault secrets its
   process uses. The api app's identities are also available to its edge
   container; keep the web image current.
-- **Encryption**: customer-managed key for Postgres and storage (verify both
-  can reach the firewalled vault in a test subscription; set
-  `postgres_customer_managed_key = false` if Postgres cannot). The registry
-  uses Microsoft-managed keys by default. Redis data sits on the storage
-  account's `redis` share, under the same key. TLS everywhere except the
-  password-protected Redis connection, which never leaves the environment
-  (`enable_mtls` encrypts app-to-app traffic, preview).
+- **Encryption**: customer-managed key for Postgres and storage, always on
+  (verify in a test subscription that both reach the firewalled vault). The
+  registry, which holds only images, uses Microsoft-managed keys. Redis data
+  sits on the storage account's `redis` share, under the same key. TLS
+  everywhere except the password-protected Redis connection, which never
+  leaves the environment.
 - **Postgres**: TLS 1.2 minimum, connection throttling after failed logins,
-  Entra authentication alongside passwords. Set
-  `postgres_entra_admin_object_id` (plus name and type) to add an Entra
-  administrator.
+  Entra authentication alongside passwords. Add an Entra administrator in
+  the portal (Authentication) if you want one.
 - **Logs**: nginx logs paths without query strings and redacts capability
   tokens in public links. Key Vault, blob and file audit logs, NSG events,
   registry logins and backup jobs go to Log Analytics; VNet flow logs go to
@@ -390,8 +388,9 @@ Resource Manager ID; the storage lock also refuses the delete.
 - **Locks**: `CanNotDelete` locks on Postgres, storage, Key Vault, the
   Recovery Services vault and the registry (`enable_resource_locks`). Set it
   to `false` and apply before `terraform destroy`.
-- **Images**: `make release` images, tags locked after the push (Section 4);
-  `image_digests` pins releases. Limit who can run commands on the jumpbox VM.
+- **Images**: `make release` images, released tags locked read-only after
+  the push (Section 4), so `release_version` pins the deployed images. Limit
+  who can run commands on the jumpbox VM.
 - **Storage key**: Azure Files SMB mounts need the account key, which is in
   state and in the environment's storage configuration. Rotate it with the
   secondary key on a schedule.
@@ -414,8 +413,7 @@ Resource Manager ID; the storage lock also refuses the delete.
   redis app (image, resources, command) would briefly run two Redis processes
   on the same `/data` and can corrupt its append-only file. The redis app
   therefore ignores changes to its template: a plain `terraform apply` leaves
-  it alone. To change `redis_image`, `redis_memory` or `redis_maxmemory`,
-  replace the app, which stops the old Redis before the new one starts (api
+  it alone. To change its image or sizing (`redis.tf`), replace the app, which stops the old Redis before the new one starts (api
   and worker reconnect once Redis is back):
 
   ```bash
@@ -424,9 +422,9 @@ Resource Manager ID; the storage lock also refuses the delete.
 - **Needs app changes**: Entra-only Postgres (no passwords), Redis with
   Entra auth (Azure Managed Redis) and a federated credential instead of the
   Entra client secret all require support in Margince first.
-- **SMB hardening is off** (`storage_smb_hardening`): Microsoft does not
+- **No SMB protocol restrictions** on the file shares: Microsoft does not
   document Container Apps mounts with SMB 3.1.1-only, AES-256-GCM and
-  NTLMv2. Test it before turning it on.
+  NTLMv2. The shares are reached only through the private endpoint.
 - **PgBouncer is off.** Flexible Server's built-in PgBouncer (port 6432) is
   optional; enable it only after checking the app's prepared statements work
   through it in transaction mode.

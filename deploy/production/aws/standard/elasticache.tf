@@ -10,17 +10,17 @@ resource "random_password" "redis_auth" {
   special = false
 }
 
-# Same reasoning as rds.tf's random_id.final_snapshot, keepers included: a
-# fixed final_snapshot_identifier collides on a second delete (ElastiCache
-# keeps the first delete's snapshot under that name), and deriving the suffix
-# from the replication group itself would cycle. Bump
-# db_final_snapshot_generation before a deliberate destroy/recreate.
+# Same reasoning as rds.tf's random_id.final_snapshot: replace this suffix
+# together with the replication group when recreating it in the same state.
 resource "random_id" "redis_final_snapshot" {
   byte_length = 4
+}
 
-  keepers = {
-    generation = var.db_final_snapshot_generation
-  }
+locals {
+  # Valkey 7.2: the Redis 7.2 protocol series every Margince stack runs (see
+  # the replication group below).
+  cache_engine_version = "7.2"
+  redis_node_type      = "cache.t4g.small"
 }
 
 # The default eviction policy (allkeys-lru/volatile-lru) silently drops keys
@@ -32,7 +32,7 @@ resource "aws_elasticache_parameter_group" "this" {
   name = "${var.name_prefix}-redis"
   # "valkey7" for engine_version 7.2; derived so a later major bump moves
   # the family with it. maxmemory-policy is a valid valkey7 parameter.
-  family = "valkey${split(".", var.cache_engine_version)[0]}"
+  family = "valkey${split(".", local.cache_engine_version)[0]}"
 
   parameter {
     name  = "maxmemory-policy"
@@ -48,7 +48,7 @@ resource "aws_elasticache_parameter_group" "this" {
 # created first, not lazily.
 resource "aws_cloudwatch_log_group" "redis_slow_log" {
   name              = "/aws/elasticache/${var.name_prefix}-redis/slow-log"
-  retention_in_days = var.log_retention_days
+  retention_in_days = local.log_retention_days
   tags              = { Name = "${var.name_prefix}-redis-slow-log", Component = "observability" }
 }
 
@@ -78,14 +78,14 @@ resource "aws_elasticache_replication_group" "this" {
   # Redis now would only mean paying this exact migration later, with live
   # data instead of none.
   #
-  # Version 7.2 (var.cache_engine_version), not the newest Valkey: dev runs
+  # Version 7.2 (local.cache_engine_version), not the newest Valkey: dev runs
   # redis:7.2 and the Azure stacks run Redis 7.2, and ElastiCache has no
   # Redis OSS 7.2. Valkey 7.2 is the Redis 7.2 fork, so every environment
   # speaks the same protocol series. TLS-required transit encryption and the
   # AUTH token below both apply unchanged to Valkey 7.2.
   engine               = "valkey"
-  engine_version       = var.cache_engine_version
-  node_type            = var.redis_node_type
+  engine_version       = local.cache_engine_version
+  node_type            = local.redis_node_type
   port                 = 6379
   parameter_group_name = aws_elasticache_parameter_group.this.name
 
@@ -108,14 +108,9 @@ resource "aws_elasticache_replication_group" "this" {
   at_rest_encryption_enabled = true
   kms_key_id                 = aws_kms_key.data.arn
   transit_encryption_enabled = true
-  # "required", not "preferred": the product's own Redis client
-  # (backend/internal/platform/events/relay.go) now takes a useTLS parameter
-  # and negotiates TLS when MARGINCE_REDIS_TLS=true (ecs.tf's shared_env) —
-  # both roles set it. Before that client change shipped, "preferred" was the
-  # honest floor here: "required" would have refused every connection the api
-  # and worker made, since neither ever attempted TLS. Deploy order still
-  # matters — the api/worker images with TLS support must roll out before (or
-  # in the same release as) this flip, never after.
+  # "required", not "preferred": the product's Redis client
+  # (backend/internal/platform/events/relay.go) negotiates TLS when
+  # MARGINCE_REDIS_TLS=true (ecs.tf's shared_env), which both roles set.
   transit_encryption_mode = "required"
   auth_token              = random_password.redis_auth.result
 

@@ -10,30 +10,28 @@
 #
 # No public IP. Reach it through Azure Bastion's free Developer tier (browser
 # SSH from the portal) or `az vm run-command invoke` from any machine logged
-# in to Azure. It shuts down every evening; start it on demand.
+# in to Azure. It shuts down every evening at 20:00 West Europe time; start
+# it on demand with `az vm start`.
 
 locals {
-  jumpbox_enabled = var.enable_jumpbox ? 1 : 0
+  jumpbox_admin_username = "margince"
 }
 
 resource "azurerm_subnet" "ops" {
-  count                = local.jumpbox_enabled
   name                 = "${var.name_prefix}-ops"
   resource_group_name  = azurerm_resource_group.this.name
   virtual_network_name = azurerm_virtual_network.this.name
-  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 6)]
+  address_prefixes     = [cidrsubnet(local.vnet_cidr, 8, 6)]
 }
 
 # Outbound through the same NAT (apt, GitHub) from the same fixed
 # address as the apps.
 resource "azurerm_subnet_nat_gateway_association" "ops" {
-  count          = local.jumpbox_enabled
-  subnet_id      = azurerm_subnet.ops[0].id
+  subnet_id      = azurerm_subnet.ops.id
   nat_gateway_id = azurerm_nat_gateway.this.id
 }
 
 resource "azurerm_network_security_group" "ops" {
-  count               = local.jumpbox_enabled
   name                = "${var.name_prefix}-ops"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
@@ -67,13 +65,11 @@ resource "azurerm_network_security_group" "ops" {
 }
 
 resource "azurerm_subnet_network_security_group_association" "ops" {
-  count                     = local.jumpbox_enabled
-  subnet_id                 = azurerm_subnet.ops[0].id
-  network_security_group_id = azurerm_network_security_group.ops[0].id
+  subnet_id                 = azurerm_subnet.ops.id
+  network_security_group_id = azurerm_network_security_group.ops.id
 }
 
 resource "azurerm_network_interface" "jumpbox" {
-  count               = local.jumpbox_enabled
   name                = "${var.name_prefix}-jumpbox"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
@@ -81,29 +77,28 @@ resource "azurerm_network_interface" "jumpbox" {
 
   ip_configuration {
     name                          = "internal"
-    subnet_id                     = azurerm_subnet.ops[0].id
+    subnet_id                     = azurerm_subnet.ops.id
     private_ip_address_allocation = "Dynamic"
   }
 }
 
 resource "azurerm_linux_virtual_machine" "jumpbox" {
-  count                           = local.jumpbox_enabled
   name                            = "${var.name_prefix}-jumpbox"
   location                        = azurerm_resource_group.this.location
   resource_group_name             = azurerm_resource_group.this.name
-  size                            = var.jumpbox_vm_size
-  admin_username                  = var.jumpbox_admin_username
+  size                            = "Standard_B2ms" # billed only while running
+  admin_username                  = local.jumpbox_admin_username
   disable_password_authentication = true
-  network_interface_ids           = [azurerm_network_interface.jumpbox[0].id]
-  custom_data                     = base64encode(templatefile("${path.module}/templates/jumpbox-cloud-init.yaml.tftpl", { admin_username = var.jumpbox_admin_username }))
+  network_interface_ids           = [azurerm_network_interface.jumpbox.id]
+  custom_data                     = base64encode(templatefile("${path.module}/templates/jumpbox-cloud-init.yaml.tftpl", { admin_username = local.jumpbox_admin_username }))
   tags                            = merge(local.common_tags, { Name = "${var.name_prefix}-jumpbox", Component = "operations" })
 
   # Trusted Launch (the Ubuntu "server" image is Gen2).
   secure_boot_enabled = true
   vtpm_enabled        = true
-  # Temp disk and caches encrypted on the host (variables.tf has the one-time
-  # feature registration).
-  encryption_at_host_enabled = var.encryption_at_host
+  # Temp disk and caches encrypted on the host. Needs the subscription
+  # feature once (README.md, "Before you start").
+  encryption_at_host_enabled = true
 
   # Azure installs security and critical updates in off-peak hours and
   # checks for missing ones every 24 hours.
@@ -116,7 +111,7 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
   boot_diagnostics {}
 
   admin_ssh_key {
-    username   = var.jumpbox_admin_username
+    username   = local.jumpbox_admin_username
     public_key = var.jumpbox_ssh_public_key
   }
 
@@ -138,22 +133,17 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
   }
 
   lifecycle {
-    precondition {
-      condition     = length(trimspace(var.jumpbox_ssh_public_key)) > 0
-      error_message = "enable_jumpbox = true needs jumpbox_ssh_public_key."
-    }
     # A new image version or cloud-init change must not replace the jumpbox.
     ignore_changes = [custom_data, source_image_reference]
   }
 }
 
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "jumpbox" {
-  count                 = local.jumpbox_enabled
-  virtual_machine_id    = azurerm_linux_virtual_machine.jumpbox[0].id
+  virtual_machine_id    = azurerm_linux_virtual_machine.jumpbox.id
   location              = azurerm_resource_group.this.location
   enabled               = true
-  daily_recurrence_time = var.jumpbox_shutdown_time
-  timezone              = var.jumpbox_shutdown_timezone
+  daily_recurrence_time = "2000"
+  timezone              = "W. Europe Standard Time"
 
   notification_settings {
     enabled = false
@@ -163,7 +153,6 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "jumpbox" {
 # Free tier: browser SSH from the portal to VMs in this VNet, no public IP and
 # no subnet of its own.
 resource "azurerm_bastion_host" "developer" {
-  count               = var.enable_jumpbox && var.enable_bastion_developer ? 1 : 0
   name                = "${var.name_prefix}-bastion"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name

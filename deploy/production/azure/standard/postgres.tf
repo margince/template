@@ -45,29 +45,31 @@ resource "azurerm_postgresql_flexible_server" "this" {
   name                = "${local.global_prefix}-db"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
-  version             = var.db_version
+  version             = "16" # a major Azure lists pgvector support for
 
   delegated_subnet_id = azurerm_subnet.postgres.id
   private_dns_zone_id = azurerm_private_dns_zone.postgres.id
 
   administrator_login    = "pgadmin"
   administrator_password = random_password.postgres_admin.result
-  # Dual mode: Microsoft Entra sign-in is on (postgres_entra_admin_object_id
-  # below adds an Entra administrator), and password sign-in stays on because
-  # the app and db-bootstrap.sql use password roles.
+  # Dual mode: Microsoft Entra sign-in is on (add an Entra administrator in
+  # the portal if you want one), and password sign-in stays on because the
+  # app and db-bootstrap.sql use password roles.
   authentication {
     active_directory_auth_enabled = true
     password_auth_enabled         = true
     tenant_id                     = data.azurerm_client_config.current.tenant_id
   }
 
-  sku_name     = var.db_sku_name
-  storage_mb   = var.db_storage_mb
+  sku_name = var.db_sku_name
+  # 64 GiB, the smallest listed size at or above 50 GiB. Initial size only:
+  # auto-grow extends it and Terraform ignores the difference.
+  storage_mb   = 65536
   storage_tier = "P6"
   # Grows the disk before it fills up instead of the server going read-only.
   auto_grow_enabled = true
 
-  backup_retention_days = var.db_backup_retention_days
+  backup_retention_days = 7
   # Single-region by design (no multi-region or DR). Geo-redundant backup
   # would cost more and is left off.
   geo_redundant_backup_enabled = false
@@ -85,20 +87,16 @@ resource "azurerm_postgresql_flexible_server" "this" {
     start_minute = 30
   }
 
-  dynamic "identity" {
-    for_each = var.postgres_customer_managed_key ? [1] : []
-    content {
-      type         = "UserAssigned"
-      identity_ids = [azurerm_user_assigned_identity.data_cmk.id]
-    }
+  # Encrypted with the stack's Key Vault key (keyvault.tf), reached through
+  # the vault's trusted-service bypass.
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.data_cmk.id]
   }
 
-  dynamic "customer_managed_key" {
-    for_each = var.postgres_customer_managed_key ? [1] : []
-    content {
-      key_vault_key_id                  = azurerm_key_vault_key.data.versionless_id
-      primary_user_assigned_identity_id = azurerm_user_assigned_identity.data_cmk.id
-    }
+  customer_managed_key {
+    key_vault_key_id                  = azurerm_key_vault_key.data.versionless_id
+    primary_user_assigned_identity_id = azurerm_user_assigned_identity.data_cmk.id
   }
 
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-db", Component = "database" })
@@ -161,18 +159,6 @@ resource "azurerm_postgresql_flexible_server_configuration" "connection_throttle
   name      = "connection_throttle.enable"
   server_id = azurerm_postgresql_flexible_server.this.id
   value     = "on"
-}
-
-# Optional Microsoft Entra administrator (a user, group or service principal).
-# It can create Entra-authenticated roles; the app keeps its password roles.
-resource "azurerm_postgresql_flexible_server_active_directory_administrator" "this" {
-  count               = var.postgres_entra_admin_object_id != "" ? 1 : 0
-  server_name         = azurerm_postgresql_flexible_server.this.name
-  resource_group_name = azurerm_resource_group.this.name
-  tenant_id           = data.azurerm_client_config.current.tenant_id
-  object_id           = var.postgres_entra_admin_object_id
-  principal_name      = var.postgres_entra_admin_name
-  principal_type      = var.postgres_entra_admin_type
 }
 
 # None of these four log_* settings default to on. Without them the

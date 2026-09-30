@@ -8,10 +8,8 @@
 data "azurerm_client_config" "current" {}
 
 locals {
-  # Key Vault takes a single address, not a /32 range, and no 0.0.0.0/0.
-  key_vault_ip_rules = distinct([
-    for c in concat(var.ssh_allowed_cidrs, var.key_vault_allowed_cidrs) : trimsuffix(c, "/32") if c != "0.0.0.0/0"
-  ])
+  # The operator addresses. Key Vault takes a single address, not a /32 range.
+  key_vault_ip_rules = distinct([for c in var.ssh_allowed_cidrs : trimsuffix(c, "/32")])
 
   license_set = nonsensitive(length(var.license_token) > 0)
 
@@ -41,13 +39,6 @@ resource "azurerm_key_vault" "this" {
     ip_rules       = local.key_vault_ip_rules
   }
 
-  lifecycle {
-    precondition {
-      condition     = length(local.key_vault_ip_rules) > 0
-      error_message = "The Key Vault firewall needs at least one address other than 0.0.0.0/0. List the address you run Terraform and make deploy from in key_vault_allowed_cidrs."
-    }
-  }
-
   tags = local.common_tags
 }
 
@@ -67,7 +58,7 @@ resource "azurerm_key_vault_secret" "this" {
   tags         = local.common_tags
 
   # Key Vault raises SecretNearExpiry 30 days before the Entra secret ends.
-  expiration_date = each.key == "margince-entra-client-secret" && var.create_entra_app ? azuread_application_password.margince[0].end_date : null
+  expiration_date = each.key == "margince-entra-client-secret" ? azuread_application_password.margince.end_date : null
 
   depends_on = [azurerm_role_assignment.terraform_kv_admin]
 }

@@ -19,21 +19,30 @@
 locals {
   appgw_enabled = var.deploy_apps
 
-  # Same zones as the zone-redundant resources (az_count, variables.tf).
-  # Application Gateway and Standard public IPs use zones 1 to 3.
-  appgw_zones = [for i in range(min(var.az_count, 3)) : tostring(i + 1)]
+  # Spread across two zones, like the zone-redundant Container Apps
+  # environment.
+  appgw_zones = ["1", "2"]
+
+  # The Key Vault certificate for public_base_url's host (README.md, step 6).
+  public_certificate_name = "public-tls"
 
   # The key vault object the gateway serves as its TLS certificate. The
   # versionless secret ID makes the gateway pick up a renewed certificate
   # (it polls Key Vault every four hours).
-  public_certificate_secret_id = "${azurerm_key_vault.this.vault_uri}secrets/${var.public_certificate_name}"
+  public_certificate_secret_id = "${azurerm_key_vault.this.vault_uri}secrets/${local.public_certificate_name}"
 
   # The same provider webhook paths as the AWS stack's WAF. Provider webhook
   # traffic (Google, Microsoft Graph, HubSpot) is HMAC-verified by the api
   # and arrives in bursts from shared provider IPs, so it is exempt from the
-  # global per-IP rate limit and from the geo allow-list. Prefix match: the
-  # Graph validation handshake carries a query string.
+  # global per-IP rate limit. Prefix match: the Graph validation handshake
+  # carries a query string.
   webhook_paths = ["/webhooks/gmail", "/webhooks/graph", "/webhooks/hubspot"]
+
+  # The api's credential-accepting endpoints, the same list as the AWS
+  # stack: password login, forgot/reset password, OAuth token and dynamic
+  # client registration. Prefix match, so a trailing slash or a query string
+  # is matched too.
+  waf_auth_paths = ["/v1/auth/login", "/v1/auth/forgot-password", "/v1/auth/reset-password", "/oauth/token", "/oauth/register"]
 
   waf_block = var.waf_mode == "block"
   # Custom rules follow waf_mode explicitly: Log in count mode, Block in
@@ -66,7 +75,7 @@ resource "azurerm_user_assigned_identity" "appgw" {
 # The scope must exist when the grant is created, hence deploy_apps.
 resource "azurerm_role_assignment" "appgw_certificate" {
   count                = local.appgw_enabled ? 1 : 0
-  scope                = "${azurerm_key_vault.this.id}/secrets/${var.public_certificate_name}"
+  scope                = "${azurerm_key_vault.this.id}/secrets/${local.public_certificate_name}"
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.appgw.principal_id
 }
@@ -112,9 +121,8 @@ resource "azurerm_private_dns_a_record" "environment" {
 # custom rules Block). README "WAF rollout" has the queries.
 #
 # Custom rules run before the managed rule sets, lowest priority first:
-#    1  GeoAllowList        only when waf_allowed_country_codes is set
-#   10  RateLimitAuthPaths  stricter per-IP bound on credential endpoints
-#   20  RateLimitPerIP      global per-IP bound, webhooks excluded
+#   10  RateLimitAuthPaths  100 per IP per 5 minutes on the credential endpoints
+#   20  RateLimitPerIP      2000 per IP per 5 minutes, webhooks excluded
 # Managed rule sets: Microsoft_DefaultRuleSet 2.1 (OWASP CRS 3.3.2 based,
 # SQLi, XSS, LFI, RCE and protocol rules, with Microsoft Threat
 # Intelligence rules) and Microsoft_BotManagerRuleSet 1.1 (bad bots blocked,
@@ -177,37 +185,6 @@ resource "azurerm_web_application_firewall_policy" "this" {
     }
   }
 
-  # Everything from outside the allowed countries, except the provider
-  # webhook paths. The conditions of one custom rule are ANDed.
-  dynamic "custom_rules" {
-    for_each = length(var.waf_allowed_country_codes) > 0 ? [1] : []
-    content {
-      name      = "GeoAllowList"
-      priority  = 1
-      rule_type = "MatchRule"
-      action    = local.waf_custom_action
-
-      match_conditions {
-        match_variables {
-          variable_name = "RemoteAddr"
-        }
-        operator           = "GeoMatch"
-        negation_condition = true
-        match_values       = var.waf_allowed_country_codes
-      }
-
-      match_conditions {
-        match_variables {
-          variable_name = "RequestUri"
-        }
-        operator           = "BeginsWith"
-        negation_condition = true
-        match_values       = local.webhook_paths
-        transforms         = ["Lowercase"]
-      }
-    }
-  }
-
   # The api's own login limiters are per replica, so every replica
   # autoscaling adds raises the fleet-wide login budget. This rule sees
   # traffic before it fans out. UrlDecode so an encoded path
@@ -218,7 +195,7 @@ resource "azurerm_web_application_firewall_policy" "this" {
     rule_type            = "RateLimitRule"
     action               = local.waf_custom_action
     rate_limit_duration  = "FiveMins"
-    rate_limit_threshold = var.waf_auth_rate_limit_per_ip
+    rate_limit_threshold = 100
     group_rate_limit_by  = "ClientAddr"
 
     match_conditions {
@@ -226,12 +203,12 @@ resource "azurerm_web_application_firewall_policy" "this" {
         variable_name = "RequestUri"
       }
       operator     = "BeginsWith"
-      match_values = [for p in var.waf_auth_paths : lower(p)]
+      match_values = [for p in local.waf_auth_paths : lower(p)]
       transforms   = ["UrlDecode", "Lowercase"]
     }
   }
 
-  # Global per-IP bound (default 2000 per 5-minute window): generous for a
+  # Global per-IP bound (2000 per 5-minute window): generous for a
   # real user driving the SPA, tight enough to bound one client hammering
   # the api. The condition EXCLUDES the webhook paths. No UrlDecode there on
   # purpose: an encoded webhook path fails the exclusion and is rate limited
@@ -242,7 +219,7 @@ resource "azurerm_web_application_firewall_policy" "this" {
     rule_type            = "RateLimitRule"
     action               = local.waf_custom_action
     rate_limit_duration  = "FiveMins"
-    rate_limit_threshold = var.waf_rate_limit_per_ip
+    rate_limit_threshold = 2000
     group_rate_limit_by  = "ClientAddr"
 
     match_conditions {
@@ -302,8 +279,10 @@ resource "azurerm_application_gateway" "this" {
   }
 
   autoscale_configuration {
-    min_capacity = var.appgw_min_capacity
-    max_capacity = var.appgw_max_capacity
+    # One unit kept warm so the first requests after a quiet period are not
+    # slowed by a scale-out.
+    min_capacity = 1
+    max_capacity = 10
   }
 
   identity {
@@ -449,12 +428,11 @@ resource "azurerm_application_gateway" "this" {
 
 # ---- WAF and access log retention ------------------------------------------------------
 # The gateway's diagnostic setting (diagnostics.tf) writes to the
-# resource-specific tables. Their retention is waf_log_retention_days, the
-# counterpart of the AWS stack's aws-waf-logs-<name_prefix> log group.
+# resource-specific tables, kept 30 days, the counterpart of the AWS stack's aws-waf-logs-<name_prefix> log group.
 resource "azurerm_log_analytics_workspace_table" "appgw" {
   for_each                = toset(["AGWFirewallLogs", "AGWAccessLogs"])
   name                    = each.key
   workspace_id            = azurerm_log_analytics_workspace.this.id
-  retention_in_days       = var.waf_log_retention_days
-  total_retention_in_days = var.waf_log_retention_days
+  retention_in_days       = 30
+  total_retention_in_days = 30
 }

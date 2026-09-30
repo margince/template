@@ -9,7 +9,7 @@ domain = "crm.example.com"
 admin_ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 
 # The addresses that run Terraform, make host-bootstrap and make deploy.
-# SSH and the Key Vault firewall admit only these.
+# SSH and the Key Vault firewall admit only these. 0.0.0.0/0 is refused.
 ssh_allowed_cidrs = ["203.0.113.10/32"]
 
 # The Entra security group allowed to use Margince.
@@ -17,17 +17,9 @@ entra_access_group_object_id = "00000000-0000-0000-0000-000000000000"
 
 # ---- Optional, shown with their defaults ------------------------------------------
 
-# region                  = "westeurope"
-# name_prefix             = "margince"
-# environment             = "production"
-# resource_group_name     = "margince-light"
-# vm_size                 = "Standard_B2ms"
-# os_disk_gb              = 30
-# data_disk_gb            = 64
-# enable_backup           = true   # daily Azure Backup of the VM and data disk, 7 days
-# enable_alarms           = true   # VM unavailable, CPU over 90%
-# alert_email             = ""     # for example "ops@example.com"
-# license_token           = ""     # MARGINCE_LICENSE, stored in Key Vault
-# allow_ssh_from_anywhere = false
-# key_vault_allowed_cidrs = []
-# encryption_at_host      = true   # needs the EncryptionAtHost feature (README.md)
+# name_prefix   = "margince"
+# region        = "westeurope"
+# vm_size       = "Standard_B2ms"
+# data_disk_gb  = 64
+# alert_email   = ""   # for example "ops@example.com"
+# license_token = ""   # MARGINCE_LICENSE, stored in Key Vault

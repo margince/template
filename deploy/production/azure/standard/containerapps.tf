@@ -11,23 +11,16 @@ resource "azurerm_container_app_environment" "this" {
   # (appgw.tf) is the only public entry; it reaches the api app's ingress
   # over the VNet, and appgw.tf's private DNS zone resolves the
   # environment's default domain to that IP. worker has no ingress.
-  #
-  # This setting cannot change in place: changing it from false (earlier
-  # versions of this stack) replaces the environment and every app in it
-  # (README.md, "Upgrading an existing deployment").
   internal_load_balancer_enabled = true
 
   # Zone redundancy needs the environment's subnet at creation time
   # (network.tf's azurerm_subnet.containerapps, /23).
-  zone_redundancy_enabled = var.az_count >= 2
+  zone_redundancy_enabled = true
 
   # Named explicitly: Azure generates one for workload profiles environments,
   # and the argument forces replacement, so leaving it unset risks a plan that
   # replaces the environment and every app.
   infrastructure_resource_group_name = "${local.global_prefix}-env-infra"
-
-  # Encrypts app-to-app traffic inside the environment (public preview).
-  mutual_tls_enabled = var.enable_mtls
 
   # A workload profiles environment running only the serverless Consumption
   # profile: same per-second billing as a Consumption-only environment, but
@@ -97,7 +90,7 @@ locals {
   worker_secrets = { for n in local.worker_secret_names : n => local.secret_catalog[n] }
 
   # ---- Plain environment ---------------------------------------------------
-  common_env = concat([
+  common_env = [
     { name = "MARGINCE_CONFIG", value = "/app/config/margince.yaml" },
     # The redis app's internal TCP ingress (redis.tf). No TLS: the traffic
     # never leaves the environment, and the password is still required.
@@ -112,9 +105,7 @@ locals {
     # A new Entra secret version rolls a new revision, so the apps pick up a
     # rotated secret without a manual restart (entra.tf).
     { name = "MARGINCE_SECRET_GENERATION", value = azurerm_key_vault_secret.entra_client_secret.version },
-    ], var.environment_posture == "development" ? [
-    { name = "MARGINCE_ENV", value = "dev" }, # the app accepts only "dev" or "test" (runtimeenv.go)
-  ] : [])
+  ]
 
   api_env = concat(local.common_env, [
     # Microsoft sign-in, pinned to the customer's directory.
@@ -146,8 +137,10 @@ locals {
     envoy_cidr        = azurerm_subnet.containerapps.address_prefixes[0]
     appgw_cidr        = azurerm_subnet.appgw.address_prefixes[0]
     break_glass_cidrs = var.break_glass_cidrs
-    auth_rate         = var.auth_rate_limit_per_minute
-    public_host       = local.public_host
+    # Requests per minute per client address on the sign-in paths (burst of
+    # the same size). Staff behind one office NAT share one address.
+    auth_rate   = 30
+    public_host = local.public_host
   })
 }
 
@@ -233,8 +226,8 @@ resource "azurerm_container_app" "api" {
     container {
       name   = "api"
       image  = local.images.api
-      cpu    = var.api_cpu
-      memory = var.api_memory
+      cpu    = 0.5
+      memory = "1Gi"
 
       dynamic "env" {
         for_each = local.api_env
@@ -281,13 +274,13 @@ resource "azurerm_container_app" "api" {
 
     # edge: nginx from the web image (it carries the built SPA), sharing this
     # replica's network with cmd/api (templates/edge-nginx.conf.tftpl).
-    # api_cpu + web_cpu and api_memory + web_memory must add up to a valid
-    # Consumption combination (the defaults give 0.75 vCPU / 1.5Gi).
+    # api + edge add up to 0.75 vCPU / 1.5Gi, a valid Consumption combination
+    # (learn.microsoft.com/azure/container-apps/containers#allocations).
     container {
       name    = "edge"
       image   = local.images.web
-      cpu     = var.web_cpu
-      memory  = var.web_memory
+      cpu     = 0.25
+      memory  = "0.5Gi"
       command = ["/bin/sh", "-c"]
       args    = ["printf '%s' \"$NGINX_CONF\" > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'"]
 
@@ -327,7 +320,7 @@ resource "azurerm_container_app" "api" {
     # busier of the two rules.
     http_scale_rule {
       name                = "http-scaling"
-      concurrent_requests = tostring(var.api_http_concurrent_requests)
+      concurrent_requests = "50"
     }
   }
 
@@ -387,8 +380,8 @@ resource "azurerm_container_app" "worker" {
   template {
     # At least one replica: worker owns the periodic jobs (capture sync, AI
     # passes), and a cpu rule cannot start it from zero.
-    min_replicas = var.worker_min_replicas
-    max_replicas = var.worker_max_replicas
+    min_replicas = 1
+    max_replicas = 3
 
     volume {
       name         = "config"
@@ -405,8 +398,8 @@ resource "azurerm_container_app" "worker" {
     container {
       name   = "worker"
       image  = local.images.worker
-      cpu    = var.worker_cpu
-      memory = var.worker_memory
+      cpu    = 0.5
+      memory = "1Gi"
 
       dynamic "env" {
         for_each = local.worker_env

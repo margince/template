@@ -9,19 +9,14 @@ domain = "crm.example.com"
 admin_ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 
 # The addresses that run make host-bootstrap and make deploy.
+# SSH admits only these. 0.0.0.0/0 is refused.
 ssh_allowed_cidrs = ["203.0.113.10/32"]
 
 # ---- Optional, shown with their defaults ------------------------------------------
 
-# region                  = "eu-central-1"
-# name_prefix             = "margince-light"
-# environment             = "production"
-# instance_type           = "t3.large"   # t4g.large with cpu_architecture = "arm64"
-# cpu_architecture        = "x86_64"     # arm64 needs arm64 release images
-# os_disk_gb              = 30
-# data_disk_gb            = 64
-# enable_backup           = true   # daily EBS snapshots of both volumes, 7 kept
-# enable_alarms           = true   # status checks with auto-recover, CPU over 90%
-# alert_email             = ""     # for example "ops@example.com"
-# license_token           = ""     # MARGINCE_LICENSE, stored in SSM Parameter Store
-# allow_ssh_from_anywhere = false
+# name_prefix   = "margince-light"
+# region        = "eu-central-1"
+# instance_type = "t3.large"   # t4g.large (arm64) needs arm64 release images
+# data_disk_gb  = 64
+# alert_email   = ""   # for example "ops@example.com"
+# license_token = ""   # MARGINCE_LICENSE, stored in SSM Parameter Store

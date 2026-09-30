@@ -119,9 +119,7 @@ locals {
   interface_endpoint_services = toset([
     "ecr.api",
     "ecr.dkr",
-    # ssm replaced secretsmanager when secrets.tf moved to Parameter Store:
-    # ECS resolves task "secrets" through the SSM API. Same hourly and per-GB
-    # cost as the endpoint it replaces, so cost-neutral.
+    # ECS resolves task "secrets" through the SSM API (secrets.tf).
     "ssm",
     "kms",
     "logs",

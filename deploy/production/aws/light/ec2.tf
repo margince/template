@@ -7,7 +7,8 @@
 # Elastic IP stay; run make host-bootstrap and make deploy again afterwards.
 
 locals {
-  ubuntu_arch = var.cpu_architecture == "arm64" ? "arm64" : "amd64"
+  # Graviton instance types (t4g, m7g, c7gn, ...) run the arm64 AMI.
+  ubuntu_arch = can(regex("^(a1|[a-z]+[0-9]+g[a-z]*)\\.", var.instance_type)) ? "arm64" : "amd64"
 
   # The same backup tag on the root and the data volume (backup.tf).
   backup_tag = { Backup = "${var.name_prefix}-daily" }
@@ -49,7 +50,7 @@ resource "aws_instance" "this" {
 
   root_block_device {
     volume_type           = "gp3"
-    volume_size           = var.os_disk_gb
+    volume_size           = 30
     encrypted             = true
     delete_on_termination = true
     tags                  = merge({ Name = "${var.name_prefix}-root" }, local.backup_tag)

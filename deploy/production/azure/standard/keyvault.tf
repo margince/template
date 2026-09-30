@@ -1,6 +1,7 @@
-# One customer-managed key for everything this stack stores at rest: the
-# Storage Account, Postgres Flexible Server and ACR all reference
-# azurerm_key_vault_key.data below. One key is enough because the per-consumer
+# One customer-managed key for the data this stack stores at rest: the
+# Storage Account and Postgres Flexible Server reference
+# azurerm_key_vault_key.data below (the registry, which holds only images,
+# uses Microsoft-managed keys, acr.tf). One key is enough because the per-consumer
 # RBAC grants are already the blast-radius boundary. Redis keeps its data on
 # the storage account's redis share, so the same key covers it.
 #
@@ -30,7 +31,7 @@ resource "azurerm_key_vault" "this" {
   public_network_access_enabled = true
 
   network_acls {
-    # AzureServices bypass, not None: Storage/Postgres/ACR's own
+    # AzureServices bypass, not None: Storage/Postgres's own
     # customer_managed_key wiring calls Key Vault AS a trusted Azure service on
     # the consuming resource's behalf, over Azure's private backbone — not
     # through this stack's own private endpoint (privateendpoints.tf's own
@@ -75,9 +76,8 @@ resource "azurerm_role_assignment" "terraform_key_vault_administrator" {
 resource "azurerm_key_vault_key" "data" {
   name         = "${var.name_prefix}-data"
   key_vault_id = azurerm_key_vault.this.id
-  # RSA, not EC: every consumer of this key (Storage Account, Postgres
-  # Flexible Server, ACR customer_managed_key/encryption blocks) requires an
-  # RSA key for envelope encryption — none of them accept an EC key.
+  # RSA, not EC: both consumers of this key (Storage Account, Postgres
+  # Flexible Server) require an RSA key for envelope encryption — none of them accept an EC key.
   key_type = "RSA-HSM" # premium SKU: HSM-protected
   key_size = 2048
 
@@ -103,8 +103,8 @@ resource "azurerm_key_vault_key" "data" {
   depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
 }
 
-# Every secret read, key operation and permission change, kept
-# log_retention_days in Log Analytics.
+# Every secret read, key operation and permission change, kept 90 days in
+# Log Analytics.
 resource "azurerm_monitor_diagnostic_setting" "key_vault" {
   name                       = "${var.name_prefix}-kv-audit"
   target_resource_id         = azurerm_key_vault.this.id

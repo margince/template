@@ -2,19 +2,19 @@ data "aws_caller_identity" "current" {}
 
 resource "aws_cloudwatch_log_group" "api" {
   name              = "/ecs/${var.name_prefix}/api"
-  retention_in_days = var.log_retention_days
+  retention_in_days = local.log_retention_days
   tags              = { Name = "${var.name_prefix}-api-logs", Component = "observability" }
 }
 
 resource "aws_cloudwatch_log_group" "worker" {
   name              = "/ecs/${var.name_prefix}/worker"
-  retention_in_days = var.log_retention_days
+  retention_in_days = local.log_retention_days
   tags              = { Name = "${var.name_prefix}-worker-logs", Component = "observability" }
 }
 
 resource "aws_cloudwatch_log_group" "web" {
   name              = "/ecs/${var.name_prefix}/web"
-  retention_in_days = var.log_retention_days
+  retention_in_days = local.log_retention_days
   tags              = { Name = "${var.name_prefix}-web-logs", Component = "observability" }
 }
 

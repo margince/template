@@ -1,4 +1,4 @@
-# Baseline alerting, on by default (var.enable_alarms). Every alarm pages the
+# Baseline alerting, always on. Every alarm pages the
 # same CMK-encrypted SNS topic, on ALARM and on OK. kms.tf's
 # AllowCloudWatchAlarmsToSNS statement is what lets CloudWatch publish to a
 # topic under that key; without it every notification is silently dropped.
@@ -18,8 +18,15 @@
 # exists (same reasoning as the instance sizing).
 
 locals {
-  alarms_on     = var.enable_alarms
-  alarm_actions = local.alarms_on ? [aws_sns_topic.alerts[0].arn] : []
+  alarm_actions = [aws_sns_topic.alerts.arn]
+
+  # Thresholds (starting points, see above).
+  alarm_alb_5xx_threshold              = 25
+  alarm_alb_p95_latency_seconds        = 2
+  alarm_waf_blocked_requests_threshold = 500
+  # About 80 percent of the max_connections Postgres derives for
+  # db.t4g.medium (LEAST(DBInstanceClassMemory/9531392, 5000), about 400).
+  alarm_rds_max_connections = 320
 
   # The one place this number is spelled; elasticache.tf's
   # num_cache_clusters reads it too, so the replication group's actual node
@@ -35,7 +42,7 @@ locals {
 
   # CPU-credit alarms only mean something on burstable (T-family) classes.
   rds_is_burstable   = startswith(var.db_instance_class, "db.t")
-  redis_is_burstable = startswith(var.redis_node_type, "cache.t")
+  redis_is_burstable = startswith(local.redis_node_type, "cache.t")
 
   ecs_services = {
     api    = aws_ecs_service.api.name
@@ -52,19 +59,18 @@ locals {
   # autoscaling, which grows the volume once free space drops under 10
   # percent, so this only fires when autoscaling could not keep up or hit
   # max_allocated_storage.
-  rds_free_storage_threshold_bytes = max(1, var.db_allocated_storage_gb * 0.05) * 1024 * 1024 * 1024
+  rds_free_storage_threshold_bytes = max(1, local.db_allocated_storage_gb * 0.05) * 1024 * 1024 * 1024
 }
 
 resource "aws_sns_topic" "alerts" {
-  count             = local.alarms_on ? 1 : 0
   name              = "${var.name_prefix}-alerts"
   kms_master_key_id = aws_kms_key.data.arn
   tags              = { Name = "${var.name_prefix}-alerts", Component = "observability" }
 }
 
 resource "aws_sns_topic_subscription" "alert_email" {
-  count     = local.alarms_on && var.alert_email != "" ? 1 : 0
-  topic_arn = aws_sns_topic.alerts[0].arn
+  count     = var.alert_email != "" ? 1 : 0
+  topic_arn = aws_sns_topic.alerts.arn
   protocol  = "email"
   endpoint  = var.alert_email
 }
@@ -72,16 +78,15 @@ resource "aws_sns_topic_subscription" "alert_email" {
 # ---- ALB ---------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "alb_elb_5xx" {
-  count               = local.alarms_on ? 1 : 0
   alarm_name          = "${var.name_prefix}-alb-elb-5xx"
-  alarm_description   = "The ALB itself returned more than ${var.alarm_alb_5xx_threshold} 5xx responses in 5 minutes (no healthy target, target connection errors, ALB limits)."
+  alarm_description   = "The ALB itself returned more than ${local.alarm_alb_5xx_threshold} 5xx responses in 5 minutes (no healthy target, target connection errors, ALB limits)."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "HTTPCode_ELB_5XX_Count"
   dimensions          = { LoadBalancer = aws_lb.this.arn_suffix }
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = 1
-  threshold           = var.alarm_alb_5xx_threshold
+  threshold           = local.alarm_alb_5xx_threshold
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
@@ -90,16 +95,15 @@ resource "aws_cloudwatch_metric_alarm" "alb_elb_5xx" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "alb_target_5xx" {
-  count               = local.alarms_on ? 1 : 0
   alarm_name          = "${var.name_prefix}-alb-target-5xx"
-  alarm_description   = "api/web targets returned more than ${var.alarm_alb_5xx_threshold} 5xx responses in 5 minutes."
+  alarm_description   = "api/web targets returned more than ${local.alarm_alb_5xx_threshold} 5xx responses in 5 minutes."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "HTTPCode_Target_5XX_Count"
   dimensions          = { LoadBalancer = aws_lb.this.arn_suffix }
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = 1
-  threshold           = var.alarm_alb_5xx_threshold
+  threshold           = local.alarm_alb_5xx_threshold
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
@@ -110,7 +114,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_target_5xx" {
 # Three consecutive minutes, so a task being replaced during a rolling
 # deploy does not page on its own.
 resource "aws_cloudwatch_metric_alarm" "alb_unhealthy_hosts" {
-  for_each            = local.alarms_on ? local.alb_target_groups : {}
+  for_each            = local.alb_target_groups
   alarm_name          = "${var.name_prefix}-alb-unhealthy-${each.key}"
   alarm_description   = "At least one ${each.key} target has been failing ALB health checks for 3 minutes."
   namespace           = "AWS/ApplicationELB"
@@ -128,16 +132,15 @@ resource "aws_cloudwatch_metric_alarm" "alb_unhealthy_hosts" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "alb_p95_latency" {
-  count               = local.alarms_on ? 1 : 0
   alarm_name          = "${var.name_prefix}-alb-p95-latency"
-  alarm_description   = "ALB TargetResponseTime p95 above ${var.alarm_alb_p95_latency_seconds}s for 15 minutes."
+  alarm_description   = "ALB TargetResponseTime p95 above ${local.alarm_alb_p95_latency_seconds}s for 15 minutes."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "TargetResponseTime"
   dimensions          = { LoadBalancer = aws_lb.this.arn_suffix }
   extended_statistic  = "p95"
   period              = 300
   evaluation_periods  = 3
-  threshold           = var.alarm_alb_p95_latency_seconds
+  threshold           = local.alarm_alb_p95_latency_seconds
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
@@ -151,7 +154,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_p95_latency" {
 # fixed desired_count is too small.
 
 resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {
-  for_each            = local.alarms_on ? local.ecs_services : {}
+  for_each            = local.ecs_services
   alarm_name          = "${var.name_prefix}-ecs-${each.key}-cpu-high"
   alarm_description   = "ECS service ${each.value} average CPU above 85 percent for 15 minutes."
   namespace           = "AWS/ECS"
@@ -169,7 +172,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "ecs_memory" {
-  for_each            = local.alarms_on ? local.ecs_services : {}
+  for_each            = local.ecs_services
   alarm_name          = "${var.name_prefix}-ecs-${each.key}-memory-high"
   alarm_description   = "ECS service ${each.value} average memory above 85 percent for 15 minutes; tasks are close to being OOM-killed."
   namespace           = "AWS/ECS"
@@ -189,7 +192,6 @@ resource "aws_cloudwatch_metric_alarm" "ecs_memory" {
 # ---- RDS ---------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
-  count               = local.alarms_on ? 1 : 0
   alarm_name          = "${var.name_prefix}-rds-free-storage-low"
   alarm_description   = "RDS ${aws_db_instance.this.identifier} free storage below 5 percent of the initial allocation; storage autoscaling did not keep up or reached max_allocated_storage."
   namespace           = "AWS/RDS"
@@ -207,7 +209,6 @@ resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
-  count               = local.alarms_on ? 1 : 0
   alarm_name          = "${var.name_prefix}-rds-cpu-high"
   alarm_description   = "RDS ${aws_db_instance.this.identifier} average CPU above 85 percent for 15 minutes."
   namespace           = "AWS/RDS"
@@ -225,16 +226,15 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "rds_connections" {
-  count               = local.alarms_on ? 1 : 0
   alarm_name          = "${var.name_prefix}-rds-connections-high"
-  alarm_description   = "RDS ${aws_db_instance.this.identifier} has more than ${var.alarm_rds_max_connections} connections; close to max_connections."
+  alarm_description   = "RDS ${aws_db_instance.this.identifier} has more than ${local.alarm_rds_max_connections} connections; close to max_connections."
   namespace           = "AWS/RDS"
   metric_name         = "DatabaseConnections"
   dimensions          = { DBInstanceIdentifier = aws_db_instance.this.identifier }
   statistic           = "Maximum"
   period              = 300
   evaluation_periods  = 2
-  threshold           = var.alarm_rds_max_connections
+  threshold           = local.alarm_rds_max_connections
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions
@@ -246,7 +246,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_connections" {
 # load once the balance is exhausted; that shows up as "the app got slow"
 # with nothing else obviously wrong. This fires BEFORE the throttling does.
 resource "aws_cloudwatch_metric_alarm" "rds_cpu_credit_balance" {
-  count               = local.alarms_on && local.rds_is_burstable ? 1 : 0
+  count               = local.rds_is_burstable ? 1 : 0
   alarm_name          = "${var.name_prefix}-rds-cpu-credit-balance-low"
   alarm_description   = "RDS ${aws_db_instance.this.identifier} is burning through its CPU credit balance; sustained load is about to throttle it."
   namespace           = "AWS/RDS"
@@ -266,7 +266,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu_credit_balance" {
 # ---- ElastiCache (per node: these metrics are keyed on CacheClusterId) ------
 
 resource "aws_cloudwatch_metric_alarm" "redis_memory" {
-  count               = local.alarms_on ? local.redis_node_count : 0
+  count               = local.redis_node_count
   alarm_name          = "${var.name_prefix}-redis-memory-high-${count.index + 1}"
   alarm_description   = "ElastiCache node ${local.redis_node_ids[count.index]} DatabaseMemoryUsagePercentage above 80 percent; evictions or write failures are next."
   namespace           = "AWS/ElastiCache"
@@ -284,7 +284,7 @@ resource "aws_cloudwatch_metric_alarm" "redis_memory" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "redis_engine_cpu" {
-  count               = local.alarms_on ? local.redis_node_count : 0
+  count               = local.redis_node_count
   alarm_name          = "${var.name_prefix}-redis-engine-cpu-high-${count.index + 1}"
   alarm_description   = "ElastiCache node ${local.redis_node_ids[count.index]} EngineCPUUtilization above 80 percent for 15 minutes."
   namespace           = "AWS/ElastiCache"
@@ -302,7 +302,7 @@ resource "aws_cloudwatch_metric_alarm" "redis_engine_cpu" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "redis_cpu_credit_balance" {
-  count               = local.alarms_on && local.redis_is_burstable ? local.redis_node_count : 0
+  count               = local.redis_is_burstable ? local.redis_node_count : 0
   alarm_name          = "${var.name_prefix}-redis-cpu-credit-balance-low-${count.index + 1}"
   alarm_description   = "ElastiCache node ${local.redis_node_ids[count.index]} is burning through its CPU credit balance."
   namespace           = "AWS/ElastiCache"
@@ -325,16 +325,15 @@ resource "aws_cloudwatch_metric_alarm" "redis_cpu_credit_balance" {
 # count phase, watch CountedRequests and the WAF log group instead.
 
 resource "aws_cloudwatch_metric_alarm" "waf_blocked_requests" {
-  count               = local.alarms_on ? 1 : 0
   alarm_name          = "${var.name_prefix}-waf-blocked-requests-spike"
-  alarm_description   = "WAF blocked more than ${var.alarm_waf_blocked_requests_threshold} requests in 5 minutes: an attack, or a false positive locking real users out. Check the aws-waf-logs-${var.name_prefix} log group."
+  alarm_description   = "WAF blocked more than ${local.alarm_waf_blocked_requests_threshold} requests in 5 minutes: an attack, or a false positive locking real users out. Check the aws-waf-logs-${var.name_prefix} log group."
   namespace           = "AWS/WAFV2"
   metric_name         = "BlockedRequests"
   dimensions          = { WebACL = aws_wafv2_web_acl.alb.name, Region = var.aws_region, Rule = "ALL" }
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = 1
-  threshold           = var.alarm_waf_blocked_requests_threshold
+  threshold           = local.alarm_waf_blocked_requests_threshold
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = local.alarm_actions

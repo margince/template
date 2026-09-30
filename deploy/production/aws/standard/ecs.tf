@@ -1,3 +1,19 @@
+# Task sizes and counts, fixed as in the Azure standard stack (only the api
+# replica bounds are variables there too). Fargate CPU units and MiB.
+locals {
+  sizing = {
+    api_cpu             = 512
+    api_memory          = 1024
+    worker_cpu          = 512
+    worker_memory       = 1024
+    web_cpu             = 256
+    web_memory          = 512
+    worker_min_replicas = 1
+    worker_max_replicas = 3
+    web_replicas        = 2
+  }
+}
+
 # Named <instance_name>/<role>, so the images `make release` pushes with
 # REGISTRY set to this account's ECR registry land here unchanged
 # (docs/release.md, Section 6). IMMUTABLE: a released tag can never be
@@ -49,7 +65,7 @@ resource "aws_ecr_repository" "web" {
 # forever — IMMUTABLE means a tag is never reused, so nothing ever naturally
 # frees one, unlike a mutable "latest"-style repo where a new push already
 # reclaims the old digest's tag. Rule 2 is the tagged-image half of the same
-# cleanup: keep the most recent var.ecr_tagged_image_retain_count releases
+# cleanup: keep the most recent 30 releases
 # (rollback material), expire the rest. tagPatternList = ["*"] matches every
 # tag rather than naming release-version tags one at a time, since this
 # stack's release_version tags all follow one format, and every tag in these
@@ -70,12 +86,12 @@ locals {
       },
       {
         rulePriority = 2
-        description  = "Keep only the most recent ${var.ecr_tagged_image_retain_count} tagged (released) images"
+        description  = "Keep only the most recent 30 tagged (released) images"
         selection = {
           tagStatus      = "tagged"
           tagPatternList = ["*"]
           countType      = "imageCountMoreThan"
-          countNumber    = var.ecr_tagged_image_retain_count
+          countNumber    = 30
         }
         action = { type = "expire" }
       },
@@ -177,8 +193,8 @@ resource "aws_ecs_task_definition" "api" {
   family                   = "${var.name_prefix}-api"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = var.api_cpu
-  memory                   = var.api_memory
+  cpu                      = local.sizing.api_cpu
+  memory                   = local.sizing.api_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task_api.arn
 
@@ -242,8 +258,8 @@ resource "aws_ecs_task_definition" "worker" {
   family                   = "${var.name_prefix}-worker"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = var.worker_cpu
-  memory                   = var.worker_memory
+  cpu                      = local.sizing.worker_cpu
+  memory                   = local.sizing.worker_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task_worker.arn
 
@@ -309,8 +325,8 @@ resource "aws_ecs_task_definition" "web" {
   family                   = "${var.name_prefix}-web"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = var.web_cpu
-  memory                   = var.web_memory
+  cpu                      = local.sizing.web_cpu
+  memory                   = local.sizing.web_memory
   # execution_web, not execution: web reads no secrets, so it gets no path to
   # any (see iam.tf).
   execution_role_arn = aws_iam_role.execution_web.arn
@@ -350,7 +366,7 @@ resource "aws_ecs_service" "api" {
   name            = "${var.name_prefix}-api"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.api.arn
-  desired_count   = var.api_desired_count
+  desired_count   = var.api_min_replicas
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -382,7 +398,7 @@ resource "aws_ecs_service" "api" {
 
   # desired_count is the FLOOR the appautoscaling_target below scales from,
   # not the steady-state value — without this, every apply would fight the
-  # autoscaler back down to api_desired_count the moment it had scaled out.
+  # autoscaler back down to api_min_replicas the moment it had scaled out.
   lifecycle {
     ignore_changes = [desired_count]
   }
@@ -392,7 +408,7 @@ resource "aws_ecs_service" "worker" {
   name            = "${var.name_prefix}-worker"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.worker.arn
-  desired_count   = var.worker_desired_count
+  desired_count   = local.sizing.worker_min_replicas
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -427,8 +443,8 @@ resource "aws_appautoscaling_target" "api" {
   service_namespace  = "ecs"
   resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.api.name}"
   scalable_dimension = "ecs:service:DesiredCount"
-  min_capacity       = var.api_desired_count
-  max_capacity       = var.api_autoscaling_max_count
+  min_capacity       = var.api_min_replicas
+  max_capacity       = var.api_max_replicas
   tags               = { Name = "${var.name_prefix}-api", Component = "compute-api" }
 }
 
@@ -453,8 +469,8 @@ resource "aws_appautoscaling_target" "worker" {
   service_namespace  = "ecs"
   resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.worker.name}"
   scalable_dimension = "ecs:service:DesiredCount"
-  min_capacity       = var.worker_desired_count
-  max_capacity       = var.worker_autoscaling_max_count
+  min_capacity       = local.sizing.worker_min_replicas
+  max_capacity       = local.sizing.worker_max_replicas
   tags               = { Name = "${var.name_prefix}-worker", Component = "compute-worker" }
 }
 
@@ -481,7 +497,7 @@ resource "aws_ecs_service" "web" {
   name            = "${var.name_prefix}-web"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.web.arn
-  desired_count   = var.web_desired_count
+  desired_count   = local.sizing.web_replicas
   launch_type     = "FARGATE"
 
   network_configuration {

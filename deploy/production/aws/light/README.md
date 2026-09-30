@@ -14,12 +14,12 @@ same shape, variables and outputs.
 
 | Area | Resources |
 |---|---|
-| Compute | One EC2 instance, `t3.large` (2 vCPU, 8 GiB, x86_64), Canonical Ubuntu 24.04 LTS AMI from SSM. IMDSv2 required. User `ubuntu` with passwordless `sudo`, key pair from `admin_ssh_public_key`. |
+| Compute | One EC2 instance, `t3.large` (2 vCPU, 8 GiB, x86_64; a Graviton type such as `t4g.large` gets the arm64 AMI), Canonical Ubuntu 24.04 LTS AMI from SSM. IMDSv2 required. User `ubuntu` with passwordless `sudo`, key pair from `admin_ssh_public_key`. |
 | Storage | 30 GB encrypted gp3 root volume. 64 GB encrypted gp3 data volume (`prevent_destroy`), mounted at `/var/lib/docker` by cloud-init before Docker is installed. Every Docker volume (`pgdata`, `redisdata`, `blobs`, `caddydata`) is on it. |
 | Network | VPC with one public subnet, Elastic IP. Security group: 80 and 443 from the internet, 22 from `ssh_allowed_cidrs` only. Outbound open. |
 | Secrets | SSM Parameter Store SecureString `/<name_prefix>/margince-license` with the license. The instance does not read it. |
-| Backup | Data Lifecycle Manager: daily snapshots of the data and the root volume, 7 kept (`enable_backup`). |
-| Alarms | SNS topic and three CloudWatch alarms: system status check with auto-recover, instance status check failed for 5 minutes, CPU over 90% for 15 minutes (`enable_alarms`, `alert_email`). |
+| Backup | Data Lifecycle Manager: daily snapshots of the data and the root volume, 7 kept. |
+| Alarms | SNS topic and three CloudWatch alarms: system status check with auto-recover, instance status check failed for 5 minutes, CPU over 90% for 15 minutes, to `alert_email`. |
 
 cloud-init does one thing: it formats the data volume when it has no
 filesystem, mounts it by UUID with `nofail`, and makes `docker.service`
@@ -38,7 +38,7 @@ eu-central-1, on demand, about **USD 80 per month**:
 | EC2 `t3.large` | about 63 (`t4g.large`: about 56) |
 | gp3 volumes, 94 GB | about 9 |
 | Elastic IP (public IPv4) | about 4 |
-| Snapshots (`enable_backup`), incremental | about 2 to 5 |
+| Snapshots, incremental | about 2 to 5 |
 | Alarms, SNS, SSM Standard | less than 1 |
 
 ## 3. Prerequisites
@@ -50,7 +50,7 @@ eu-central-1, on demand, about **USD 80 per month**:
 | State | An S3 bucket for the remote state (`backend.hcl.example`). |
 | Instance | The instance repository with `make install` done, and the registry settings of [docs/release.md](../../../../docs/release.md#5-repository-settings). |
 | License | A production license, or a test environment ([docs/deploy.md, Section 5.8](../../../../docs/deploy.md#58-the-license-check)). |
-| Architecture | The release images must exist for `cpu_architecture`. `release.yml` builds the repository variable `PLATFORMS`, default `linux/amd64`. For `arm64` (`t4g.large`), set `PLATFORMS` to `linux/amd64,linux/arm64` first. |
+| Architecture | The release images must exist for the architecture of `instance_type`. `release.yml` builds the repository variable `PLATFORMS`, default `linux/amd64`. For `arm64` (`t4g.large`), set `PLATFORMS` to `linux/amd64,linux/arm64` first. |
 
 ## 4. Deploy
 
@@ -60,9 +60,22 @@ commands in the repository root.
 ### 4.1 Apply
 
 1. Copy `backend.hcl.example` to `backend.hcl` and fill it in.
-2. Copy `terraform.tfvars.example` to `terraform.tfvars` and fill in `domain`,
-   `admin_ssh_public_key` and `ssh_allowed_cidrs`. Set `license_token` to
-   store the license in SSM.
+2. Copy `terraform.tfvars.example` to `terraform.tfvars` and fill in the
+   required variables below. Set `license_token` to store the license in
+   SSM.
+
+   | Variable | Default | Meaning |
+   |---|---|---|
+   | `domain` | required | Public host name, for example `crm.example.com`. |
+   | `admin_ssh_public_key` | required | ed25519 or RSA public key of the SSH user `ubuntu`. |
+   | `ssh_allowed_cidrs` | required | IPv4 ranges for SSH. `0.0.0.0/0` is refused. |
+   | `name_prefix` | `margince-light` | Prefix of the resource names. |
+   | `region` | `eu-central-1` | AWS region. |
+   | `instance_type` | `t3.large` | EC2 instance type; a Graviton type selects the arm64 AMI (Section 7.1). |
+   | `data_disk_gb` | `64` | Size of the data volume. |
+   | `alert_email` | `""` | Subscriber of the alerts topic. Empty adds none. |
+   | `license_token` | `""` | `MARGINCE_LICENSE`, stored in SSM. |
+
 3. Apply:
 
    ```sh
@@ -168,7 +181,7 @@ Elastic IP stay. After a replacement:
 
 ## 6. Backups and restore
 
-With `enable_backup = true`, Data Lifecycle Manager snapshots the data volume
+Data Lifecycle Manager snapshots the data volume
 and the root volume daily at 02:00 UTC, selected by the tag
 `Backup = <name_prefix>-daily`, and keeps 7. The template itself does not
 back up the database ([docs/deploy.md, Section 5.13](../../../../docs/deploy.md#513-backups)).
@@ -186,8 +199,8 @@ a schedule.
 
 ### 7.1 Architecture
 
-`cpu_architecture` selects the AMI and must match `instance_type`: `x86_64`
-with `t3.large` (default), `arm64` with `t4g.large`. The release images must
+`instance_type` selects the AMI: a Graviton type (`t4g`, `m7g`, `c7gn`, ...)
+gets the arm64 AMI, any other type the x86_64 AMI. The release images must
 exist for that architecture (Section 3).
 
 ### 7.2 Recovery

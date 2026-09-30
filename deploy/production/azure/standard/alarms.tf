@@ -1,15 +1,10 @@
 # Metric alerts for the data services, the two apps and the WAF. Thresholds are
 # starting points, not tuned values.
 #
-# The only notification wired is the optional var.alert_email. Any other
-# alert destination is the operator's to own.
-#
-# Every resource below is gated on var.enable_deep_monitoring (variables.tf),
-# so this file is a no-op when it is false.
+# The only notification wired is var.alert_email. Any other alert
+# destination is the operator's to own.
 
 locals {
-  alerts_enabled = var.enable_deep_monitoring
-
   # One entry per metric alert. dimension is "name=value", or "" for none.
   metric_alerts = merge(
     {
@@ -93,7 +88,7 @@ locals {
         metric      = "AzwafTotalRequests"
         aggregation = "Total"
         operator    = "GreaterThan"
-        threshold   = var.alarm_waf_blocked_requests_threshold
+        threshold   = 500
         window      = "PT5M"
         description = "The WAF is blocking an unusual number of requests: an attack, or a false positive after a release."
         dimension   = "Action=Block"
@@ -125,7 +120,6 @@ locals {
 }
 
 resource "azurerm_monitor_action_group" "alerts" {
-  count               = local.alerts_enabled ? 1 : 0
   name                = "${var.name_prefix}-alerts"
   resource_group_name = azurerm_resource_group.this.name
   short_name          = substr(var.name_prefix, 0, 12)
@@ -142,7 +136,7 @@ resource "azurerm_monitor_action_group" "alerts" {
 }
 
 resource "azurerm_monitor_metric_alert" "this" {
-  for_each            = local.alerts_enabled ? local.metric_alerts : {}
+  for_each            = local.metric_alerts
   name                = "${var.name_prefix}-${each.key}"
   resource_group_name = azurerm_resource_group.this.name
   scopes              = [each.value.scope]
@@ -169,7 +163,7 @@ resource "azurerm_monitor_metric_alert" "this" {
   }
 
   action {
-    action_group_id = azurerm_monitor_action_group.alerts[0].id
+    action_group_id = azurerm_monitor_action_group.alerts.id
   }
 
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-${each.key}", Component = "observability" })

@@ -72,21 +72,13 @@ resource "azurerm_storage_account" "this" {
       days = 30
     }
 
-    # SMB hardening, off by default: Microsoft does not document Container
-    # Apps Azure Files mounts with these restrictions. Turn on only after a
-    # test deploy shows api and worker still mount both shares.
-    dynamic "smb" {
-      for_each = var.storage_smb_hardening ? [1] : []
-      content {
-        versions                = ["SMB3.1.1"]
-        channel_encryption_type = ["AES-256-GCM"]
-        authentication_types    = ["NTLMv2"]
-      }
-    }
+    # No SMB protocol restrictions: Microsoft does not document Container
+    # Apps Azure Files mounts with SMB 3.1.1-only / AES-256-GCM / NTLMv2.
+    # Traffic stays on the private endpoint, and HTTPS-only plus TLS 1.2
+    # still apply to the REST API.
   }
 
-  # Same identity/key pattern as postgres.tf and acr.tf's own
-  # customer_managed_key blocks — one shared data key (keyvault.tf), one
+  # Same identity/key pattern as postgres.tf's customer_managed_key block — one shared data key (keyvault.tf), one
   # shared grant-holder identity (identity.tf's data_cmk).
   identity {
     type         = "UserAssigned"
@@ -134,21 +126,18 @@ resource "azurerm_storage_management_policy" "this" {
   # Network Watcher rewrites the current flow log blob every minute, and
   # versioning keeps each prior copy. Drop those copies after a day; the
   # flow log's own retention deletes the current blobs.
-  dynamic "rule" {
-    for_each = var.enable_vnet_flow_logs ? [1] : []
-    content {
-      name    = "expire-flow-log-versions"
-      enabled = true
+  rule {
+    name    = "expire-flow-log-versions"
+    enabled = true
 
-      filters {
-        blob_types   = ["blockBlob"]
-        prefix_match = ["insights-logs-flowlogflowevent/"]
-      }
+    filters {
+      blob_types   = ["blockBlob"]
+      prefix_match = ["insights-logs-flowlogflowevent/"]
+    }
 
-      actions {
-        version {
-          delete_after_days_since_creation = 1
-        }
+    actions {
+      version {
+        delete_after_days_since_creation = 1
       }
     }
   }
@@ -170,15 +159,14 @@ resource "azurerm_storage_share" "config" {
 resource "azurerm_storage_share" "attachments" {
   name               = "${var.name_prefix}-attachments"
   storage_account_id = azurerm_storage_account.this.id
-  quota              = var.attachments_share_quota_gb
+  quota              = 100 # GiB; billed on use, not quota
 }
 
 # ---- Attachments backup ---------------------------------------------------------
 # Daily snapshot-based backup of the attachments and redis shares, kept 30 days
-# (enable_attachments_backup). Soft delete above covers a deleted share; this
+# in a Recovery Services vault. Soft delete above covers a deleted share; this
 # covers deleted or overwritten files inside it.
 resource "azurerm_recovery_services_vault" "this" {
-  count               = var.enable_attachments_backup ? 1 : 0
   name                = "${local.global_prefix}-rsv"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
@@ -188,10 +176,9 @@ resource "azurerm_recovery_services_vault" "this" {
 }
 
 resource "azurerm_backup_policy_file_share" "daily" {
-  count               = var.enable_attachments_backup ? 1 : 0
   name                = "${var.name_prefix}-attachments-daily"
   resource_group_name = azurerm_resource_group.this.name
-  recovery_vault_name = azurerm_recovery_services_vault.this[0].name
+  recovery_vault_name = azurerm_recovery_services_vault.this.name
   timezone            = "UTC"
 
   backup {
@@ -205,32 +192,29 @@ resource "azurerm_backup_policy_file_share" "daily" {
 }
 
 resource "azurerm_backup_container_storage_account" "this" {
-  count               = var.enable_attachments_backup ? 1 : 0
   resource_group_name = azurerm_resource_group.this.name
-  recovery_vault_name = azurerm_recovery_services_vault.this[0].name
+  recovery_vault_name = azurerm_recovery_services_vault.this.name
   storage_account_id  = azurerm_storage_account.this.id
 }
 
 resource "azurerm_backup_protected_file_share" "redis" {
-  count                     = var.enable_attachments_backup ? 1 : 0
   resource_group_name       = azurerm_resource_group.this.name
-  recovery_vault_name       = azurerm_recovery_services_vault.this[0].name
-  source_storage_account_id = azurerm_backup_container_storage_account.this[0].storage_account_id
+  recovery_vault_name       = azurerm_recovery_services_vault.this.name
+  source_storage_account_id = azurerm_backup_container_storage_account.this.storage_account_id
   source_file_share_name    = azurerm_storage_share.redis.name
-  backup_policy_id          = azurerm_backup_policy_file_share.daily[0].id
+  backup_policy_id          = azurerm_backup_policy_file_share.daily.id
 }
 
 resource "azurerm_backup_protected_file_share" "attachments" {
-  count                     = var.enable_attachments_backup ? 1 : 0
   resource_group_name       = azurerm_resource_group.this.name
-  recovery_vault_name       = azurerm_recovery_services_vault.this[0].name
-  source_storage_account_id = azurerm_backup_container_storage_account.this[0].storage_account_id
+  recovery_vault_name       = azurerm_recovery_services_vault.this.name
+  source_storage_account_id = azurerm_backup_container_storage_account.this.storage_account_id
   source_file_share_name    = azurerm_storage_share.attachments.name
-  backup_policy_id          = azurerm_backup_policy_file_share.daily[0].id
+  backup_policy_id          = azurerm_backup_policy_file_share.daily.id
 }
 
 # ---- Audit logs -----------------------------------------------------------------
-# Reads, writes and deletes on the file shares, kept log_retention_days in Log
+# Reads, writes and deletes on the file shares, kept 90 days in Log
 # Analytics.
 resource "azurerm_monitor_diagnostic_setting" "files" {
   name                       = "${var.name_prefix}-files-audit"

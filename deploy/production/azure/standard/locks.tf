@@ -2,15 +2,13 @@
 # portal, CLI and Terraform alike, but not updates or data-plane access.
 # Set enable_resource_locks = false and apply before `terraform destroy`.
 locals {
-  locked_resources = merge(
-    {
-      postgres = azurerm_postgresql_flexible_server.this.id
-      storage  = azurerm_storage_account.this.id
-      keyvault = azurerm_key_vault.this.id
-      acr      = azurerm_container_registry.this.id
-    },
-    var.enable_attachments_backup ? { rsv = azurerm_recovery_services_vault.this[0].id } : {},
-  )
+  locked_resources = {
+    postgres = azurerm_postgresql_flexible_server.this.id
+    storage  = azurerm_storage_account.this.id
+    keyvault = azurerm_key_vault.this.id
+    acr      = azurerm_container_registry.this.id
+    rsv      = azurerm_recovery_services_vault.this.id
+  }
 }
 
 resource "azurerm_management_lock" "this" {

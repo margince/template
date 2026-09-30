@@ -177,35 +177,19 @@ run "data_disk" {
   }
 }
 
-run "backup_and_alarms_default_on" {
+run "backup_and_alarms" {
   command = plan
   assert {
-    condition     = length(azurerm_backup_protected_vm.this) == 1 && azurerm_backup_policy_vm.daily[0].retention_daily[0].count == 7
-    error_message = "Daily backup with 7-day retention is on by default."
+    condition     = azurerm_backup_policy_vm.daily.backup[0].frequency == "Daily" && azurerm_backup_policy_vm.daily.retention_daily[0].count == 7
+    error_message = "Daily backup of the VM with 7-day retention."
   }
   assert {
-    condition     = length(azurerm_monitor_metric_alert.vm_unavailable) == 1 && length(azurerm_monitor_metric_alert.cpu_high) == 1
-    error_message = "The alerts are on by default."
-  }
-  assert {
-    condition     = azurerm_monitor_metric_alert.cpu_high[0].criteria[0].threshold == 90 && azurerm_monitor_metric_alert.cpu_high[0].window_size == "PT15M"
+    condition     = azurerm_monitor_metric_alert.cpu_high.criteria[0].threshold == 90 && azurerm_monitor_metric_alert.cpu_high.window_size == "PT15M"
     error_message = "CPU alert: over 90% for 15 minutes."
   }
   assert {
-    condition     = azurerm_monitor_metric_alert.vm_unavailable[0].criteria[0].metric_name == "VmAvailabilityMetric" && azurerm_monitor_metric_alert.vm_unavailable[0].window_size == "PT5M"
+    condition     = azurerm_monitor_metric_alert.vm_unavailable.criteria[0].metric_name == "VmAvailabilityMetric" && azurerm_monitor_metric_alert.vm_unavailable.window_size == "PT5M"
     error_message = "Availability alert: unavailable for 5 minutes."
-  }
-}
-
-run "backup_and_alarms_off" {
-  command = plan
-  variables {
-    enable_backup = false
-    enable_alarms = false
-  }
-  assert {
-    condition     = length(azurerm_recovery_services_vault.this) == 0 && length(azurerm_monitor_action_group.alerts) == 0
-    error_message = "enable_backup and enable_alarms turn the resources off."
   }
 }
 
@@ -255,56 +239,17 @@ run "empty_ssh_allowed_cidrs_refused" {
 run "ssh_from_anywhere_refused" {
   command = plan
   variables {
-    ssh_allowed_cidrs = ["0.0.0.0/0"]
+    ssh_allowed_cidrs = ["203.0.113.10/32", "0.0.0.0/0"]
   }
   expect_failures = [var.ssh_allowed_cidrs]
 }
 
-run "ssh_from_anywhere_explicit" {
+run "ssh_from_anywhere_ipv6_refused" {
   command = plan
   variables {
-    ssh_allowed_cidrs       = ["0.0.0.0/0"]
-    allow_ssh_from_anywhere = true
-    key_vault_allowed_cidrs = ["203.0.113.10/32"]
+    ssh_allowed_cidrs = ["::/0"]
   }
-  assert {
-    condition     = azurerm_key_vault.this.network_acls[0].ip_rules == toset(["203.0.113.10"])
-    error_message = "0.0.0.0/0 never reaches the Key Vault firewall."
-  }
-}
-
-run "admin_user_not_margince" {
-  command = plan
-  variables {
-    admin_username = "margince"
-  }
-  expect_failures = [var.admin_username]
-}
-
-run "removed_variables_refused" {
-  command = plan
-  variables {
-    enable_vm_backup         = true
-    azure_region             = "westeurope"
-    operator_ip_allowlist    = ["203.0.113.20"]
-    public_hostname          = "crm.example.com"
-    margince_git_ref         = "main"
-    bootstrap_admin_email    = "admin@example.com"
-    environment_posture      = "production"
-    enable_bastion_developer = true
-    db_sku_name              = "B_Standard_B1ms"
-  }
-  expect_failures = [
-    var.enable_vm_backup,
-    var.azure_region,
-    var.operator_ip_allowlist,
-    var.public_hostname,
-    var.margince_git_ref,
-    var.bootstrap_admin_email,
-    var.environment_posture,
-    var.enable_bastion_developer,
-    var.db_sku_name,
-  ]
+  expect_failures = [var.ssh_allowed_cidrs]
 }
 
 run "entra_group_required" {
@@ -312,5 +257,5 @@ run "entra_group_required" {
   variables {
     entra_access_group_object_id = ""
   }
-  expect_failures = [terraform_data.entra_inputs]
+  expect_failures = [var.entra_access_group_object_id]
 }

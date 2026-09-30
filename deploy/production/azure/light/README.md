@@ -17,10 +17,10 @@ same shape, variables and outputs.
 | Compute | One VM, `Standard_B2ms` (2 vCPU, 8 GiB), Canonical Ubuntu 24.04 LTS server Gen2. Trusted Launch, encryption at host, Azure-orchestrated OS patching. Admin user `azureadmin` with passwordless `sudo`, SSH key login only. |
 | Storage | 30 GB OS disk. 64 GB data disk (`prevent_destroy`), mounted at `/var/lib/docker` by cloud-init before Docker is installed. Every Docker volume (`pgdata`, `redisdata`, `blobs`, `caddydata`) is on it. |
 | Network | VNet with one subnet, static Standard public IP. NSG: 80 and 443 from the internet, 22 from `ssh_allowed_cidrs` only. Outbound open. |
-| Secrets | Key Vault (RBAC, firewall open to `ssh_allowed_cidrs` and `key_vault_allowed_cidrs`) with the Entra client secret and the license. The VM does not read it. |
+| Secrets | Key Vault (RBAC, purge protection, firewall open to `ssh_allowed_cidrs` only) with the Entra client secret and the license. The VM does not read it. |
 | Identity | Entra app registration: single tenant, assignment required, your security group, staff sign-in and Graph mail. |
-| Backup | Recovery Services vault: daily backup of the VM with its data disk, 7 days (`enable_backup`). |
-| Alerts | Action group and two metric alerts: VM unavailable for 5 minutes, CPU over 90% for 15 minutes (`enable_alarms`, `alert_email`). |
+| Backup | Recovery Services vault: daily backup of the VM with its data disk, 7 days. |
+| Alerts | Action group and two metric alerts: VM unavailable for 5 minutes, CPU over 90% for 15 minutes, to `alert_email`. |
 
 cloud-init does one thing: it formats the data disk when it has no
 filesystem, mounts it by UUID with `nofail`, and makes `docker.service`
@@ -39,7 +39,7 @@ West Europe, pay-as-you-go, about **EUR 75 per month**:
 | VM `Standard_B2ms` | about 55 |
 | OS and data disk (StandardSSD) | about 8 |
 | Static public IP | about 3 |
-| Azure Backup (`enable_backup`) | about 8 |
+| Azure Backup | about 8 |
 | Key Vault, alerts | less than 1 |
 
 ## 3. Prerequisites
@@ -53,8 +53,8 @@ West Europe, pay-as-you-go, about **EUR 75 per month**:
 | Instance | The instance repository with `make install` done, and the registry settings of [docs/release.md](../../../../docs/release.md#5-repository-settings). |
 | License | A production license, or a test environment ([docs/deploy.md, Section 5.8](../../../../docs/deploy.md#58-the-license-check)). |
 
-Set the subscription and register encryption at host once (or set
-`encryption_at_host = false`):
+Set the subscription and register encryption at host once; the VM always
+uses it:
 
 ```sh
 export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
@@ -71,11 +71,24 @@ commands in the repository root.
 ### 4.1 Apply
 
 1. Copy `backend.hcl.example` to `backend.hcl` and fill it in.
-2. Copy `terraform.tfvars.example` to `terraform.tfvars` and fill in `domain`,
-   `admin_ssh_public_key`, `ssh_allowed_cidrs` and
-   `entra_access_group_object_id`. `ssh_allowed_cidrs` must include the
-   address you run Terraform from: the Key Vault firewall admits only these
-   addresses and `key_vault_allowed_cidrs`.
+2. Copy `terraform.tfvars.example` to `terraform.tfvars` and fill in the
+   required variables below. `ssh_allowed_cidrs` must include the address
+   you run Terraform from: the Key Vault firewall admits only these
+   addresses.
+
+   | Variable | Default | Meaning |
+   |---|---|---|
+   | `domain` | required | Public host name, for example `crm.example.com`. |
+   | `admin_ssh_public_key` | required | ed25519 or RSA public key of the SSH user `azureadmin`. |
+   | `ssh_allowed_cidrs` | required | IPv4 ranges for SSH and the Key Vault firewall. `0.0.0.0/0` is refused. |
+   | `entra_access_group_object_id` | required | The Entra security group allowed to use Margince. |
+   | `name_prefix` | `margince` | Prefix of the resource names; the resource group is `<name_prefix>-light`. |
+   | `region` | `westeurope` | Azure region. |
+   | `vm_size` | `Standard_B2ms` | VM size. |
+   | `data_disk_gb` | `64` | Size of the data disk. |
+   | `alert_email` | `""` | Receiver of the alerts. Empty adds none. |
+   | `license_token` | `""` | `MARGINCE_LICENSE`, stored in Key Vault. |
+
 3. Apply:
 
    ```sh
@@ -182,7 +195,7 @@ public IP stay. After a replacement:
 
 ## 6. Backups and restore
 
-With `enable_backup = true`, Azure Backup takes a daily recovery point of the
+Azure Backup takes a daily recovery point of the
 VM with its OS and data disk at 02:00 UTC and keeps 7. The template itself
 does not back up the database ([docs/deploy.md, Section 5.13](../../../../docs/deploy.md#513-backups)).
 
@@ -201,7 +214,8 @@ a schedule.
 ### 7.1 Entra ID
 
 1. Grant admin consent for the app (Enterprise applications > Margince >
-   Permissions), unless `entra_grant_admin_consent = true`.
+   Permissions). This needs Privileged Role Administrator or Global
+   Administrator, so the stack leaves it to you.
 2. Add the app (`entra_client_id` output) to the Conditional Access policy
    that protects your other business applications.
 3. Check that Assignment required is Yes and that only your group is
@@ -209,7 +223,7 @@ a schedule.
 
 ### 7.2 Entra secret rotation
 
-The first `terraform apply` after `entra_secret_rotation_days` creates a new
+The first `terraform apply` after 180 days creates a new
 client secret and writes it to Key Vault. Then run Section 4.6, steps 2 and
 3, with the running version.
 

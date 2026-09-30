@@ -50,7 +50,7 @@ provider "azurerm" {
   }
 }
 
-# Authenticates as whoever runs `terraform apply` (az login). With
-# create_entra_app = true that identity needs Entra's Application
-# Administrator (or Cloud Application Administrator) role.
+# Authenticates as whoever runs `terraform apply` (az login). That identity
+# needs Entra's Application Administrator (or Cloud Application
+# Administrator) role.
 provider "azuread" {}

@@ -1,4 +1,4 @@
-# Basic alerts (var.enable_alarms, on by default), with the same thresholds
+# Basic alerts, always on, with the same thresholds
 # as the AWS light stack. The VM has no peer, so these are the signal that
 # Margince is down. Azure moves a VM off failed hardware by itself (service
 # healing); no recover action is needed.
@@ -6,7 +6,6 @@
 # Receivers: alert_email, or add your own to the action group.
 
 resource "azurerm_monitor_action_group" "alerts" {
-  count               = var.enable_alarms ? 1 : 0
   name                = "${var.name_prefix}-alerts"
   resource_group_name = azurerm_resource_group.this.name
   short_name          = substr(replace(var.name_prefix, "-", ""), 0, 12)
@@ -24,7 +23,6 @@ resource "azurerm_monitor_action_group" "alerts" {
 
 # VmAvailabilityMetric is 1 while the VM runs and 0 while it is unavailable.
 resource "azurerm_monitor_metric_alert" "vm_unavailable" {
-  count               = var.enable_alarms ? 1 : 0
   name                = "${var.name_prefix}-vm-unavailable"
   resource_group_name = azurerm_resource_group.this.name
   scopes              = [azurerm_linux_virtual_machine.this.id]
@@ -43,13 +41,12 @@ resource "azurerm_monitor_metric_alert" "vm_unavailable" {
   }
 
   action {
-    action_group_id = azurerm_monitor_action_group.alerts[0].id
+    action_group_id = azurerm_monitor_action_group.alerts.id
   }
 }
 
 # Sustained CPU. On B-series sizes this also means the CPU credits run out.
 resource "azurerm_monitor_metric_alert" "cpu_high" {
-  count               = var.enable_alarms ? 1 : 0
   name                = "${var.name_prefix}-cpu-high"
   resource_group_name = azurerm_resource_group.this.name
   scopes              = [azurerm_linux_virtual_machine.this.id]
@@ -68,6 +65,6 @@ resource "azurerm_monitor_metric_alert" "cpu_high" {
   }
 
   action {
-    action_group_id = azurerm_monitor_action_group.alerts[0].id
+    action_group_id = azurerm_monitor_action_group.alerts.id
   }
 }

@@ -50,12 +50,10 @@ provider "azurerm" {
 }
 
 # azurerm has no provider-level default_tags block. Tagged resources merge
-# network.tf's local.common_tags (Project, ManagedBy, Environment) into their
+# network.tf's local.common_tags (Project, ManagedBy, Stack) into their
 # own tags, and add Name and Component per resource.
 
 # Authenticates as whoever runs `terraform apply` (az login), in the tenant of
-# the ARM_SUBSCRIPTION_ID subscription. entra.tf needs that identity to hold Entra's
-# Application Administrator (or Cloud Application Administrator) role when
-# create_entra_app = true; with create_entra_app = false it only reads the
-# current tenant ID.
+# the ARM_SUBSCRIPTION_ID subscription. entra.tf needs that identity to hold
+# Entra's Application Administrator (or Cloud Application Administrator) role.
 provider "azuread" {}

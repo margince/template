@@ -12,10 +12,6 @@
 #
 # Naming: "/<name_prefix>/<credential>", one hierarchy per stack, so an IAM
 # policy or an operator can address the whole set by path.
-#
-# SSM refuses an empty Value (PutParameter enforces a minimum length of 1),
-# which is why the license parameter below is conditional rather than always
-# present the way the old Secrets Manager secret was.
 
 resource "random_id" "keyvault_root_key" {
   byte_length = 32
@@ -48,9 +44,6 @@ locals {
   redis_host = aws_elasticache_replication_group.this.primary_endpoint_address
 
   ssm_prefix = "/${var.name_prefix}"
-  # nonsensitive: whether a token is set is not itself secret, and count
-  # refuses a sensitive value.
-  has_license = nonsensitive(var.license_token != "")
 }
 
 resource "aws_ssm_parameter" "owner_dsn" {
@@ -130,10 +123,9 @@ resource "aws_ssm_parameter" "admin_password" {
   }
 }
 
-# Only when a token is set: SSM cannot store an empty value, and an unset
-# MARGINCE_LICENSE is the same "runs unlicensed" state an empty one was.
+# license_token is required (variables.tf): a production role refuses to
+# boot unlicensed.
 resource "aws_ssm_parameter" "license" {
-  count       = local.has_license ? 1 : 0
   name        = "${local.ssm_prefix}/license"
   description = "MARGINCE_LICENSE: product license token."
   type        = "SecureString"
@@ -180,18 +172,16 @@ locals {
   # env var name => parameter ARN, for everything api/worker receive. The one
   # list ecs.tf (task definition "secrets") and iam.tf (ssm:GetParameters
   # resources) both read, so the two can never disagree.
-  task_ssm_parameters = merge(
-    {
-      MARGINCE_OWNER_DSN            = aws_ssm_parameter.owner_dsn.arn
-      MARGINCE_DSN                  = aws_ssm_parameter.app_dsn.arn
-      MARGINCE_REDIS_PASSWORD       = aws_ssm_parameter.redis_password.arn
-      MARGINCE_KEYVAULT_ROOT_KEY    = aws_ssm_parameter.keyvault_root_key.arn
-      MARGINCE_WEBHOOK_KEY          = aws_ssm_parameter.webhook_key.arn
-      MARGINCE_CONNECTOR_STATE_KEY  = aws_ssm_parameter.connector_state_key.arn
-      MARGINCE_ADMIN_PASSWORD       = aws_ssm_parameter.admin_password.arn
-      MARGINCE_BLOBSTORE_ACCESS_KEY = aws_ssm_parameter.blobstore_access_key.arn
-      MARGINCE_BLOBSTORE_SECRET_KEY = aws_ssm_parameter.blobstore_secret_key.arn
-    },
-    local.has_license ? { MARGINCE_LICENSE = aws_ssm_parameter.license[0].arn } : {},
-  )
+  task_ssm_parameters = {
+    MARGINCE_OWNER_DSN            = aws_ssm_parameter.owner_dsn.arn
+    MARGINCE_DSN                  = aws_ssm_parameter.app_dsn.arn
+    MARGINCE_REDIS_PASSWORD       = aws_ssm_parameter.redis_password.arn
+    MARGINCE_KEYVAULT_ROOT_KEY    = aws_ssm_parameter.keyvault_root_key.arn
+    MARGINCE_WEBHOOK_KEY          = aws_ssm_parameter.webhook_key.arn
+    MARGINCE_CONNECTOR_STATE_KEY  = aws_ssm_parameter.connector_state_key.arn
+    MARGINCE_ADMIN_PASSWORD       = aws_ssm_parameter.admin_password.arn
+    MARGINCE_BLOBSTORE_ACCESS_KEY = aws_ssm_parameter.blobstore_access_key.arn
+    MARGINCE_BLOBSTORE_SECRET_KEY = aws_ssm_parameter.blobstore_secret_key.arn
+    MARGINCE_LICENSE              = aws_ssm_parameter.license.arn
+  }
 }

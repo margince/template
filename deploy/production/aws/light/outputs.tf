@@ -71,6 +71,6 @@ output "license_parameter_name" {
 }
 
 output "alerts_topic_arn" {
-  description = "The SNS topic that receives the alarms. Empty when enable_alarms is false."
-  value       = var.enable_alarms ? aws_sns_topic.alerts[0].arn : ""
+  description = "The SNS topic that receives the alarms."
+  value       = aws_sns_topic.alerts.arn
 }

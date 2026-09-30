@@ -1,3 +1,8 @@
+# Only what an operator must set, or genuinely sizes. Everything else is a
+# fixed, secure value in the file that uses it.
+
+# ---- Placement and naming ------------------------------------------------------
+
 variable "aws_region" {
   description = "AWS region every resource is created in."
   type        = string
@@ -5,7 +10,7 @@ variable "aws_region" {
 }
 
 variable "name_prefix" {
-  description = "Short prefix for every resource name (e.g. \"margince-prod\"). Lowercase letters, digits and hyphens: it also starts the S3 bucket names (<name_prefix>-blobstore-<account_id>-<region>), which must stay within 63 characters."
+  description = "Prefix for every resource name. Lowercase letters, digits and hyphens: it also starts the S3 bucket names (<name_prefix>-blobstore-<account_id>-<region>), which must stay within 63 characters."
   type        = string
   default     = "margince"
   validation {
@@ -20,65 +25,25 @@ variable "name_prefix" {
   }
 }
 
-variable "environment" {
-  description = <<-EOT
-    Stamped onto every resource's Environment tag (provider default_tags,
-    versions.tf) — the dimension a cost/operations tool groups this stack's
-    spend and automation by when the same name_prefix is reused across more
-    than one environment (a staging copy of "margince", say).
-  EOT
-  type        = string
-  default     = "production"
-}
-
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC this stack creates."
-  type        = string
-  default     = "10.20.0.0/16"
-}
-
 variable "az_count" {
-  description = "Number of availability zones to spread public/private subnets across."
+  description = "Availability Zones to spread the public and private subnets (and one NAT gateway each) across."
   type        = number
   default     = 2
   validation {
-    # RDS and ElastiCache subnet groups both require subnets in at least two
-    # AZs — az_count = 1 produces a db_subnet_group covering one, which RDS
-    # refuses at CreateDBSubnetGroup, not at plan time, so this catches it
-    # before the apply gets that far.
+    # RDS and ElastiCache subnet groups both require two AZs; RDS refuses a
+    # one-AZ subnet group only at apply time.
     condition     = var.az_count >= 2
-    error_message = "az_count must be at least 2 — RDS and ElastiCache subnet groups both require two Availability Zones."
+    error_message = "az_count must be at least 2: RDS and ElastiCache subnet groups both require two Availability Zones."
   }
 }
 
-variable "cpu_architecture" {
-  description = <<-EOT
-    Fargate runtime_platform.cpu_architecture for all three task definitions:
-    "X86_64" or "ARM64". Defaults to X86_64 because release.yml and
-    `make package` build linux/amd64 unless the repository variable
-    PLATFORMS adds another platform (docs/release.md, Section 5), and the
-    Azure standard stack runs the same amd64 images. ARM64 (Graviton) is
-    cheaper per vCPU; set it only after setting
-    PLATFORMS = "linux/amd64,linux/arm64", so the pushed images carry an
-    arm64 variant.
-  EOT
-  type        = string
-  default     = "X86_64"
-  validation {
-    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
-    error_message = "cpu_architecture must be \"X86_64\" or \"ARM64\"."
-  }
-}
-
-# ---- Images -------------------------------------------------------------
-# The images are the ones `make release VERSION=<v>` (release.yml) or
-# `make package VERSION=<v>` builds from core's Dockerfile, named
-# <REGISTRY>/<instance_name>/<role>:<v> (docs/release.md, Section 6). Here
-# REGISTRY is this account's ECR registry (the registry output), and the ECR
-# repositories are named <instance_name>/api|web|worker (ecs.tf).
+# ---- Release ------------------------------------------------------------------------
+# Images are <registry>/<instance_name>/<role>:<release_version>, as
+# `make release` or `make package` names them (docs/release.md, Section 6).
+# The ECR repositories are IMMUTABLE (ecs.tf): a released tag never changes.
 
 variable "instance_name" {
-  description = "The instance's name from instance.yaml (`name`). It is the image namespace and the ECR repository prefix: <registry>/<instance_name>/api|web|worker."
+  description = "The instance's name from instance.yaml (`name`): the image namespace and the ECR repository prefix."
   type        = string
   default     = "margince-default"
   validation {
@@ -88,14 +53,7 @@ variable "instance_name" {
 }
 
 variable "release_version" {
-  description = <<-EOT
-    The release to deploy for all three roles (api, worker, web): the
-    VERSION of `make release` or `make package`, which is also the image tag
-    (docs/release.md, Section 2). The ECR repositories are IMMUTABLE
-    (ecs.tf), so a released tag is pushed once and never changes. Push the
-    release before the `terraform apply` that references it. No default:
-    choosing a release is an operator decision.
-  EOT
+  description = "The release to deploy for api, worker and web: the VERSION of `make release`, which is also the image tag. Push it before the apply that references it."
   type        = string
   validation {
     condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
@@ -103,259 +61,104 @@ variable "release_version" {
   }
 }
 
-# ---- Compute sizing -------------------------------------------------------
-
-variable "api_desired_count" {
-  type    = number
-  default = 2
-}
-
-variable "worker_desired_count" {
-  type    = number
-  default = 1
-}
-
-variable "api_autoscaling_max_count" {
-  description = "Ceiling for api's CPU-based Application Auto Scaling target (ecs.tf) — api_desired_count is the floor."
-  type        = number
-  default     = 4
-}
-
-variable "worker_autoscaling_max_count" {
-  description = "Ceiling for worker's CPU-based Application Auto Scaling target (ecs.tf) — worker_desired_count is the floor."
-  type        = number
-  default     = 3
-}
-
-variable "web_desired_count" {
-  type    = number
-  default = 2
-}
-
-variable "api_cpu" {
-  type    = number
-  default = 512
-}
-
-variable "api_memory" {
-  type    = number
-  default = 1024
-}
-
-variable "worker_cpu" {
-  type    = number
-  default = 512
-}
-
-variable "worker_memory" {
-  type    = number
-  default = 1024
-}
-
-variable "web_cpu" {
-  type    = number
-  default = 256
-}
-
-variable "web_memory" {
-  type    = number
-  default = 512
-}
-
-variable "log_retention_days" {
-  type    = number
-  default = 30
-}
-
-variable "ecr_tagged_image_retain_count" {
-  description = <<-EOT
-    ecs.tf's ECR lifecycle policy expires all but the most recent N tagged
-    (released) images per repo, once IMMUTABLE tag mutability (ecs.tf) means
-    none of them are ever reclaimed by a later push to the same tag. 30 is a
-    generous rollback window for a CRM's release cadence, not a tuned value
-    — raise it if you release more often than that and still want that many
-    rollback targets on hand. Must be a positive integer.
-  EOT
-  type        = number
-  default     = 30
-
+variable "cpu_architecture" {
+  description = "Fargate CPU architecture for all three tasks: X86_64 (the linux/amd64 images release.yml builds by default) or ARM64 (set PLATFORMS = \"linux/amd64,linux/arm64\" for the release first)."
+  type        = string
+  default     = "X86_64"
   validation {
-    condition     = var.ecr_tagged_image_retain_count >= 1 && floor(var.ecr_tagged_image_retain_count) == var.ecr_tagged_image_retain_count
-    error_message = "ecr_tagged_image_retain_count must be a positive integer."
+    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
+    error_message = "cpu_architecture must be \"X86_64\" or \"ARM64\"."
   }
 }
 
-# ---- Database ---------------------------------------------------------------
-
-variable "db_instance_class" {
-  type    = string
-  default = "db.t4g.medium"
-}
-
-variable "db_allocated_storage_gb" {
-  type    = number
-  default = 50
-}
-
-variable "db_engine_version" {
-  description = "Postgres major version (\"16\"). Major only: RDS applies minor upgrades itself (auto_minor_version_upgrade), and a pinned minor makes every later plan try to downgrade. Must be a major RDS lists pgvector support for."
-  type        = string
-  default     = "16"
-}
-
-variable "db_multi_az" {
-  type    = bool
-  default = true
-}
-
-variable "db_backup_retention_days" {
-  type    = number
-  default = 7
-}
-
-variable "db_final_snapshot_generation" {
-  description = <<-EOT
-    Feeds rds.tf's random_id.final_snapshot and elasticache.tf's
-    random_id.redis_final_snapshot as a keepers value, so each gets a fresh
-    final-snapshot suffix without deriving it from the resource being
-    deleted (which would cycle). Bump this before deliberately destroying
-    and recreating the RDS instance or the Redis replication group in the
-    SAME state — otherwise the reused suffix collides with a snapshot an
-    earlier deletion already left behind, and RDS/ElastiCache reject the
-    delete with a snapshot-already-exists error. A replacement Terraform
-    triggers on its own (e.g. a ForceNew attribute change) does not need
-    this bumped, since that recreates the random_id resource too.
-  EOT
-  type        = number
-  default     = 1
-}
-
-# ---- Redis ------------------------------------------------------------------
-
-variable "redis_node_type" {
-  type    = string
-  default = "cache.t4g.small"
-}
-
-variable "cache_engine_version" {
-  description = <<-EOT
-    ElastiCache Valkey engine version. "7.2" keeps the Redis 7.2 protocol
-    series every other Margince stack runs: the dev compose file uses
-    redis:7.2 and the Azure stacks run Redis 7.2. ElastiCache offers no Redis
-    OSS 7.2 (Redis OSS stops at 7.1 there), and Valkey 7.2 is the
-    wire-compatible fork of Redis 7.2. The parameter group family
-    (elasticache.tf) is derived from the major version.
-  EOT
-  type        = string
-  default     = "7.2"
-  validation {
-    condition     = can(regex("^[0-9]+\\.[0-9]+$", var.cache_engine_version))
-    error_message = "cache_engine_version must be major.minor, e.g. \"7.2\"."
-  }
-}
-
-# ---- Routing ------------------------------------------------------------------
-
-variable "acm_certificate_arn" {
-  description = <<-EOT
-    ARN of an ACM certificate covering the public host this installation
-    serves (MARGINCE_PUBLIC_BASE_URL's host). Not created by this stack —
-    validating a certificate needs the domain's own DNS, which lives
-    wherever the operator's zone lives.
-  EOT
-  type        = string
-}
+# ---- Application ----------------------------------------------------------------------
 
 variable "public_base_url" {
-  description = "MARGINCE_PUBLIC_BASE_URL — e.g. https://crm.example.com"
+  description = "MARGINCE_PUBLIC_BASE_URL, e.g. https://crm.example.com. Point its host at the ALB (alb_dns_name)."
   type        = string
+  validation {
+    condition     = can(regex("^https://[a-z0-9.-]+$", var.public_base_url))
+    error_message = "public_base_url must be https://<host> with no path or trailing slash."
+  }
 }
 
-# ---- Secrets and application config -----------------------------------------
+variable "acm_certificate_arn" {
+  description = "ARN of an ACM certificate in aws_region covering public_base_url's host. Not created here: DNS validation needs your own zone."
+  type        = string
+  validation {
+    condition     = startswith(var.acm_certificate_arn, "arn:aws:acm:")
+    error_message = "acm_certificate_arn must be an ACM certificate ARN."
+  }
+}
 
 variable "license_token" {
-  description = "MARGINCE_LICENSE. Empty runs unlicensed (no SSM parameter is created and the variable is left unset in the task), which a production role refuses to boot on."
+  description = "MARGINCE_LICENSE. Required: a production role refuses to boot unlicensed."
   type        = string
-  default     = ""
   sensitive   = true
+  validation {
+    condition     = length(var.license_token) > 0
+    error_message = "license_token is required: the api refuses to boot unlicensed in production."
+  }
 }
 
 variable "admin_bootstrap_password" {
-  description = <<-EOT
-    MARGINCE_ADMIN_PASSWORD for the first boot against an empty database.
-    Rotate/remove per the Margince repository's docs/deployment.md once the organization exists —
-    this variable only seeds the initial SSM parameter value (secrets.tf
-    ignores later changes so an operator overwrite survives apply).
-  EOT
+  description = "MARGINCE_ADMIN_PASSWORD for the first boot against an empty database. Only seeds the SSM parameter; overwrite it with an inert value after the first boot (README.md, step 5)."
   type        = string
   sensitive   = true
   validation {
     condition     = length(var.admin_bootstrap_password) > 0
-    error_message = "admin_bootstrap_password must not be empty; SSM cannot store an empty value."
+    error_message = "admin_bootstrap_password must not be empty."
   }
 }
 
-# ---- Observability -----------------------------------------------------------
+# ---- Sizing ----------------------------------------------------------------------------------
 
-variable "enable_alarms" {
-  description = <<-EOT
-    Toggles alarms.tf: the CMK-encrypted SNS topic and the baseline alarm
-    set (ALB 5xx / unhealthy targets / p95 latency, ECS CPU and memory, RDS
-    storage / CPU / connections, ElastiCache memory / CPU, WAF blocked
-    requests, and CPU-credit balance on burstable instance classes). On by
-    default: a production stack with no alerting fails silently. Set
-    alert_email, or subscribe your own endpoint to the alerts_topic_arn
-    output, or alarms fire into a topic nobody reads.
-  EOT
+variable "db_instance_class" {
+  description = "RDS instance class. Burstable classes (db.t*) get a CPU-credit alarm."
+  type        = string
+  default     = "db.t4g.medium"
+}
+
+variable "db_multi_az" {
+  description = "RDS Multi-AZ (a synchronous standby in a second AZ)."
   type        = bool
   default     = true
 }
 
-variable "alert_email" {
-  description = "Email address subscribed to the alerts SNS topic. Empty creates no subscription. AWS sends a confirmation mail; alarms are not delivered until it is confirmed."
-  type        = string
-  default     = ""
-}
-
-variable "alarm_alb_5xx_threshold" {
-  description = "ALB alarm: sum of HTTPCode_ELB_5XX_Count (and, separately, HTTPCode_Target_5XX_Count) per 5 minutes above which the alarm fires."
-  type        = number
-  default     = 25
-}
-
-variable "alarm_alb_p95_latency_seconds" {
-  description = "ALB alarm: TargetResponseTime p95 in seconds, sustained for 15 minutes."
+variable "api_min_replicas" {
+  description = "Minimum api tasks: the CPU autoscaling floor."
   type        = number
   default     = 2
+  validation {
+    condition     = var.api_min_replicas >= 1
+    error_message = "api_min_replicas must be at least 1."
+  }
 }
 
-variable "alarm_rds_max_connections" {
-  description = <<-EOT
-    RDS alarm: DatabaseConnections above this fires. The default is roughly
-    80 percent of the max_connections Postgres derives for db.t4g.medium
-    (LEAST(DBInstanceClassMemory/9531392, 5000), about 400). Raise it with
-    db_instance_class.
-  EOT
+variable "api_max_replicas" {
+  description = "Maximum api tasks: the CPU autoscaling ceiling."
   type        = number
-  default     = 320
+  default     = 4
+  validation {
+    condition     = var.api_max_replicas >= var.api_min_replicas
+    error_message = "api_max_replicas must be at least api_min_replicas."
+  }
 }
 
-variable "alarm_waf_blocked_requests_threshold" {
-  description = "WAF alarm: BlockedRequests (all rules) per 5 minutes above which the alarm fires. Only meaningful once waf_mode = \"block\"; in count mode nothing is blocked."
-  type        = number
-  default     = 500
-}
 
-# ---- WAF --------------------------------------------------------------------
+
+
+# Fargate CPU units / MiB; each pair must be a valid Fargate combination.
+
+
+
+
+
+
+# ---- Edge and operations ------------------------------------------------------------------------
 
 variable "waf_mode" {
-  description = <<-EOT
-    "count" or "block". In count mode every managed rule group and custom
-    rule only counts matches (visible in the WAF log group and sampled
-    requests) and nothing is blocked. Start in count, watch the logs for
-    about a week for false positives on real traffic, add overrides where
-    needed, then switch to "block". See README "WAF rollout".
-  EOT
+  description = "\"count\" (every rule only counts) or \"block\". Start in count, review the WAF logs for about a week, add overrides, then switch to block (README.md, \"WAF rollout\")."
   type        = string
   default     = "count"
   validation {
@@ -364,92 +167,8 @@ variable "waf_mode" {
   }
 }
 
-variable "waf_rate_limit_per_ip" {
-  description = "Global per-IP request limit per 5-minute window, across all paths except the provider webhook paths."
-  type        = number
-  default     = 2000
-  validation {
-    condition     = var.waf_rate_limit_per_ip >= 10
-    error_message = "WAF rate-based rules accept a limit of 10 or more."
-  }
-}
-
-variable "waf_auth_rate_limit_per_ip" {
-  description = "Per-IP request limit per 5-minute window on waf_auth_paths only (login, password reset, OAuth token and client registration)."
-  type        = number
-  default     = 100
-  validation {
-    condition     = var.waf_auth_rate_limit_per_ip >= 10
-    error_message = "WAF rate-based rules accept a limit of 10 or more."
-  }
-}
-
-variable "waf_auth_paths" {
-  description = <<-EOT
-    Exact URI paths the stricter auth rate limit applies to. Defaults are
-    the api's credential-accepting endpoints (identity module middleware):
-    password login, forgot/reset password, OAuth token and dynamic client
-    registration. An optional trailing slash is matched too.
-  EOT
-  type        = list(string)
-  default = [
-    "/v1/auth/login",
-    "/v1/auth/forgot-password",
-    "/v1/auth/reset-password",
-    "/oauth/token",
-    "/oauth/register",
-  ]
-  validation {
-    condition     = length(var.waf_auth_paths) > 0 && alltrue([for p in var.waf_auth_paths : startswith(p, "/")])
-    error_message = "waf_auth_paths needs at least one path, each starting with /."
-  }
-}
-
-variable "waf_allowed_country_codes" {
-  description = <<-EOT
-    ISO 3166-1 alpha-2 country codes allowed to reach the ALB (for example
-    ["DE", "AT", "CH"]). Empty (default) disables geo filtering. The
-    provider webhook paths are always exempt, since Google, Microsoft and
-    HubSpot deliver from wherever their infrastructure runs.
-  EOT
-  type        = list(string)
-  default     = []
-}
-
-variable "enable_waf_bot_control" {
-  description = <<-EOT
-    Adds the AWSManagedRulesBotControlRuleSet (COMMON inspection level).
-    Extra cost on top of the web ACL: a monthly subscription fee plus a
-    per-million-requests charge (see AWS WAF pricing). Off by default.
-  EOT
-  type        = bool
-  default     = false
-}
-
-variable "waf_log_retention_days" {
-  description = "Retention for the aws-waf-logs-<name_prefix> CloudWatch log group."
-  type        = number
-  default     = 30
-}
-
-# Removed. Declared only so an old terraform.tfvars entry fails with a clear
-# message; Terraform would otherwise ignore it with a warning.
-variable "enable_deep_monitoring" {
-  description = "Removed: renamed to enable_alarms (default true)."
-  type        = any
-  default     = null
-  validation {
-    condition     = var.enable_deep_monitoring == null
-    error_message = "enable_deep_monitoring was removed: renamed to enable_alarms (default true). Delete it from terraform.tfvars."
-  }
-}
-
-variable "image_tag" {
-  description = "Removed: replaced by release_version."
-  type        = any
-  default     = null
-  validation {
-    condition     = var.image_tag == null
-    error_message = "image_tag was removed: set release_version to the VERSION of `make release` (for example v0.3.0). Delete image_tag from terraform.tfvars."
-  }
+variable "alert_email" {
+  description = "Email address subscribed to the alerts SNS topic (AWS mails a confirmation link first). Empty: no subscription; subscribe your own endpoint to alerts_topic_arn."
+  type        = string
+  default     = ""
 }

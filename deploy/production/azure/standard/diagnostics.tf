@@ -10,6 +10,7 @@ locals {
       nsg-postgres          = { id = azurerm_network_security_group.postgres.id, logs = local.nsg_logs, metrics = false, dedicated = false }
       nsg-private-endpoints = { id = azurerm_network_security_group.private_endpoints.id, logs = local.nsg_logs, metrics = false, dedicated = false }
       nsg-appgw             = { id = azurerm_network_security_group.appgw.id, logs = local.nsg_logs, metrics = false, dedicated = false }
+      nsg-ops               = { id = azurerm_network_security_group.ops.id, logs = local.nsg_logs, metrics = false, dedicated = false }
       acr = {
         id        = azurerm_container_registry.this.id
         logs      = ["ContainerRegistryLoginEvents", "ContainerRegistryRepositoryEvents"]
@@ -22,6 +23,14 @@ locals {
         metrics   = false
         dedicated = false
       }
+      # Azure Backup's resource-specific tables need the Dedicated destination.
+      rsv = {
+        id = azurerm_recovery_services_vault.this.id
+        logs = ["CoreAzureBackup", "AddonAzureBackupJobs", "AddonAzureBackupAlerts", "AddonAzureBackupPolicy",
+        "AddonAzureBackupStorage", "AddonAzureBackupProtectedInstance"]
+        metrics   = false
+        dedicated = true
+      }
     },
     # The gateway's WAF and access logs, into the resource-specific tables
     # AGWFirewallLogs and AGWAccessLogs (retention: appgw.tf).
@@ -30,19 +39,6 @@ locals {
         id        = azurerm_application_gateway.this[0].id
         logs      = ["ApplicationGatewayFirewallLog", "ApplicationGatewayAccessLog"]
         metrics   = true
-        dedicated = true
-      }
-    } : {},
-    var.enable_jumpbox ? {
-      nsg-ops = { id = azurerm_network_security_group.ops[0].id, logs = local.nsg_logs, metrics = false, dedicated = false }
-    } : {},
-    # Azure Backup's resource-specific tables need the Dedicated destination.
-    var.enable_attachments_backup ? {
-      rsv = {
-        id = azurerm_recovery_services_vault.this[0].id
-        logs = ["CoreAzureBackup", "AddonAzureBackupJobs", "AddonAzureBackupAlerts", "AddonAzureBackupPolicy",
-        "AddonAzureBackupStorage", "AddonAzureBackupProtectedInstance"]
-        metrics   = false
         dedicated = true
       }
     } : {},

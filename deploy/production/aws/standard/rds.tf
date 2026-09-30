@@ -7,6 +7,16 @@
 # which installs pgvector — an untrusted extension only a superuser-equivalent
 # role can install), the other is the non-superuser role the api/migrate
 # connect as afterwards.
+locals {
+  # Major only: RDS applies minor upgrades itself (auto_minor_version_upgrade),
+  # and a pinned minor makes every later plan try to downgrade. A major RDS
+  # lists pgvector support for.
+  db_engine_version = "16"
+
+  # Initial size; storage autoscaling grows it up to four times this.
+  db_allocated_storage_gb = 50
+}
+
 resource "random_password" "rds_master" {
   length  = 32
   special = false
@@ -22,23 +32,13 @@ resource "random_password" "margince_app" {
   special = false
 }
 
-# A fixed final_snapshot_identifier collides on a second deletion: RDS keeps
-# the snapshot the first delete created, and DBSnapshotAlreadyExists refuses
-# the next one that reuses the name. keepers ties the suffix to
-# var.db_final_snapshot_generation instead of to aws_db_instance.this
-# directly — deriving it from the instance would make the instance depend on
-# its own final_snapshot_identifier, a cycle Terraform refuses to plan. The
-# suffix therefore changes ONLY when db_final_snapshot_generation changes:
-# bump it before EVERY destroy or replacement of the instance, including a
-# replacement Terraform plans on its own for a ForceNew attribute change.
-# Otherwise the second deletion reuses the first snapshot's name and fails
-# with DBSnapshotAlreadyExists.
+# A random suffix on the final snapshot name: RDS keeps the snapshot a
+# delete created, and DBSnapshotAlreadyExists refuses a second delete that
+# reuses the name. Deriving it from the instance would cycle. Before
+# replacing the instance in the same state, also replace this suffix:
+#   terraform apply -replace=random_id.final_snapshot -replace=aws_db_instance.this
 resource "random_id" "final_snapshot" {
   byte_length = 4
-
-  keepers = {
-    generation = var.db_final_snapshot_generation
-  }
 }
 
 # storage_encrypted below protects the disk; it says nothing about the wire.
@@ -52,8 +52,8 @@ resource "random_id" "final_snapshot" {
 # db_engine_version's major version — RDS parameter groups are versioned by
 # major version, not by the exact minor this stack pins.
 resource "aws_db_parameter_group" "this" {
-  name_prefix = "${var.name_prefix}-pg${split(".", var.db_engine_version)[0]}-"
-  family      = "postgres${split(".", var.db_engine_version)[0]}"
+  name_prefix = "${var.name_prefix}-pg${local.db_engine_version}-"
+  family      = "postgres${local.db_engine_version}"
 
   parameter {
     name         = "rds.force_ssl"
@@ -88,7 +88,7 @@ resource "aws_db_parameter_group" "this" {
     apply_method = "immediate"
   }
 
-  tags = { Name = "${var.name_prefix}-pg${split(".", var.db_engine_version)[0]}", Component = "database" }
+  tags = { Name = "${var.name_prefix}-pg${local.db_engine_version}", Component = "database" }
 
   lifecycle { create_before_destroy = true }
 }
@@ -127,24 +127,24 @@ resource "aws_iam_role_policy_attachment" "rds_enhanced_monitoring" {
 # enabled_cloudwatch_logs_exports below actually flushes a log line — with no
 # retention policy, i.e. kept forever at growing cost, unless something else
 # owns the group first. Declaring it here means Terraform's own
-# log_retention_days governs it like every other log group in this stack
+# local.log_retention_days governs it like every other log group in this stack
 # (iam.tf), not whatever RDS's own default turns out to be. Name is fixed by
 # RDS's own convention (/aws/rds/instance/<identifier>/<export>) — not ours
 # to choose.
 resource "aws_cloudwatch_log_group" "rds_postgresql" {
   name              = "/aws/rds/instance/${var.name_prefix}-db/postgresql"
-  retention_in_days = var.log_retention_days
+  retention_in_days = local.log_retention_days
   tags              = { Name = "${var.name_prefix}-db-postgresql-logs", Component = "observability" }
 }
 
 resource "aws_db_instance" "this" {
   identifier     = "${var.name_prefix}-db"
   engine         = "postgres"
-  engine_version = var.db_engine_version
+  engine_version = local.db_engine_version
   instance_class = var.db_instance_class
 
-  allocated_storage     = var.db_allocated_storage_gb
-  max_allocated_storage = var.db_allocated_storage_gb * 4
+  allocated_storage     = local.db_allocated_storage_gb
+  max_allocated_storage = local.db_allocated_storage_gb * 4
   storage_type          = "gp3"
   storage_encrypted     = true
   kms_key_id            = aws_kms_key.data.arn
@@ -169,10 +169,10 @@ resource "aws_db_instance" "this" {
   ca_cert_identifier = "rds-ca-rsa2048-g1"
 
   multi_az                = var.db_multi_az
-  backup_retention_period = var.db_backup_retention_days
+  backup_retention_period = 7
   backup_window           = "03:00-04:00"
   maintenance_window      = "mon:04:30-mon:05:30"
-  # Tags (including Component/Environment, versions.tf's default_tags) follow
+  # Tags (including versions.tf's default_tags) follow
   # onto every automated and final snapshot — without this a snapshot is
   # untagged and invisible to a cost report or an automation script filtering
   # by tag, even though it bills like any other RDS storage.
@@ -197,7 +197,9 @@ resource "aws_db_instance" "this" {
   # without this export it never leaves the instance at all.
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
-  deletion_protection       = true
+  deletion_protection = true
+  # Keep the point-in-time backups if the instance is ever deleted.
+  delete_automated_backups  = false
   skip_final_snapshot       = false
   final_snapshot_identifier = "${var.name_prefix}-db-final-${random_id.final_snapshot.hex}"
 

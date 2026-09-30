@@ -10,7 +10,7 @@ locals {
   # with azure-vm-utils (NVMe and SCSI), the second on older images.
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
     disk_paths = "/dev/disk/azure/data/by-lun/0 /dev/disk/azure/scsi1/lun0"
-    admin_user = var.admin_username
+    admin_user = local.admin_username
   })
 }
 
@@ -33,7 +33,7 @@ resource "azurerm_linux_virtual_machine" "this" {
   location                        = azurerm_resource_group.this.location
   resource_group_name             = azurerm_resource_group.this.name
   size                            = var.vm_size
-  admin_username                  = var.admin_username
+  admin_username                  = local.admin_username
   disable_password_authentication = true
   network_interface_ids           = [azurerm_network_interface.vm.id]
   custom_data                     = base64encode(local.cloud_init)
@@ -45,7 +45,7 @@ resource "azurerm_linux_virtual_machine" "this" {
 
   # Temp disk and disk caches encrypted on the host; needs the
   # EncryptionAtHost feature on the subscription (README.md).
-  encryption_at_host_enabled = var.encryption_at_host
+  encryption_at_host_enabled = true
 
   # Azure-orchestrated guest patching: critical and security updates outside
   # peak hours, reboot only when an update needs one. The containers restart
@@ -55,14 +55,14 @@ resource "azurerm_linux_virtual_machine" "this" {
   reboot_setting        = "IfRequired"
 
   admin_ssh_key {
-    username   = var.admin_username
+    username   = local.admin_username
     public_key = var.admin_ssh_public_key
   }
 
   os_disk {
     caching              = "ReadWrite"
     storage_account_type = "StandardSSD_LRS"
-    disk_size_gb         = var.os_disk_gb
+    disk_size_gb         = local.os_disk_gb
   }
 
   source_image_reference {
@@ -81,7 +81,7 @@ resource "azurerm_managed_disk" "data" {
   name                 = "${var.name_prefix}-data"
   location             = azurerm_resource_group.this.location
   resource_group_name  = azurerm_resource_group.this.name
-  storage_account_type = var.data_disk_type
+  storage_account_type = local.data_disk_type
   create_option        = "Empty"
   disk_size_gb         = var.data_disk_gb
   tags                 = local.common_tags

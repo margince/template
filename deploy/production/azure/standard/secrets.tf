@@ -119,11 +119,8 @@ resource "azurerm_key_vault_secret" "admin_password" {
   depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
 }
 
-# Created unconditionally so containerapps.tf's secret block always has a
-# key_vault_secret_id to point at. An empty MARGINCE_LICENSE runs unlicensed,
-# which is fine for development, but a production installation refuses to
-# boot without a licence (backend/internal/compose/license.go). The
-# precondition below fails the plan instead of the first boot.
+# license_token is required (variables.tf): a production installation
+# refuses to boot without a licence (backend/internal/compose/license.go).
 resource "azurerm_key_vault_secret" "license" {
   name         = "margince-license"
   value        = var.license_token
@@ -131,13 +128,6 @@ resource "azurerm_key_vault_secret" "license" {
   tags         = merge(local.common_tags, { Name = "${var.name_prefix}-license", Component = "secrets" })
 
   depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
-
-  lifecycle {
-    precondition {
-      condition     = var.environment_posture == "development" || length(var.license_token) > 0
-      error_message = "A production installation needs license_token (or set environment_posture = \"development\" for a test install)."
-    }
-  }
 }
 
 # The Entra app's client secret (entra.tf), read by api and worker as
@@ -145,12 +135,12 @@ resource "azurerm_key_vault_secret" "license" {
 # mail/calendar connectors share this one credential (cmd/api/microsoftsignin.go).
 resource "azurerm_key_vault_secret" "entra_client_secret" {
   name         = "margince-entra-client-secret"
-  value        = local.entra_client_secret
+  value        = azuread_application_password.margince.value
   key_vault_id = azurerm_key_vault.this.id
   tags         = merge(local.common_tags, { Name = "${var.name_prefix}-entra-client-secret", Component = "secrets" })
 
   # Key Vault raises SecretNearExpiry 30 days ahead of this date.
-  expiration_date = var.create_entra_app ? azuread_application_password.margince[0].end_date : null
+  expiration_date = azuread_application_password.margince.end_date
 
   depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
 }

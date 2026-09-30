@@ -1,106 +1,56 @@
-# Copy to terraform.tfvars and fill in the values with no default below.
+# Copy to terraform.tfvars and fill in.
 
-# ---- Required, no default ----------------------------------------------------
+# ---- Required ----------------------------------------------------------------
 
-# MARGINCE_PUBLIC_BASE_URL — the canonical external scheme+host.
+# MARGINCE_PUBLIC_BASE_URL: the canonical external scheme and host.
 public_base_url = "https://crm.example.com"
 
-# MARGINCE_ADMIN_PASSWORD for the first boot. Rotate/remove per
-# docs/deployment.md once the organization exists.
-admin_bootstrap_password = "change-me-before-first-boot"
+# The release to deploy: the VERSION of `make release` (docs/release.md).
+release_version = "v0.3.0"
 
-# A real release version: a git SHA or MARGINCE_RELEASE_VERSION, never
-# "latest". The build scripts lock each pushed tag read-only; image_digests
-# pins releases by digest. No default on purpose.
-image_tag = "2026.09.01"
+# Licence token issued for this installation.
+license_token = "<licence token>"
+
+# MARGINCE_ADMIN_PASSWORD for the first boot. Set include_bootstrap_admin =
+# false once the first admin has signed in (README.md, step 7).
+admin_bootstrap_password = "change-me-before-first-boot"
 
 # Object ID of the Entra security group that already gates the customer's
 # Dataverse environment. Only its members can sign in to Margince.
 entra_access_group_object_id = "00000000-0000-0000-0000-000000000000"
 
+# SSH public key for the jumpbox: ssh-keygen -t ed25519 (RSA also works).
+jumpbox_ssh_public_key = "ssh-ed25519 AAAA... you@example.com"
+
+# ---- Usually set ---------------------------------------------------------------
+
+# false on the first apply; true once images, database, margince.yaml and the
+# public certificate exist (README.md, step 6).
+deploy_apps = false
+
 # Admin network(s) allowed to use password login (the break-glass account).
 # Everyone else must sign in with Microsoft.
 break_glass_cidrs = ["203.0.113.10/32"]
-
-# Licence token issued for this installation (required in production).
-license_token = "<licence token>"
-
-# false on the first apply; true once images, database and margince.yaml exist.
-deploy_apps = false
-
-# false until the asuid TXT and CNAME records exist.
-bind_custom_domain = false
 
 # Your public IP while you set up or push images from a laptop
 # (curl -s https://api.ipify.org). Set back to [] afterwards.
 operator_ip_allowlist = ["203.0.113.20"]
 
-# Key Vault Administrator for these Entra object ids, ideally one group with
+# Key Vault Administrator for these Entra object IDs, ideally one group with
 # every operator and the CI identity. Empty: whoever runs terraform apply.
 # key_vault_admin_principal_ids = ["00000000-0000-0000-0000-000000000000"]
 
-# SSH public key for the jumpbox (enable_jumpbox, default true):
-# ssh-keygen -t ed25519 (RSA also works).
-jumpbox_ssh_public_key = "ssh-ed25519 AAAA... you@example.com"
+# alert_email = "ops@example.com"
 
-# ---- Optional — shown with their defaults ------------------------------------
+# ---- Optional, shown with their defaults -----------------------------------------
 
-# azure_region             = "westeurope"
-# resource_group_name      = "margince"
-# name_prefix              = "margince"
-# environment              = "production"  # stamped as the Environment tag on every resource
-# vnet_cidr                = "10.20.0.0/16"
-# az_count                 = 2
-# api_min_replicas         = 3
-# api_max_replicas         = 6
-# api_http_concurrent_requests = 50
-# enable_mtls              = false  # app-to-app mTLS in the environment (preview)
-# worker_min_replicas      = 1
-# worker_max_replicas      = 3
-# api_cpu                  = 0.5
-# api_memory               = "1Gi"
-# worker_cpu               = 0.5
-# worker_memory            = "1Gi"
-# web_cpu                  = 0.25
-# web_memory               = "0.5Gi"
-# log_retention_days       = 90
-# acr_untagged_manifest_retention_days = 14
-# db_sku_name              = "B_Standard_B2s"  # "GP_Standard_D2ds_v5": Microsoft's production recommendation, about +EUR 75/month
-# db_storage_mb            = 65536
-# db_version               = "16"
-# db_zone_redundant_ha     = false  # true needs a GP_ or MO_ SKU
-# db_backup_retention_days = 7
-# postgres_entra_admin_object_id = ""   # Entra user, group or service principal as Postgres Entra admin
-# postgres_entra_admin_name      = ""
-# postgres_entra_admin_type      = "Group"
-# redis_image              = "docker.io/library/redis:7.2@sha256:6461ca4ac0c5c9d81d53685c3bf76aa81f464a9de6cf3a97b80a1da8d1bb1de4"
-# redis_cpu                = 0.5
-# redis_memory             = "1Gi"
-# redis_maxmemory          = "768mb"
-# redis_share_quota_gb     = 16
-# auth_rate_limit_per_minute = 30
-# create_entra_app         = true   # false: pass entra_client_id / entra_client_secret from a hand-made app
-# entra_client_id          = ""
-# entra_client_secret      = ""
-# entra_secret_rotation_days = 180
-# entra_grant_admin_consent = false # true needs Privileged Role Administrator for the Terraform identity
-# enable_deep_monitoring   = true   # action group + metric alerts (alarms.tf)
-# alert_email              = ""
-# enable_jumpbox             = true
-# enable_bastion_developer   = true
-# jumpbox_vm_size            = "Standard_B2ms"
-# jumpbox_admin_username     = "margince"
-# jumpbox_shutdown_time      = "2000"
-# jumpbox_shutdown_timezone  = "W. Europe Standard Time"
-# encryption_at_host         = true   # needs the EncryptionAtHost feature registered (README.md)
-# attachments_share_quota_gb = 100
-# environment_posture        = "production"   # "development" boots without a licence
-# include_bootstrap_admin    = true           # false after the first admin login
-# image_digests              = {}             # { api = "sha256:...", worker = "sha256:...", web = "sha256:..." }
-# postgres_customer_managed_key = true
-# registry_customer_managed_key = false
-# enable_attachments_backup  = true   # attachments and redis shares
-# enable_resource_locks      = true   # set false and apply before terraform destroy
-# enable_vnet_flow_logs      = true
-# enable_traffic_analytics   = true
-# storage_smb_hardening      = false  # untested with Container Apps mounts
+# azure_region            = "westeurope"
+# name_prefix             = "margince"          # also the resource group name
+# instance_name           = "margince-default"  # instance.yaml's name
+# db_sku_name             = "B_Standard_B2s"    # "GP_Standard_D2ds_v5": Microsoft's production recommendation
+# db_zone_redundant_ha    = false               # true needs a GP_ or MO_ SKU
+# api_min_replicas        = 3
+# api_max_replicas        = 6
+# waf_mode                = "count"             # "block" after about a week of reviewing the WAF logs
+# include_bootstrap_admin = true                # false after the first admin login
+# enable_resource_locks   = true                # set false and apply before terraform destroy

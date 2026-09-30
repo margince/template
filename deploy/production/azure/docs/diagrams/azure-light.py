@@ -1,8 +1,9 @@
 from diagrams import Diagram, Cluster, Edge
-from diagrams.aws.network import InternetGateway
-from diagrams.aws.storage import ElasticBlockStoreEBSVolume, ElasticBlockStoreEBSSnapshot
-from diagrams.aws.management import Cloudwatch, SystemsManager
-from diagrams.aws.integration import SNS
+from diagrams.azure.compute import Disks
+from diagrams.azure.network import PublicIpAddresses
+from diagrams.azure.security import KeyVaults
+from diagrams.azure.storage import RecoveryServicesVaults
+from diagrams.azure.identity import AppRegistrations
 from diagrams.onprem.client import Users
 from diagrams.onprem.container import Docker
 from diagrams.onprem.network import Nginx
@@ -18,8 +19,8 @@ graph_attr = {
 }
 
 with Diagram(
-    "Margince on AWS — light",
-    filename="aws-light-architecture",
+    "Margince on Azure — light",
+    filename="azure-light-architecture",
     show=False,
     direction="TB",
     graph_attr=graph_attr,
@@ -28,10 +29,10 @@ with Diagram(
     users = Users("your users")
     operator = Users("operator\n(SSH, ssh_allowed_cidrs)")
 
-    with Cluster("VPC · one public subnet"):
-        igw = InternetGateway("Internet Gateway\n+ Elastic IP")
+    pip = PublicIpAddresses("Static public IP\n(fixed egress too)")
 
-        with Cluster("EC2 t3.large (Ubuntu 24.04)"):
+    with Cluster("VNet · one subnet"):
+        with Cluster("VM Standard_B2ms (Ubuntu 24.04)"):
             caddy = Rack("Caddy :80/:443\nauto HTTPS (Let's Encrypt)")
             nginx = Nginx("nginx\nrouting + auth rate limits")
             with Cluster("Docker Compose"):
@@ -41,7 +42,7 @@ with Diagram(
                 pg = Postgresql("PostgreSQL 16\ncontainer")
                 redis = Redis("Redis 7.2\ncontainer")
 
-            data = ElasticBlockStoreEBSVolume("EBS data volume\n/var/lib/docker volumes")
+            data = Disks("Managed data disk\n/var/lib/docker volumes")
             caddy >> nginx
             nginx >> Edge(label="SPA") >> web
             nginx >> Edge(label="/v1 /webhooks\n/oauth /mcp") >> api
@@ -54,16 +55,13 @@ with Diagram(
             pg >> Edge(style="dashed", color="gray60") >> data
             redis >> Edge(style="dashed", color="gray60") >> data
 
-    backups = ElasticBlockStoreEBSSnapshot("DLM daily snapshots\n(root + data, 7 kept)")
-    ssm = SystemsManager("SSM Parameter Store\nlicense, operator-only")
-    metrics = Cloudwatch("CloudWatch alarms")
-    alerts = SNS("SNS alerts\nemail")
+    kv = KeyVaults("Key Vault\nEntra secret, license\n(firewall: operator IPs)")
+    rsv = RecoveryServicesVaults("Recovery Services vault\ndaily VM backup, 7 days")
+    entra = AppRegistrations("Entra ID\napp registration")
 
-    users >> Edge(label="HTTPS") >> igw >> caddy
-    operator >> Edge(label=":22") >> igw
+    users >> Edge(label="HTTPS") >> pip >> caddy
+    operator >> Edge(label=":22") >> pip
     operator >> Edge(style="dashed", color="gray60", label="deploy\n(make deploy)") >> api
-
-    data >> Edge(style="dotted", color="firebrick", label="snapshot") >> backups
-    operator >> Edge(style="dashed", color="gray60") >> ssm
-    worker >> Edge(style="dashed", color="gray60", label="metrics") >> metrics
-    metrics >> Edge(style="dashed", color="gray60") >> alerts
+    operator >> Edge(style="dashed", color="gray60") >> kv
+    worker >> Edge(style="dotted", color="firebrick", label="VM backup") >> rsv
+    users >> Edge(style="dashed", label="sign in") >> entra

@@ -2,7 +2,7 @@
 # names. Azure-only outputs follow.
 
 locals {
-  ssh_user  = var.admin_username
+  ssh_user  = local.admin_username
   public_ip = azurerm_public_ip.vm.ip_address
 
   kv_read = "az keyvault secret show --vault-name ${azurerm_key_vault.this.name} --query value -o tsv -n"
@@ -90,11 +90,11 @@ output "entra_tenant_id" {
 }
 
 output "entra_redirect_uris" {
-  description = "Redirect URIs registered on the Entra app (or to register by hand when create_entra_app = false)."
+  description = "Redirect URIs registered on the Entra app."
   value       = local.entra_redirect_uris
 }
 
 output "alerts_action_group_id" {
-  description = "The action group that receives the alerts. Empty when enable_alarms is false."
-  value       = var.enable_alarms ? azurerm_monitor_action_group.alerts[0].id : ""
+  description = "The action group that receives the alerts."
+  value       = azurerm_monitor_action_group.alerts.id
 }

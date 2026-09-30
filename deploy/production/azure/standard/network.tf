@@ -1,18 +1,20 @@
 data "azurerm_client_config" "current" {}
 
 # azurerm has no provider-level default_tags block (versions.tf), so every
-# resource merges this map into its own tags to get Project, ManagedBy and
-# Environment.
+# resource merges this map into its own tags.
 locals {
   common_tags = {
-    Project     = "margince"
-    ManagedBy   = "terraform"
-    Environment = var.environment
+    Project   = "margince"
+    Flavour   = "standard"
+    ManagedBy = "terraform"
+    Stack     = var.name_prefix
   }
+
+  vnet_cidr = "10.20.0.0/16"
 }
 
 resource "azurerm_resource_group" "this" {
-  name     = var.resource_group_name
+  name     = var.name_prefix
   location = var.azure_region
   tags     = local.common_tags
 }
@@ -21,7 +23,7 @@ resource "azurerm_virtual_network" "this" {
   name                = "${var.name_prefix}-vnet"
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
-  address_space       = [var.vnet_cidr]
+  address_space       = [local.vnet_cidr]
   tags                = merge(local.common_tags, { Name = "${var.name_prefix}-vnet" })
 }
 
@@ -35,13 +37,13 @@ resource "azurerm_virtual_network" "this" {
 
 resource "azurerm_subnet" "appgw" {
   # Dedicated /24 for the Application Gateway (appgw.tf): v2 needs a subnet
-  # that holds nothing else, and a /24 leaves room for autoscaling to the
-  # appgw_max_capacity instance count. No NAT gateway: the gateway's
+  # that holds nothing else, and a /24 leaves room for autoscaling to its
+  # maximum instance count. No NAT gateway: the gateway's
   # outbound traffic uses its own public IP.
   name                 = "${var.name_prefix}-appgw"
   resource_group_name  = azurerm_resource_group.this.name
   virtual_network_name = azurerm_virtual_network.this.name
-  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 0)]
+  address_prefixes     = [cidrsubnet(local.vnet_cidr, 8, 0)]
 }
 
 resource "azurerm_subnet" "containerapps" {
@@ -51,7 +53,7 @@ resource "azurerm_subnet" "containerapps" {
   name                 = "${var.name_prefix}-containerapps"
   resource_group_name  = azurerm_resource_group.this.name
   virtual_network_name = azurerm_virtual_network.this.name
-  address_prefixes     = [cidrsubnet(var.vnet_cidr, 7, 1)]
+  address_prefixes     = [cidrsubnet(local.vnet_cidr, 7, 1)]
 
   delegation {
     name = "containerapps"
@@ -68,7 +70,7 @@ resource "azurerm_subnet" "postgres" {
   name                 = "${var.name_prefix}-postgres"
   resource_group_name  = azurerm_resource_group.this.name
   virtual_network_name = azurerm_virtual_network.this.name
-  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 4)]
+  address_prefixes     = [cidrsubnet(local.vnet_cidr, 8, 4)]
 
   delegation {
     name = "postgres"
@@ -87,7 +89,7 @@ resource "azurerm_subnet" "private_endpoints" {
   name                 = "${var.name_prefix}-private-endpoints"
   resource_group_name  = azurerm_resource_group.this.name
   virtual_network_name = azurerm_virtual_network.this.name
-  address_prefixes     = [cidrsubnet(var.vnet_cidr, 8, 5)]
+  address_prefixes     = [cidrsubnet(local.vnet_cidr, 8, 5)]
 
   # Makes the private_endpoints NSG apply to private endpoint traffic (off by
   # default for private endpoint subnets).
@@ -238,7 +240,7 @@ resource "azurerm_network_security_group" "postgres" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "5432"
-    source_address_prefix      = cidrsubnet(var.vnet_cidr, 8, 6)
+    source_address_prefix      = cidrsubnet(local.vnet_cidr, 8, 6)
     destination_address_prefix = "*"
   }
 
@@ -252,8 +254,8 @@ resource "azurerm_network_security_group" "postgres" {
     protocol                   = "*"
     source_port_range          = "*"
     destination_port_range     = "*"
-    source_address_prefix      = cidrsubnet(var.vnet_cidr, 8, 4)
-    destination_address_prefix = cidrsubnet(var.vnet_cidr, 8, 4)
+    source_address_prefix      = cidrsubnet(local.vnet_cidr, 8, 4)
+    destination_address_prefix = cidrsubnet(local.vnet_cidr, 8, 4)
   }
 
   # Deny by default inside the VNet: without this, the built-in
@@ -304,7 +306,7 @@ resource "azurerm_network_security_group" "private_endpoints" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "443"
-    source_address_prefix      = cidrsubnet(var.vnet_cidr, 8, 6)
+    source_address_prefix      = cidrsubnet(local.vnet_cidr, 8, 6)
     destination_address_prefix = "*"
   }
 
@@ -443,7 +445,7 @@ resource "azurerm_log_analytics_workspace" "this" {
   location            = azurerm_resource_group.this.location
   resource_group_name = azurerm_resource_group.this.name
   sku                 = "PerGB2018"
-  retention_in_days   = var.log_retention_days
+  retention_in_days   = 90
   tags                = merge(local.common_tags, { Name = "${var.name_prefix}-logs", Component = "observability" })
 }
 
@@ -451,10 +453,9 @@ resource "azurerm_log_analytics_workspace" "this" {
 # VNet flow logs replace the retired NSG flow logs. Azure allows one Network
 # Watcher per region and creates NetworkWatcher_<region> in NetworkWatcherRG
 # with the first VNet, so the flow log is attached to that watcher rather than
-# a new one. Network Watcher is a trusted service, so it writes through the
+# a new one. Kept 90 days, with traffic analytics into Log Analytics. Network Watcher is a trusted service, so it writes through the
 # storage account's firewall (AzureServices bypass, storage.tf).
 resource "azurerm_network_watcher_flow_log" "vnet" {
-  count                = var.enable_vnet_flow_logs ? 1 : 0
   name                 = "${var.name_prefix}-vnet"
   network_watcher_name = "NetworkWatcher_${var.azure_region}"
   resource_group_name  = "NetworkWatcherRG"
@@ -469,15 +470,12 @@ resource "azurerm_network_watcher_flow_log" "vnet" {
     days    = 90
   }
 
-  dynamic "traffic_analytics" {
-    for_each = var.enable_traffic_analytics ? [1] : []
-    content {
-      enabled               = true
-      workspace_id          = azurerm_log_analytics_workspace.this.workspace_id
-      workspace_region      = azurerm_log_analytics_workspace.this.location
-      workspace_resource_id = azurerm_log_analytics_workspace.this.id
-      interval_in_minutes   = 10
-    }
+  traffic_analytics {
+    enabled               = true
+    workspace_id          = azurerm_log_analytics_workspace.this.workspace_id
+    workspace_region      = azurerm_log_analytics_workspace.this.location
+    workspace_resource_id = azurerm_log_analytics_workspace.this.id
+    interval_in_minutes   = 10
   }
 
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-vnet-flow-log", Component = "network" })

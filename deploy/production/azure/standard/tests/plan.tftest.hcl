@@ -90,8 +90,26 @@ run "first_apply_without_apps" {
     error_message = "The apps point at the redis app, which has a restart alert."
   }
   assert {
-    condition     = length(azurerm_network_watcher_flow_log.vnet) == 1 && azurerm_network_watcher_flow_log.vnet[0].retention_policy[0].days == 90
-    error_message = "VNet flow logs are on with 90-day retention."
+    condition     = azurerm_network_watcher_flow_log.vnet.retention_policy[0].days == 90 && azurerm_network_watcher_flow_log.vnet.traffic_analytics[0].enabled
+    error_message = "VNet flow logs are on with 90-day retention and traffic analytics."
+  }
+  assert {
+    condition = (
+      azurerm_linux_virtual_machine.jumpbox.encryption_at_host_enabled &&
+      azurerm_linux_virtual_machine.jumpbox.disable_password_authentication &&
+      azurerm_linux_virtual_machine.jumpbox.secure_boot_enabled &&
+      azurerm_bastion_host.developer.sku == "Developer"
+    )
+    error_message = "The jumpbox has encryption at host, key-only SSH, Trusted Launch, and is reached through Bastion Developer."
+  }
+  assert {
+    condition = (
+      !azurerm_container_registry.this.public_network_access_enabled &&
+      one(azurerm_container_registry.this.network_rule_set).default_action == "Deny" &&
+      length(azurerm_storage_account.this.customer_managed_key) == 1 &&
+      length(azurerm_postgresql_flexible_server.this.customer_managed_key) == 1
+    )
+    error_message = "The registry has no public endpoint without operator_ip_allowlist; storage and Postgres use the customer-managed key."
   }
 }
 
@@ -241,25 +259,12 @@ run "ha_on_burstable_is_refused" {
   expect_failures = [azurerm_postgresql_flexible_server.this]
 }
 
-run "production_without_licence_is_refused" {
+run "missing_licence_is_refused" {
   command = plan
   variables {
     license_token = ""
   }
-  expect_failures = [azurerm_key_vault_secret.license]
-}
-
-run "development_posture_boots_unlicensed" {
-  command = plan
-  variables {
-    license_token       = ""
-    environment_posture = "development"
-    deploy_apps         = true
-  }
-  assert {
-    condition     = contains([for e in local.common_env : e.name], "MARGINCE_ENV")
-    error_message = "Development posture sets MARGINCE_ENV."
-  }
+  expect_failures = [var.license_token]
 }
 
 run "waf_defaults_to_detection" {
@@ -282,7 +287,7 @@ run "waf_defaults_to_detection" {
         r.rule_type == "RateLimitRule" ? r.rate_limit_duration == "FiveMins" && r.group_rate_limit_by == "ClientAddr" : true
       )
     ]) && length(azurerm_web_application_firewall_policy.this.custom_rules) == 2
-    error_message = "Two per-IP rate limits over five minutes; no geo rule without waf_allowed_country_codes."
+    error_message = "Exactly two custom rules: per-IP rate limits over five minutes."
   }
   assert {
     condition = alltrue([
@@ -301,22 +306,14 @@ run "waf_defaults_to_detection" {
   }
 }
 
-run "waf_block_mode_with_geo" {
+run "waf_block_mode" {
   command = plan
   variables {
-    waf_mode                  = "block"
-    waf_allowed_country_codes = ["DE", "AT"]
+    waf_mode = "block"
   }
   assert {
     condition     = azurerm_web_application_firewall_policy.this.policy_settings[0].mode == "Prevention" && alltrue([for r in azurerm_web_application_firewall_policy.this.custom_rules : r.action == "Block"])
     error_message = "waf_mode = block sets Prevention mode and blocking custom rules."
-  }
-  assert {
-    condition = anytrue([
-      for r in azurerm_web_application_firewall_policy.this.custom_rules :
-      r.name == "GeoAllowList" && anytrue([for c in r.match_conditions : c.operator == "GeoMatch" && c.negation_condition]) && anytrue([for c in r.match_conditions : c.operator == "BeginsWith" && c.negation_condition && contains(c.match_values, "/webhooks/graph")])
-    ])
-    error_message = "The geo allow-list blocks other countries and exempts the webhook paths."
   }
 }
 
@@ -326,20 +323,4 @@ run "release_version_must_be_a_release" {
     release_version = "latest"
   }
   expect_failures = [var.release_version]
-}
-
-run "removed_image_tag_is_refused" {
-  command = plan
-  variables {
-    image_tag = "v0.3.0"
-  }
-  expect_failures = [var.image_tag]
-}
-
-run "removed_bind_custom_domain_is_refused" {
-  command = plan
-  variables {
-    bind_custom_domain = true
-  }
-  expect_failures = [var.bind_custom_domain]
 }

@@ -53,8 +53,8 @@ output "kms_key_arn" {
 }
 
 output "alerts_topic_arn" {
-  description = "SNS topic every alarm in alarms.tf pages. Subscribe your own destination if alert_email is not enough. Empty when enable_alarms is false."
-  value       = var.enable_alarms ? aws_sns_topic.alerts[0].arn : ""
+  description = "SNS topic every alarm in alarms.tf pages. Subscribe your own destination if alert_email is not enough."
+  value       = aws_sns_topic.alerts.arn
 }
 
 output "waf_web_acl_arn" {
@@ -66,7 +66,7 @@ output "alb_access_log_bucket" {
 }
 
 output "ssm_parameter_names" {
-  description = "SSM Parameter Store names (not values) of every SecureString this stack writes. Read one with: aws ssm get-parameter --with-decryption --name <name> --query Parameter.Value --output text. license is empty when no license_token is set."
+  description = "SSM Parameter Store names (not values) of every SecureString this stack writes. Read one with: aws ssm get-parameter --with-decryption --name <name> --query Parameter.Value --output text."
   value = {
     owner_dsn            = aws_ssm_parameter.owner_dsn.name
     app_dsn              = aws_ssm_parameter.app_dsn.name
@@ -78,7 +78,7 @@ output "ssm_parameter_names" {
     blobstore_access_key = aws_ssm_parameter.blobstore_access_key.name
     blobstore_secret_key = aws_ssm_parameter.blobstore_secret_key.name
     rds_master_password  = aws_ssm_parameter.rds_master_password.name
-    license              = local.has_license ? aws_ssm_parameter.license[0].name : ""
+    license              = aws_ssm_parameter.license.name
   }
 }
 
@@ -95,7 +95,7 @@ output "ssm_parameter_arns" {
     blobstore_access_key = aws_ssm_parameter.blobstore_access_key.arn
     blobstore_secret_key = aws_ssm_parameter.blobstore_secret_key.arn
     rds_master_password  = aws_ssm_parameter.rds_master_password.arn
-    license              = local.has_license ? aws_ssm_parameter.license[0].arn : ""
+    license              = aws_ssm_parameter.license.arn
   }
 }
 
@@ -117,9 +117,4 @@ output "ops_instance_profile_name" {
 output "private_subnet_ids" {
   description = "Private subnets; launch the temporary bootstrap host in one of these."
   value       = aws_subnet.private[*].id
-}
-
-output "waf_capacity" {
-  description = "WAF capacity units the web ACL uses. Up to 1,500 are included in its price."
-  value       = aws_wafv2_web_acl.alb.capacity
 }
