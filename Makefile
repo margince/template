@@ -466,6 +466,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/smoke.test.sh
 	@bash scripts/trial.test.sh
 	@bash scripts/aio.test.sh
+	@bash scripts/aio-install.test.sh
 	@bash scripts/deploy/host/render.test.sh
 	@bash scripts/deploy/host.test.sh
 	@bash scripts/deploy/host/bootstrap.test.sh
@@ -764,6 +765,21 @@ aio: ## Build the all-in-one image <repo>/all-in-one:<v> (VERSION=, DATASET=, PU
 
 aio-smoke: ## Run the all-in-one image on a temporary volume and check it (VERSION=, AIO_SMOKE_TIMEOUT=)
 	@bash scripts/aio.sh smoke "$(VERSION)"
+
+aio-up: ## Start the all-in-one image here; installs Docker when it is missing (VERSION=)
+	@bash scripts/aio.sh up "$(VERSION)"
+
+aio-down: ## Stop the all-in-one container; the data is kept
+	@bash scripts/aio.sh down
+
+aio-reset: ## Delete the all-in-one container and its data (asks first)
+	@bash scripts/aio.sh reset
+
+aio-logins: ## The address and the accounts of the running all-in-one container
+	@bash scripts/aio.sh logins
+
+aio-logs: ## The last 200 log lines of the all-in-one container
+	@bash scripts/aio.sh logs
 
 # ──────────────────────── using the desktop folder ────────────────────
 #

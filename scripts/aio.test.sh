@@ -211,5 +211,23 @@ if STUB_MISSING="acme/all-in-one:v1.0.0" aio smoke v1.0.0 >/dev/null 2>"$TMP/err
 reset_log
 if STUB_HEALTH=unhealthy AIO_SMOKE_TIMEOUT=1 aio smoke v1.0.0 >/dev/null 2>&1; then fail "smoke fails when the container never becomes healthy"; else ok "smoke fails when the container never becomes healthy"; fi
 
+# ── install.sh wrappers ──
+# A stub sh records how scripts/aio.sh calls install.sh.
+cat > "$STUB_BIN/sh" <<'EOF'
+#!/bin/bash
+printf 'sh %s\n' "$*" >> "$STUB_LOG"
+EOF
+chmod +x "$STUB_BIN/sh"
+reset_log
+aio up v1.0.0 >/dev/null 2>&1 || true
+check "aio-up runs install.sh up with the image, container and volume" \
+  grep -qE '^sh .*/scripts/aio/install.sh up --image acme/all-in-one:v1.0.0 --container margince-acme --volume margince-acme-data$' "$STUB_LOG"
+reset_log
+aio down >/dev/null 2>&1 || true
+check "aio-down runs install.sh down with the container and volume" \
+  grep -qE '^sh .*/scripts/aio/install.sh down --image .* --container margince-acme --volume margince-acme-data$' "$STUB_LOG"
+if aio up >/dev/null 2>&1; then fail "aio-up without VERSION is refused"; else ok "aio-up without VERSION is refused"; fi
+rm -f "$STUB_BIN/sh"
+
 if [ "$FAILURES" -gt 0 ]; then printf '\naio.test.sh: %s failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\naio.test.sh: all passed\n'

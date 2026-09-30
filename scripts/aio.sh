@@ -198,8 +198,20 @@ cmd_smoke() {
   say "smoke: passed"
 }
 
+# ── install.sh wrappers (make aio-up and the others) ──
+
+install_sh() { sh "$AIO_SRC/install.sh" "$@" --container "$container" --volume "$volume"; }
+
+cmd_up() {
+  local version="${1:-}"
+  require_version "$version"
+  install_sh up --image "$(aio_image "$version")"
+}
+
 case "${1:-}" in
   build) shift; cmd_build "$@" ;;
   smoke) shift; cmd_smoke "$@" ;;
+  up)      shift; cmd_up "$@" ;;
+  down|reset|logins|logs) install_sh "$1" --image "$(aio_image v0.0.0)" ;;
   *) die "usage: bash scripts/aio.sh build|smoke|scripts|up <version> | down|reset|logins|logs" ;;
 esac
