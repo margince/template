@@ -120,8 +120,9 @@ done
 # A fixed writer does not help the population that has already run Setup once:
 # Set-EnvKey keeps an existing value and rewrites nothing. Repair-EnvEncoding is
 # what makes re-running Setup.cmd the fix, so it has to stay wired to the flow
-# and not just defined.
-if ps_code "$KIT/setup.ps1" | grep -qE '^Repair-EnvEncoding[[:space:]]*$'; then
+# and not just defined. grep reads all of its input (no -q): under pipefail,
+# a grep that exits at the first match can fail the pipeline on sed's SIGPIPE.
+if ps_code "$KIT/setup.ps1" | grep -E '^Repair-EnvEncoding[[:space:]]*$' >/dev/null; then
   ok "setup.ps1 calls Repair-EnvEncoding from its main flow"
 else
   fail "setup.ps1 defines Repair-EnvEncoding but never calls it at top level —
