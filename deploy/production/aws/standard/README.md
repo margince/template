@@ -1,9 +1,9 @@
 # Margince on AWS
 
 Terraform root module that deploys Margince into your own AWS account, sized
-for a small team (about 40 users). Image creation and publication remain in
-the Margince source repository; this module integrates its published release
-artifacts with ECS Fargate.
+for a small team (about 40 users). The instance's release builds and publishes
+the images; this module runs the digest-pinned images of one instance release
+on ECS Fargate.
 
 ## What it creates
 
@@ -14,7 +14,7 @@ artifacts with ECS Fargate.
 | Data | RDS PostgreSQL 16 (Multi-AZ, gp3 with storage autoscaling, 7-day backups, deletion protection, Performance Insights), ElastiCache Valkey 7.2 (two nodes, automatic failover, TLS required, AUTH token), S3 attachment bucket (versioned, SSE-KMS enforced), EFS for `margince.yaml` |
 | Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
 | Secrets | SSM Parameter Store SecureStrings under `/<name_prefix>/`, one customer-managed KMS key (rotation on) for everything stored at rest |
-| Delivery | Digest-pinned api, web and worker artifacts from one Margince source release, pulled over the NAT gateways; a bootstrap host security group and instance profile |
+| Delivery | Digest-pinned api, web and worker images from one instance release, pulled over the NAT gateways; a bootstrap host security group and instance profile |
 | Protection | CloudWatch alarms to a CMK-encrypted SNS topic, `prevent_destroy` on the stateful resources, EFS backup, CloudWatch log groups (30 days) |
 
 ```mermaid
@@ -45,7 +45,7 @@ flowchart LR
   api --> nat
   worker --> nat
   nat --> ext(["Graph, LLM, SMTP"])
-  nat -.->|"pull digest-pinned artifacts"| reg(["Margince source release<br/>api, web, worker"])
+  nat -.->|"pull digest-pinned artifacts"| reg(["Instance release images<br/>api, web, worker"])
   ops -.->|"bootstrap"| pg
   alarms["CloudWatch alarms, SNS"] -.-> mail(["alert_email"])
 ```
@@ -58,10 +58,10 @@ flowchart LR
 - **TLS certificate**: an ACM certificate in `aws_region` for the host in
   `public_base_url`, validated in your DNS zone.
 - **Tools**: Terraform 1.10 or newer, AWS CLI with the Session Manager
-  plugin, `jq`, `psql`; Docker with buildx for a manual image push
-  (Section 3).
+  plugin, `jq`, `psql`.
 - **Margince**: a licence token and the three digest-pinned image references
-  published together by one Margince source release. The bootstrap SQL and
+  published together by one release of this instance
+  ([release.md](../../../../docs/release.md)). The bootstrap SQL and
   `margince.example.yaml` come from the pinned `core/` submodule.
 - **Remote state**: state holds every generated password. Create a protected
   state bucket first (`backend.hcl.example`) and never keep state on a laptop.
@@ -139,18 +139,23 @@ psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432
 The master password exists only as the `/<name_prefix>/rds-master-password`
 parameter, for this step; no ECS task or execution role can read it.
 
-## 3. Select the Margince source release
+## 3. Select the instance release
 
-The Margince source repository owns the Dockerfile, bake definition, release
-checks, multi-platform build and publication. Its release publishes api, web
-and worker together and records each image by digest. This AWS module neither
-rebuilds nor republishes them.
+The instance's release builds the api, web and worker images with core's
+`Dockerfile` and `docker-bake.hcl`, from core at the core pin plus the
+instance's units. With the repository variable `REGISTRY` set, it pushes
+them to `<REGISTRY>/<name>/<role>:<v>`
+([release.md](../../../../docs/release.md)). The instance commit and the core
+version identify the complete images. The release notes and the build artifact
+`margince-images-<v>` list each pushed image with its digest. This AWS module
+neither rebuilds nor republishes them. Do not use the images that core
+publishes: they contain core only, without the instance's units.
 
-1. Select one published Margince source release that includes this stack's
-   `cpu_architecture` (`terraform output -raw image_platform`).
+1. Select one instance release whose pushed platforms (`PLATFORMS`) include
+   this stack's `cpu_architecture` (`terraform output -raw image_platform`).
 2. Copy its three digest-pinned references into `image_refs` in
    `terraform.tfvars`. Do not combine roles from different releases.
-3. If the source registry requires authentication, create an AWS Secrets
+3. If the registry requires authentication, create an AWS Secrets
    Manager secret containing the Docker credentials JSON:
 
    ```json
@@ -229,8 +234,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 
 ## 7. Releases
 
-Follow Section 3 for each new version: copy all three digest-pinned references
-from one Margince source release into `image_refs`, then run `terraform apply`.
+Follow Section 3 for each new version: cut an instance release, copy its three
+digest-pinned references into `image_refs`, then run `terraform apply`.
 All three services get a new task definition in the same apply; api, worker
 and web move together.
 
@@ -299,14 +304,14 @@ uses it.
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the ALB serves |
 | `acm_certificate_arn` | required | ACM certificate for that host |
-| `image_refs` | required | Digest-pinned api, worker and web references from one Margince source release |
+| `image_refs` | required | Digest-pinned api, worker and web references from one instance release |
 | `source_registry_credentials_arn` | `""` | Secrets Manager ARN with Docker pull credentials; empty only for anonymous pulls |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `alert_email` | `""` | Alert subscription |
 | `aws_region`, `name_prefix` | `eu-central-1`, `margince` | Placement and names |
 | `az_count` | `2` | Availability Zones (one NAT gateway each) |
-| `cpu_architecture` | `X86_64` | `X86_64` or `ARM64`, matching a platform in the selected source release |
+| `cpu_architecture` | `X86_64` | `X86_64` or `ARM64`, matching a platform in the selected instance release |
 | `db_instance_class`, `db_multi_az` | `db.t4g.medium`, `true` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `2`, `4` | api scale bounds |
 | `waf_mode` | `count` | `count` then `block` |
@@ -364,9 +369,9 @@ Fargate line than the `X86_64` default.
   with `aws:SourceAccount`/`aws:SourceArn`, no
   `AmazonECSTaskExecutionRolePolicy`. `web` reads no secrets. The RDS master
   password parameter is readable by no task.
-- **Image source**: the Margince source repository builds, verifies and
-  publishes all three roles. This stack only consumes its digest-pinned
-  artifacts. Optional pull credentials stay in Secrets Manager and are
+- **Image source**: the instance's `release.yml` builds, smoke-tests and
+  publishes all three roles, core plus the instance's units. This stack only
+  consumes their digest-pinned references. Optional pull credentials stay in Secrets Manager and are
   readable only by the ECS execution roles.
 - **Containers**: all Linux capabilities dropped, explicit
   `runtime_platform`, `stopTimeout = 60` for api and worker.

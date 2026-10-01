@@ -13,8 +13,8 @@ locals {
   flat_prefix   = replace(var.name_prefix, "-", "")
   global_prefix = "${var.name_prefix}-${local.suffix}"
 
-  # The Margince source release publishes these three digest-pinned artifacts.
-  # Azure consumes them unchanged; image creation remains owned by the source.
+  # The instance release publishes these three digest-pinned images.
+  # Azure consumes them unchanged; the instance's release.yml builds them.
   images                      = var.image_refs
   source_registry_credentials = var.source_registry_username != ""
   source_registry_server      = split("/", var.image_refs.api)[0]

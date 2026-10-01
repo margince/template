@@ -202,7 +202,7 @@ run "full_apply_with_apps_and_gateway" {
       azurerm_container_app.api[0].template[0].container[1].image == var.image_refs.web &&
       azurerm_container_app.worker[0].template[0].container[0].image == var.image_refs.worker
     )
-    error_message = "Azure must deploy the three digest-pinned references supplied by the Margince source release unchanged."
+    error_message = "Azure must deploy the three digest-pinned references supplied by the instance release unchanged."
   }
   assert {
     condition     = contains(keys(azurerm_monitor_metric_alert.this), "waf-blocked-requests") && contains(keys(local.diagnostic_settings), "appgw")

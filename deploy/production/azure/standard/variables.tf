@@ -20,12 +20,13 @@ variable "name_prefix" {
 }
 
 # ---- Release ------------------------------------------------------------------------
-# The Margince source release publishes one digest-pinned reference per role.
-# This stack consumes those artifacts unchanged; it does not build or publish
-# application images.
+# The instance release (docs/release.md) publishes one digest-pinned reference
+# per role: core plus the instance's units, built with core's Dockerfile and
+# bake definition. This stack consumes those images unchanged; it does not
+# build or publish application images.
 
 variable "image_refs" {
-  description = "Digest-pinned api, worker and web image references from one published Margince source release. Copy the three references from that release; all must end in @sha256:<64 hex characters>."
+  description = "Digest-pinned api, worker and web image references from one release of this instance (release.yml lists them with their digests). Copy the three references from that release; all must end in @sha256:<64 hex characters>."
   type = object({
     api    = string
     worker = string
@@ -35,18 +36,18 @@ variable "image_refs" {
     condition = alltrue([
       for ref in values(var.image_refs) : can(regex("@sha256:[0-9a-f]{64}$", ref))
     ])
-    error_message = "Every image_refs value must be the digest-pinned reference published by the Margince source release, ending in @sha256:<64 lowercase hex characters>."
+    error_message = "Every image_refs value must be the digest-pinned reference published by the instance release, ending in @sha256:<64 lowercase hex characters>."
   }
   validation {
     condition = length(toset([
       for ref in values(var.image_refs) : split("/", ref)[0]
     ])) == 1
-    error_message = "Every image_refs value must use the same source registry host."
+    error_message = "Every image_refs value must use the same registry host."
   }
 }
 
 variable "source_registry_username" {
-  description = "Optional username for Container Apps to pull the source-published images. Leave empty only when those references allow anonymous pulls."
+  description = "Optional username for Container Apps to pull the instance release images from the registry. Leave empty only when those references allow anonymous pulls."
   type        = string
   default     = ""
 }

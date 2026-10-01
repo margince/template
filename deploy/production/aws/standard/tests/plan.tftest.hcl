@@ -378,12 +378,12 @@ run "images_follow_the_source_release" {
 
   assert {
     condition     = local.images == var.image_refs && output.image_refs == var.image_refs
-    error_message = "AWS must deploy the three digest-pinned references supplied by the Margince source release unchanged."
+    error_message = "AWS must deploy the three digest-pinned references supplied by the instance release unchanged."
   }
 
   assert {
     condition     = var.cpu_architecture == "X86_64" && aws_ecs_task_definition.api.runtime_platform[0].cpu_architecture == "X86_64"
-    error_message = "The default architecture is X86_64; the selected Margince source release must include linux/amd64."
+    error_message = "The default architecture is X86_64; the selected instance release must include linux/amd64."
   }
 }
 

@@ -1,9 +1,9 @@
 # Margince on Azure
 
 Terraform root module that deploys Margince into your own Azure subscription,
-sized for a small team (about 40 users). Image creation and publication remain
-in the Margince source repository; this module integrates its published
-release artifacts with Azure Container Apps.
+sized for a small team (about 40 users). The instance's release builds and publishes
+the images; this module runs the digest-pinned images of one instance release
+on Azure Container Apps.
 
 ## What it creates
 
@@ -14,7 +14,7 @@ release artifacts with Azure Container Apps.
 | Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
 | Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
 | Identity | Managed identities for api, worker, Dataverse and customer-managed keys |
-| Delivery | Digest-pinned api, web and worker artifacts from one Margince source release, pulled over the NAT gateway; jumpbox VM with Azure Bastion Developer for operator tasks |
+| Delivery | Digest-pinned api, web and worker images from one instance release, pulled over the NAT gateway; jumpbox VM with Azure Bastion Developer for operator tasks |
 | Protection | Share soft delete and daily Azure Backup (attachments, redis), delete locks on the stateful resources, diagnostic settings on every resource that has them, metric alerts, Log Analytics (90 days) |
 
 ```mermaid
@@ -44,7 +44,7 @@ flowchart LR
   worker --> nat
   api --> nat
   nat --> ext(["Graph, LLM, SMTP"])
-  source["Margince source repository<br/>build, verify, publish"] --> reg(["Source release images<br/>api, web, worker, @sha256"])
+  source["Instance release.yml<br/>build, smoke-test, push"] --> reg(["Instance release images<br/>api, web, worker, @sha256"])
   env -.->|"pull over NAT"| reg
   jump -.->|"bootstrap"| pg
   logs["Log Analytics, alerts"] -.-> mail(["alert_email"])
@@ -71,7 +71,8 @@ unsubscribe), which the app protects with tokens.
   subscription opted out.
 - **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`.
 - **Margince**: a licence token and the three digest-pinned image references
-  published together by one Margince source release. The bootstrap SQL and
+  published together by one release of this instance
+  ([release.md](../../../../docs/release.md)). The bootstrap SQL and
   `margince.example.yaml` come from the pinned `core/` submodule.
 - **TLS certificate** for the host in `public_base_url`, as a PFX file, to
   import into Key Vault in step 5.
@@ -131,18 +132,23 @@ rerun. It creates the `margince` database and the `margince_owner` and
 `pg_trgm`, `btree_gist`) are already allow-listed by Terraform. Migrations run
 later, from the api's entrypoint, with the owner role.
 
-## 3. Select the Margince source release
+## 3. Select the instance release
 
-The Margince source repository owns the Dockerfile, bake definition, release
-checks, multi-platform build and publication. Its release publishes api, web
-and worker together and records each image by digest. This Azure module neither
-rebuilds nor republishes them.
+The instance's release builds the api, web and worker images with core's
+`Dockerfile` and `docker-bake.hcl`, from core at the core pin plus the
+instance's units. With the repository variable `REGISTRY` set, it pushes
+them to `<REGISTRY>/<name>/<role>:<v>`
+([release.md](../../../../docs/release.md)). The instance commit and the core
+version identify the complete images. The release notes and the build artifact
+`margince-images-<v>` list each pushed image with its digest. This Azure module
+neither rebuilds nor republishes them. Do not use the images that core
+publishes: they contain core only, without the instance's units.
 
-1. Select one published Margince source release. Container Apps requires its
-   `linux/amd64` image variant.
+1. Select one instance release whose pushed platforms (`PLATFORMS`) include
+   `linux/amd64`, the default. Container Apps requires that image.
 2. Copy its three digest-pinned references into `image_refs` in
    `terraform.tfvars`. Do not combine roles from different releases.
-3. If the source registry requires authentication, set
+3. If the registry requires authentication, set
    `source_registry_username` and `source_registry_password`. Terraform stores
    the password in Key Vault. The api and worker identities may read only that
    secret, and Container Apps uses it only for image pulls.
@@ -204,8 +210,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 
 ## 7. Releases
 
-Follow Section 3 for each new version: copy all three digest-pinned references
-from one Margince source release into `image_refs`, then run `terraform apply`
+Follow Section 3 for each new version: cut an instance release, copy its three
+digest-pinned references into `image_refs`, then run `terraform apply`
 from the jumpbox or an allowlisted machine.
 
 ## Sign-in
@@ -257,8 +263,8 @@ uses it.
 | Variable | Default | Purpose |
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the gateway serves |
-| `image_refs` | required | Digest-pinned api, worker and web references from one Margince source release |
-| `source_registry_username`, `source_registry_password` | `""`, `""` | Optional source-registry pull credentials; password is stored in Key Vault |
+| `image_refs` | required | Digest-pinned api, worker and web references from one instance release |
+| `source_registry_username`, `source_registry_password` | `""`, `""` | Optional registry pull credentials; password is stored in Key Vault |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `jumpbox_ssh_public_key` | required | SSH key for the jumpbox |
@@ -350,9 +356,9 @@ Microsoft recommends General Purpose for production Postgres:
 - **Locks**: `CanNotDelete` locks on Postgres, storage, Key Vault and the
   Recovery Services vault (`enable_resource_locks`). Set it
   to `false` and apply before `terraform destroy`.
-- **Image source**: the Margince source repository builds, verifies and
-  publishes all three roles. This stack only consumes its digest-pinned
-  artifacts. Optional pull credentials stay in Key Vault and are readable
+- **Image source**: the instance's `release.yml` builds, smoke-tests and
+  publishes all three roles, core plus the instance's units. This stack only
+  consumes their digest-pinned references. Optional pull credentials stay in Key Vault and are readable
   only by the api and worker identities.
 - **Images**: every Container App uses the supplied `@sha256:` reference;
   tasks pull over the NAT gateway at revision start.

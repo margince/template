@@ -7,7 +7,7 @@ output "ecs_cluster_name" {
 }
 
 output "image_refs" {
-  description = "The digest-pinned Margince source-release images this stack deploys unchanged."
+  description = "The digest-pinned instance release images this stack deploys unchanged."
   value       = local.images
 }
 

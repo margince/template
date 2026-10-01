@@ -14,8 +14,8 @@ locals {
   }
 }
 
-# The Margince source release publishes these three digest-pinned artifacts.
-# AWS consumes them unchanged; image creation remains owned by the source repo.
+# The instance release publishes these three digest-pinned images.
+# AWS consumes them unchanged; the instance's release.yml builds them.
 locals {
   images = var.image_refs
   repository_credentials = var.source_registry_credentials_arn == "" ? {} : {

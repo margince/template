@@ -5,15 +5,16 @@
 # MARGINCE_PUBLIC_BASE_URL: the canonical external scheme and host.
 public_base_url = "https://crm.example.com"
 
-# Copy the digest-pinned image references from one published Margince source
-# release. Keep all three on the same release; Terraform does not build images.
+# Copy the digest-pinned image references from one release of this instance:
+# the release notes list them (docs/release.md). Keep all three on the same
+# release; Terraform does not build images.
 image_refs = {
-  api    = "<source-registry>/margince/api:<version>@sha256:<digest>"
-  worker = "<source-registry>/margince/worker:<version>@sha256:<digest>"
-  web    = "<source-registry>/margince/web:<version>@sha256:<digest>"
+  api    = "<registry>/<instance-name>/api:<version>@sha256:<digest>"
+  worker = "<registry>/<instance-name>/worker:<version>@sha256:<digest>"
+  web    = "<registry>/<instance-name>/web:<version>@sha256:<digest>"
 }
 
-# If the source registry requires authentication, set both. Terraform stores
+# If the registry requires authentication, set both. Terraform stores
 # the password in Key Vault and Container Apps references it from there.
 # source_registry_username = "<user>"
 # source_registry_password = "<token>"
