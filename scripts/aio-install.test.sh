@@ -105,10 +105,19 @@ ubuntu() { printf 'ID=ubuntu\nVERSION_ID="%s"\nVERSION_CODENAME=noble\nPRETTY_NA
 
 reset() { rm -rf "$STATE"; mkdir -p "$STATE"; : > "$STUB_LOG"; printf 'y\n' > "$TMP/tty"; }
 
+# /usr/bin and /bin without docker: a runner with Docker installed has it in
+# /usr/bin, and docker-missing must not find it there.
+SYS="$TMP/sys-bin"
+mkdir -p "$SYS"
+for f in /usr/bin/* /bin/*; do
+  n="${f##*/}"
+  [ "$n" = docker ] || [ -e "$SYS/$n" ] || ln -s "$f" "$SYS/$n"
+done
+
 run_install() {
   local dpath="$DBIN:"
   [ -f "$STATE/docker-missing" ] && dpath=""
-  PATH="$dpath$BIN:/usr/bin:/bin" MARGINCE_OS_RELEASE="$TMP/os-release" MARGINCE_TTY="${MARGINCE_TTY:-$TMP/tty}" \
+  PATH="$dpath$BIN:$SYS" MARGINCE_OS_RELEASE="$TMP/os-release" MARGINCE_TTY="${MARGINCE_TTY:-$TMP/tty}" \
   MARGINCE_SLEEP=true MARGINCE_DOCKER_TIMEOUT=4 MARGINCE_START_TIMEOUT=10 \
     sh "$INSTALL" --image acme/all-in-one:v1.0.0 --container margince-acme --volume margince-acme-data "$@"
 }
@@ -186,7 +195,7 @@ if STUB_OS=Darwin MARGINCE_TTY=/nonexistent/tty run_install up >"$TMP/out" 2>&1;
 # special built-in must not end the shell silently.
 if command -v dash >/dev/null 2>&1; then
   reset; touch "$STATE/docker-missing"
-  if PATH="$BIN:/usr/bin:/bin" MARGINCE_OS_RELEASE="$TMP/os-release" MARGINCE_TTY=/nonexistent/tty MARGINCE_SLEEP=true STUB_OS=Darwin \
+  if PATH="$BIN:$SYS" MARGINCE_OS_RELEASE="$TMP/os-release" MARGINCE_TTY=/nonexistent/tty MARGINCE_SLEEP=true STUB_OS=Darwin \
       dash "$INSTALL" --image acme/all-in-one:v1.0.0 --container margince-acme --volume margince-acme-data up >"$TMP/out" 2>&1; then
     fail "dash without a terminal fails"
   else
