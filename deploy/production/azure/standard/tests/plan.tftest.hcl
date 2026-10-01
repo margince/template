@@ -370,19 +370,11 @@ run "jumpbox_is_operator_only" {
   }
   assert {
     condition = (
-      strcontains(local.jumpbox_cloud_init, "postgresql-client") &&
-      strcontains(local.jumpbox_cloud_init, "cifs-utils") &&
-      !strcontains(local.jumpbox_cloud_init, "actions-runner") &&
-      !strcontains(local.jumpbox_cloud_init, "acr login")
+      strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "postgresql-client") &&
+      strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "cifs-utils") &&
+      !strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "actions-runner") &&
+      !strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "acr login")
     )
     error_message = "cloud-init installs the operator toolchain only: no release runner and no registry login."
   }
-}
-
-run "arm64_refused" {
-  command = plan
-  variables {
-    architecture = "arm64"
-  }
-  expect_failures = [var.architecture]
 }

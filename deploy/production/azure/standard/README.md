@@ -271,7 +271,6 @@ uses it.
 | `db_sku_name`, `db_zone_redundant_ha` | `B_Standard_B2s`, `false` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `3`, `6` | api scale bounds |
 | `waf_mode` | `count` | `count` then `block` |
-| `architecture` | `amd64` | `amd64` only: Azure Container Apps runs `linux/amd64` images. For arm64 on Azure, use the light stack with an Ampere VM |
 | `enable_resource_locks` | `true` | `false` and apply before `terraform destroy` |
 
 ## Dataverse (optional)
