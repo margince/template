@@ -140,8 +140,6 @@ resource "time_sleep" "rbac_propagation" {
   depends_on = [
     azurerm_role_assignment.api_secret,
     azurerm_role_assignment.worker_secret,
-    azurerm_role_assignment.api_source_registry_password,
-    azurerm_role_assignment.worker_source_registry_password,
     azurerm_role_assignment.redis_secret,
   ]
   create_duration = "60s"
@@ -161,24 +159,6 @@ resource "azurerm_container_app" "api" {
       azurerm_user_assigned_identity.api.id,
       azurerm_user_assigned_identity.dataverse.id,
     ]
-  }
-
-  dynamic "registry" {
-    for_each = local.source_registry_credentials ? [1] : []
-    content {
-      server               = local.source_registry_server
-      username             = var.source_registry_username
-      password_secret_name = "source-registry-password"
-    }
-  }
-
-  dynamic "secret" {
-    for_each = local.source_registry_credentials ? [1] : []
-    content {
-      name                = "source-registry-password"
-      key_vault_secret_id = azurerm_key_vault_secret.source_registry_password[0].id
-      identity            = azurerm_user_assigned_identity.api.id
-    }
   }
 
   dynamic "secret" {
@@ -355,24 +335,6 @@ resource "azurerm_container_app" "worker" {
       azurerm_user_assigned_identity.worker.id,
       azurerm_user_assigned_identity.dataverse.id,
     ]
-  }
-
-  dynamic "registry" {
-    for_each = local.source_registry_credentials ? [1] : []
-    content {
-      server               = local.source_registry_server
-      username             = var.source_registry_username
-      password_secret_name = "source-registry-password"
-    }
-  }
-
-  dynamic "secret" {
-    for_each = local.source_registry_credentials ? [1] : []
-    content {
-      name                = "source-registry-password"
-      key_vault_secret_id = azurerm_key_vault_secret.source_registry_password[0].id
-      identity            = azurerm_user_assigned_identity.worker.id
-    }
   }
 
   dynamic "secret" {

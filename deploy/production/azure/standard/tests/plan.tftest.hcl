@@ -332,12 +332,10 @@ run "image_refs_must_be_digest_pinned" {
   expect_failures = [var.image_refs]
 }
 
-run "source_registry_credentials_are_wired" {
+run "images_are_pulled_anonymously" {
   command = plan
   variables {
-    deploy_apps              = true
-    source_registry_username = "source-reader"
-    source_registry_password = "test-only-token"
+    deploy_apps = true
   }
   override_resource {
     target          = azurerm_container_app_environment.this
@@ -349,12 +347,8 @@ run "source_registry_credentials_are_wired" {
     }
   }
   assert {
-    condition     = local.source_registry_credentials && local.source_registry_server == "source.example"
-    error_message = "Container Apps must derive the source registry server and enable credentials when both values are provided."
-  }
-  assert {
-    condition     = length(azurerm_key_vault_secret.source_registry_password) == 1 && length(azurerm_role_assignment.api_source_registry_password) == 1 && length(azurerm_role_assignment.worker_source_registry_password) == 1
-    error_message = "The source-registry password must live in Key Vault and be readable by only the two app identities."
+    condition     = length(azurerm_container_app.api[0].registry) == 0 && length(azurerm_container_app.worker[0].registry) == 0
+    error_message = "The registry is public: no Container App may carry registry credentials."
   }
 }
 

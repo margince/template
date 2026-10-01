@@ -87,7 +87,7 @@ terraform apply \
 
 `terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
 `image_refs`, `license_token` and `admin_bootstrap_password`, and usually
-`source_registry_credentials_arn` and `alert_email`. See "Variables".
+`alert_email`. See "Variables".
 
 ## 2. Bootstrap the database (once)
 
@@ -151,21 +151,17 @@ version identify the complete images. The release notes and the build artifact
 neither rebuilds nor republishes them. Do not use the images that core
 publishes: they contain core only, without the instance's units.
 
+The registry must be public: the stack pulls anonymously and holds no
+registry credentials. Use GitHub Container Registry (`ghcr.io/<org>`) or
+Docker Hub (`docker.io/<org>`). Docker Hub limits anonymous pulls per IP
+address, and the NAT gateway's addresses count for every task, so GitHub
+Container Registry is the safer choice.
+
 1. Select one instance release whose pushed platforms (`PLATFORMS`) include
    this stack's `cpu_architecture` (`terraform output -raw image_platform`).
 2. Copy its three digest-pinned references into `image_refs` in
    `terraform.tfvars`. Do not combine roles from different releases.
-3. If the registry requires authentication, create an AWS Secrets
-   Manager secret containing the Docker credentials JSON:
-
-   ```json
-   {"username":"<user>","password":"<token>"}
-   ```
-
-   Set `source_registry_credentials_arn` to that secret's ARN. ECS reads it
-   through the execution roles and passes it to the registry; the value does
-   not enter the task environment.
-4. Run `terraform apply` (step 5 the first time). The task definitions retain
+3. Run `terraform apply` (step 5 the first time). The task definitions retain
    the supplied `@sha256:` references unchanged.
 
 ## 4. Upload `margince.yaml` (once)
@@ -304,8 +300,7 @@ uses it.
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the ALB serves |
 | `acm_certificate_arn` | required | ACM certificate for that host |
-| `image_refs` | required | Digest-pinned api, worker and web references from one instance release |
-| `source_registry_credentials_arn` | `""` | Secrets Manager ARN with Docker pull credentials; empty only for anonymous pulls |
+| `image_refs` | required | Digest-pinned api, worker and web references from one instance release, in a public registry |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `alert_email` | `""` | Alert subscription |
@@ -371,8 +366,8 @@ Fargate line than the `X86_64` default.
   password parameter is readable by no task.
 - **Image source**: the instance's `release.yml` builds, smoke-tests and
   publishes all three roles, core plus the instance's units. This stack only
-  consumes their digest-pinned references. Optional pull credentials stay in Secrets Manager and are
-  readable only by the ECS execution roles.
+  consumes their digest-pinned references, pulled anonymously from a public
+  registry; no task or execution role holds registry credentials.
 - **Containers**: all Linux capabilities dropped, explicit
   `runtime_platform`, `stopTimeout = 60` for api and worker.
 - **Images**: every task definition uses the supplied `@sha256:` reference;

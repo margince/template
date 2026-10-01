@@ -10,17 +10,14 @@ public_base_url = "https://crm.example.com"
 acm_certificate_arn = "arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
 
 # Copy the digest-pinned image references from one release of this instance:
-# the release notes list them (docs/release.md). Keep all three on the same
-# release; Terraform does not build images.
+# the release notes list them (docs/release.md). The registry is public
+# (for example ghcr.io/<org> or docker.io/<org>); the stack pulls anonymously.
+# Keep all three on the same release; Terraform does not build images.
 image_refs = {
   api    = "<registry>/<instance-name>/api:<version>@sha256:<digest>"
   worker = "<registry>/<instance-name>/worker:<version>@sha256:<digest>"
   web    = "<registry>/<instance-name>/web:<version>@sha256:<digest>"
 }
-
-# If the registry requires authentication, create a Secrets Manager
-# secret whose value is {"username":"<user>","password":"<token>"}.
-# source_registry_credentials_arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:margince-registry-xxxxxx"
 
 # Licence token issued for this installation.
 license_token = "<licence token>"

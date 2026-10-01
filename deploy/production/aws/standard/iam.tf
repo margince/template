@@ -63,8 +63,8 @@ resource "aws_iam_role" "execution" {
 # logs:CreateLogStream/PutLogEvents with Resource="*" — attaching it
 # alongside the scoped statements below would not narrow anything, since IAM
 # is additive-allow: the broadest grant for an action wins regardless of how
-# tightly a sibling statement names its resources. Images come from the
-# source registry, so this role needs no ECR actions at all.
+# tightly a sibling statement names its resources. Images come from a
+# public registry, so this role needs no ECR or Secrets Manager actions.
 data "aws_iam_policy_document" "execution_extra" {
   # ssm:GetParameters (plural) is the action ECS calls to resolve a task
   # definition's "secrets" entries from Parameter Store. Scoped to exactly the
@@ -74,15 +74,6 @@ data "aws_iam_policy_document" "execution_extra" {
     sid       = "ReadOwnParameters"
     actions   = ["ssm:GetParameters"]
     resources = sort(values(local.task_ssm_parameters))
-  }
-
-  dynamic "statement" {
-    for_each = var.source_registry_credentials_arn == "" ? [] : [var.source_registry_credentials_arn]
-    content {
-      sid       = "ReadSourceRegistryCredentials"
-      actions   = ["secretsmanager:GetSecretValue"]
-      resources = [statement.value]
-    }
   }
 
   # Scoped to exactly the two log groups this role's task definitions write
@@ -139,15 +130,6 @@ resource "aws_iam_role" "execution_web" {
 }
 
 data "aws_iam_policy_document" "execution_web_extra" {
-  dynamic "statement" {
-    for_each = var.source_registry_credentials_arn == "" ? [] : [var.source_registry_credentials_arn]
-    content {
-      sid       = "ReadSourceRegistryCredentials"
-      actions   = ["secretsmanager:GetSecretValue"]
-      resources = [statement.value]
-    }
-  }
-
   statement {
     sid     = "WriteOwnLogs"
     actions = ["logs:CreateLogStream", "logs:PutLogEvents"]

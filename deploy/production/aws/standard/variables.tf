@@ -44,7 +44,7 @@ variable "az_count" {
 # build or publish application images.
 
 variable "image_refs" {
-  description = "Digest-pinned api, worker and web image references from one release of this instance (release.yml lists them with their digests). Copy the three references from that release; all must end in @sha256:<64 hex characters>."
+  description = "Digest-pinned api, worker and web image references from one release of this instance (release.yml lists them with their digests), in a public registry that allows anonymous pulls, such as ghcr.io or docker.io. Copy the three references from that release; all must end in @sha256:<64 hex characters>."
   type = object({
     api    = string
     worker = string
@@ -61,16 +61,6 @@ variable "image_refs" {
       for ref in values(var.image_refs) : split("/", ref)[0]
     ])) == 1
     error_message = "Every image_refs value must use the same registry host."
-  }
-}
-
-variable "source_registry_credentials_arn" {
-  description = "Optional Secrets Manager ARN containing the username/password JSON used by ECS to pull the instance release images from the registry. Leave empty only when those image references allow anonymous pulls."
-  type        = string
-  default     = ""
-  validation {
-    condition     = var.source_registry_credentials_arn == "" || can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:", var.source_registry_credentials_arn))
-    error_message = "source_registry_credentials_arn must be empty or an AWS Secrets Manager secret ARN."
   }
 }
 

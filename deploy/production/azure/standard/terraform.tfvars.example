@@ -6,18 +6,14 @@
 public_base_url = "https://crm.example.com"
 
 # Copy the digest-pinned image references from one release of this instance:
-# the release notes list them (docs/release.md). Keep all three on the same
-# release; Terraform does not build images.
+# the release notes list them (docs/release.md). The registry is public
+# (for example ghcr.io/<org> or docker.io/<org>); the stack pulls anonymously.
+# Keep all three on the same release; Terraform does not build images.
 image_refs = {
   api    = "<registry>/<instance-name>/api:<version>@sha256:<digest>"
   worker = "<registry>/<instance-name>/worker:<version>@sha256:<digest>"
   web    = "<registry>/<instance-name>/web:<version>@sha256:<digest>"
 }
-
-# If the registry requires authentication, set both. Terraform stores
-# the password in Key Vault and Container Apps references it from there.
-# source_registry_username = "<user>"
-# source_registry_password = "<token>"
 
 # Licence token issued for this installation.
 license_token = "<licence token>"

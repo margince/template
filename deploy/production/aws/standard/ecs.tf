@@ -14,15 +14,11 @@ locals {
   }
 }
 
-# The instance release publishes these three digest-pinned images.
-# AWS consumes them unchanged; the instance's release.yml builds them.
+# The instance release publishes these three digest-pinned images to a
+# public registry. AWS pulls them anonymously and runs them unchanged; the
+# instance's release.yml builds them.
 locals {
   images = var.image_refs
-  repository_credentials = var.source_registry_credentials_arn == "" ? {} : {
-    repositoryCredentials = {
-      credentialsParameter = var.source_registry_credentials_arn
-    }
-  }
 }
 
 resource "aws_ecs_cluster" "this" {
@@ -98,7 +94,7 @@ resource "aws_ecs_task_definition" "api" {
   tags = { Name = "${var.name_prefix}-api", Component = "compute-api" }
 
   container_definitions = jsonencode([
-    merge({
+    {
       name      = "api"
       image     = local.images.api
       essential = true
@@ -130,7 +126,7 @@ resource "aws_ecs_task_definition" "api" {
           "awslogs-stream-prefix" = "api"
         }
       }
-    }, local.repository_credentials)
+    }
   ])
 }
 
@@ -163,7 +159,7 @@ resource "aws_ecs_task_definition" "worker" {
   tags = { Name = "${var.name_prefix}-worker", Component = "compute-worker" }
 
   container_definitions = jsonencode([
-    merge({
+    {
       name      = "worker"
       image     = local.images.worker
       essential = true
@@ -197,7 +193,7 @@ resource "aws_ecs_task_definition" "worker" {
           "awslogs-stream-prefix" = "worker"
         }
       }
-    }, local.repository_credentials)
+    }
   ])
 }
 
@@ -220,7 +216,7 @@ resource "aws_ecs_task_definition" "web" {
   tags = { Name = "${var.name_prefix}-web", Component = "compute-web" }
 
   container_definitions = jsonencode([
-    merge({
+    {
       name      = "web"
       image     = local.images.web
       essential = true
@@ -238,7 +234,7 @@ resource "aws_ecs_task_definition" "web" {
           "awslogs-stream-prefix" = "web"
         }
       }
-    }, local.repository_credentials)
+    }
   ])
 }
 

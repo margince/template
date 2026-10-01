@@ -26,7 +26,7 @@ variable "name_prefix" {
 # build or publish application images.
 
 variable "image_refs" {
-  description = "Digest-pinned api, worker and web image references from one release of this instance (release.yml lists them with their digests). Copy the three references from that release; all must end in @sha256:<64 hex characters>."
+  description = "Digest-pinned api, worker and web image references from one release of this instance (release.yml lists them with their digests), in a public registry that allows anonymous pulls, such as ghcr.io or docker.io. Copy the three references from that release; all must end in @sha256:<64 hex characters>."
   type = object({
     api    = string
     worker = string
@@ -43,23 +43,6 @@ variable "image_refs" {
       for ref in values(var.image_refs) : split("/", ref)[0]
     ])) == 1
     error_message = "Every image_refs value must use the same registry host."
-  }
-}
-
-variable "source_registry_username" {
-  description = "Optional username for Container Apps to pull the instance release images from the registry. Leave empty only when those references allow anonymous pulls."
-  type        = string
-  default     = ""
-}
-
-variable "source_registry_password" {
-  description = "Password or token paired with source_registry_username. Terraform stores it in Key Vault for Container Apps; leave empty for anonymous pulls."
-  type        = string
-  sensitive   = true
-  default     = ""
-  validation {
-    condition     = (var.source_registry_username == "") == (var.source_registry_password == "")
-    error_message = "source_registry_username and source_registry_password must either both be set or both be empty."
   }
 }
 

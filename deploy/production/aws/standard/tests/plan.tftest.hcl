@@ -422,14 +422,18 @@ run "image_refs_must_be_digest_pinned" {
   expect_failures = [var.image_refs]
 }
 
-run "source_registry_credentials_are_wired" {
+run "images_are_pulled_anonymously" {
   command = plan
-  variables {
-    source_registry_credentials_arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:margince-source-registry-AbCdEf"
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
   }
+
   assert {
-    condition     = local.repository_credentials.repositoryCredentials.credentialsParameter == var.source_registry_credentials_arn
-    error_message = "Every task merges the optional source-registry credential secret into its ECS container definition."
+    condition     = !strcontains(file("${path.module}/ecs.tf"), "repositoryCredentials") && !strcontains(file("${path.module}/iam.tf"), "secretsmanager:")
+    error_message = "The registry is public: no task definition may carry pull credentials, and no role may read Secrets Manager."
   }
 }
 

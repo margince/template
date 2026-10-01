@@ -57,23 +57,9 @@ resource "azurerm_role_assignment" "worker_secret" {
   principal_id         = azurerm_user_assigned_identity.worker.principal_id
 }
 
-resource "azurerm_role_assignment" "api_source_registry_password" {
-  count                = local.source_registry_credentials ? 1 : 0
-  scope                = azurerm_key_vault_secret.source_registry_password[0].resource_versionless_id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_user_assigned_identity.api.principal_id
-}
-
-resource "azurerm_role_assignment" "worker_source_registry_password" {
-  count                = local.source_registry_credentials ? 1 : 0
-  scope                = azurerm_key_vault_secret.source_registry_password[0].resource_versionless_id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_user_assigned_identity.worker.principal_id
-}
-
 # There is no separate web app: the SPA is served by the edge container inside
 # the api app (containerapps.tf), which pulls the web image with the api
-# app's settings.
+# app's settings, anonymously from the public registry.
 
 # ---- dataverse: Margince's server-to-server identity in Dataverse --------------
 # Attached to api and worker. It holds no Azure role at all: its only use is

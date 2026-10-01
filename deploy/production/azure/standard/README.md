@@ -144,15 +144,17 @@ version identify the complete images. The release notes and the build artifact
 neither rebuilds nor republishes them. Do not use the images that core
 publishes: they contain core only, without the instance's units.
 
+The registry must be public: the stack pulls anonymously and holds no
+registry credentials. Use GitHub Container Registry (`ghcr.io/<org>`) or
+Docker Hub (`docker.io/<org>`). Docker Hub limits anonymous pulls per IP
+address, and the NAT gateway's addresses count for every task, so GitHub
+Container Registry is the safer choice.
+
 1. Select one instance release whose pushed platforms (`PLATFORMS`) include
    `linux/amd64`, the default. Container Apps requires that image.
 2. Copy its three digest-pinned references into `image_refs` in
    `terraform.tfvars`. Do not combine roles from different releases.
-3. If the registry requires authentication, set
-   `source_registry_username` and `source_registry_password`. Terraform stores
-   the password in Key Vault. The api and worker identities may read only that
-   secret, and Container Apps uses it only for image pulls.
-4. Run `terraform apply -var deploy_apps=true` (step 5 the first time). The
+3. Run `terraform apply -var deploy_apps=true` (step 5 the first time). The
    Container Apps retain the supplied `@sha256:` references unchanged; api,
    worker and web move together.
 
@@ -263,8 +265,7 @@ uses it.
 | Variable | Default | Purpose |
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the gateway serves |
-| `image_refs` | required | Digest-pinned api, worker and web references from one instance release |
-| `source_registry_username`, `source_registry_password` | `""`, `""` | Optional registry pull credentials; password is stored in Key Vault |
+| `image_refs` | required | Digest-pinned api, worker and web references from one instance release, in a public registry |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `jumpbox_ssh_public_key` | required | SSH key for the jumpbox |
@@ -358,8 +359,8 @@ Microsoft recommends General Purpose for production Postgres:
   to `false` and apply before `terraform destroy`.
 - **Image source**: the instance's `release.yml` builds, smoke-tests and
   publishes all three roles, core plus the instance's units. This stack only
-  consumes their digest-pinned references. Optional pull credentials stay in Key Vault and are readable
-  only by the api and worker identities.
+  consumes their digest-pinned references, pulled anonymously from a public
+  registry; no Container App holds registry credentials.
 - **Images**: every Container App uses the supplied `@sha256:` reference;
   tasks pull over the NAT gateway at revision start.
 - **Storage key**: Azure Files SMB mounts need the account key, which is in
