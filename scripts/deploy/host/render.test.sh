@@ -63,7 +63,7 @@ export MARGINCE_LICENSE="$LICENSE_VALUE" MARGINCE_ADMIN_PASSWORD="$ADMIN_VALUE"
 SRV="$TMP/srv"
 mkdir -p "$SRV/shared" "$SRV/releases"
 cat > "$SRV/shared/data.env" <<'EOF'
-POSTGRES_PASSWORD=00112233445566778899aabbccddeeff
+POSTGRES_PASSWORD=pg-pa55
 MARGINCE_OWNER_DSN=postgres://margince_owner:0123456789abcdef0123456789abcdef@postgres:5432/margince
 MARGINCE_DSN=postgres://margince_app:fedcba9876543210fedcba9876543210@postgres:5432/margince
 MARGINCE_REDIS=redis:6379
