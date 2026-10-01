@@ -11,6 +11,11 @@ output "image_refs" {
   value       = local.images
 }
 
+output "image_platform" {
+  description = "The image platform that cpu_architecture needs; the instance release must have pushed it (PLATFORMS)."
+  value       = var.cpu_architecture == "ARM64" ? "linux/arm64" : "linux/amd64"
+}
+
 output "rds_endpoint" {
   value = aws_db_instance.this.address
 }

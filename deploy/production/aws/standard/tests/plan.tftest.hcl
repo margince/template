@@ -367,7 +367,7 @@ run "block_mode_and_alert_email" {
   }
 }
 
-run "images_follow_the_source_release" {
+run "images_follow_the_instance_release" {
   command = plan
 
   override_resource {
@@ -384,6 +384,29 @@ run "images_follow_the_source_release" {
   assert {
     condition     = var.cpu_architecture == "X86_64" && aws_ecs_task_definition.api.runtime_platform[0].cpu_architecture == "X86_64"
     error_message = "The default architecture is X86_64; the selected instance release must include linux/amd64."
+  }
+
+  assert {
+    condition     = output.image_platform == "linux/amd64"
+    error_message = "image_platform must name the linux/amd64 image for the default X86_64 architecture."
+  }
+}
+
+run "arm64_needs_the_arm64_image" {
+  command = plan
+  variables {
+    cpu_architecture = "ARM64"
+  }
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.api.runtime_platform[0].cpu_architecture == "ARM64" && output.image_platform == "linux/arm64"
+    error_message = "ARM64 tasks need the linux/arm64 image, and image_platform must say so."
   }
 }
 

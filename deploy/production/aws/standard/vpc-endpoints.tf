@@ -93,8 +93,8 @@ resource "aws_security_group" "vpc_endpoints" {
 }
 
 locals {
-  # One list, one resource block (for_each below) rather than five nearly
-  # identical resources — the five services need nothing different from each
+  # One list, one resource block (for_each below) rather than three nearly
+  # identical resources — the three services need nothing different from each
   # other: same subnets, same security group, same private-DNS setting.
   interface_endpoint_services = toset([
     # ECS resolves task "secrets" through the SSM API (secrets.tf).
