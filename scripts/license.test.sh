@@ -96,7 +96,7 @@ reset_stub
 f="$TMP/trial-var"
 out="$(license_out trial "$f" MARGINCE_TRIAL_LICENSE=abc)" && rc=0 || rc=$?
 if [ "$rc" -eq 0 ] && [ "$(cat "$f")" = abc ]; then ok "MARGINCE_TRIAL_LICENSE writes its value to the file"; else fail "MARGINCE_TRIAL_LICENSE writes its value to the file (rc=$rc): $out, file=$(cat "$f" 2>/dev/null)"; fi
-mode="$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)"
+mode="$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)"
 if [ "$mode" = 600 ]; then ok "the file written from MARGINCE_TRIAL_LICENSE is mode 600"; else fail "the file written from MARGINCE_TRIAL_LICENSE is mode 600 (got $mode)"; fi
 if [ -s "$CURL_STUB_DIR/args" ]; then fail "MARGINCE_TRIAL_LICENSE makes no request — curl was called"; else ok "MARGINCE_TRIAL_LICENSE makes no request"; fi
 
@@ -105,7 +105,7 @@ reset_stub
 f="$TMP/prod-var"
 out="$(license_out production "$f" MARGINCE_LICENSE=xyz)" && rc=0 || rc=$?
 if [ "$rc" -eq 0 ] && [ "$(cat "$f")" = xyz ]; then ok "MARGINCE_LICENSE writes its value to the file"; else fail "MARGINCE_LICENSE writes its value to the file (rc=$rc): $out"; fi
-mode="$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)"
+mode="$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)"
 if [ "$mode" = 600 ]; then ok "the file written from MARGINCE_LICENSE is mode 600"; else fail "the file written from MARGINCE_LICENSE is mode 600 (got $mode)"; fi
 if [ -s "$CURL_STUB_DIR/args" ]; then fail "MARGINCE_LICENSE makes no request — curl was called"; else ok "MARGINCE_LICENSE makes no request"; fi
 
@@ -127,7 +127,7 @@ f="$TMP/ok-license"
 out="$(license_out trial "$f" MARGINCE_LICENSE_API=http://license.example.test MARGINCE_ACCOUNT_TOKEN=tok-secret-123)" && rc=0 || rc=$?
 if [ "$rc" -eq 0 ]; then ok "a 201 answer succeeds"; else fail "a 201 answer succeeds (rc=$rc): $out"; fi
 if grep -qF 'jwt-value' "$f" 2>/dev/null; then ok "the license is written to the file"; else fail "the license is written to the file: $(cat "$f" 2>/dev/null)"; fi
-mode="$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f" 2>/dev/null)"
+mode="$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)"
 if [ "$mode" = 600 ]; then ok "the license file is mode 600"; else fail "the license file is mode 600 (got $mode)"; fi
 if printf '%s' "$out" | grep -qF 'expires 2026-12-31T00:00:00Z'; then ok "the expiry is printed"; else fail "the expiry is printed: $out"; fi
 if grep -qF '"kind":"trial"' "$CURL_STUB_DIR/args" || grep -qF '"kind": "trial"' "$CURL_STUB_DIR/args"; then
@@ -190,7 +190,7 @@ if printf '%s' "$out" | grep -qF 'jwt-value'; then fail "the license value never
 if grep -qF 'tok-secret-123' "$CURL_STUB_DIR/args"; then fail "the account token never appears in curl's arguments"; else ok "the account token never appears in curl's arguments"; fi
 if grep -qF 'tok-secret-123' "$CURL_STUB_DIR/stdin"; then ok "the account token reaches curl through standard input (the -K - config)"; else fail "the account token reaches curl through standard input (the -K - config)"; fi
 
-file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+file_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 
 # --- a pre-existing file's mode is forced to 600 after a successful write,
 # even though it was created wider (e.g. 644) ---
