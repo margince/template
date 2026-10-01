@@ -4,7 +4,7 @@
 #
 # POSIX sh: it runs on the server (uploaded in shared/ and run by the apply
 # step's install script) and on the developer's machine (make local-up). It
-# needs /dev/urandom, od, tr, head and dd; openssl or base64 for the base64
+# needs /dev/urandom, od, tr, cut and dd; openssl or base64 for the base64
 # keys.
 #
 # Kinds:
@@ -78,9 +78,13 @@ b64_32() {
   fi
 }
 
-# alnum <n> — <n> random characters of [A-Za-z0-9].
+# alnum <n> — <n> random characters of [A-Za-z0-9]. The input is bounded and
+# cut reads to its end, so no stage writes to a closed pipe: with SIGPIPE
+# ignored, `tr < /dev/urandom | head` makes tr report a write error (Linux) or
+# never end (macOS). 1024 bytes give about 248 characters; check() refuses a
+# short value.
 alnum() {
-  tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$1"
+  dd if=/dev/urandom bs=1024 count=1 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c "1-$1"
 }
 
 # check <value> <length> <kind> — exit 1 unless <value> has <length>
