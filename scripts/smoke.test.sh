@@ -63,8 +63,12 @@ case "${1:-}" in
     printf 'id-%s\n' "$name"
     exit 0 ;;
   exec)
-    # psql reads the bootstrap from standard input.
-    cat >/dev/null 2>&1 || true
+    # Like docker, read standard input only for `exec -i`: psql reads the
+    # bootstrap from it. pg_isready has no -i, and an unconditional read
+    # waits on the terminal when the test runs from one.
+    for a in "$@"; do
+      [ "$a" = -i ] && { cat >/dev/null 2>&1 || true; break; }
+    done
     exit 0 ;;
   port) printf '127.0.0.1:18080\n'; exit 0 ;;
   inspect)
@@ -119,6 +123,19 @@ all_removed() {
   [ -n "$net" ] || return 1
   grep -qx "docker network rm $net" "$STUB_LOG"
 }
+
+# --- the docker stub reads standard input only for `exec -i` ---
+# A shared descriptor shows whether the stub consumed the input: what it
+# leaves unread, the next read on the same descriptor gets.
+printf 'line\n' > "$TMP/stdin"
+exec 3< "$TMP/stdin"
+STUB_LOG=/dev/null "$STUB_BIN/docker" exec pg pg_isready -q <&3
+if IFS= read -r _ <&3; then ok "exec without -i leaves standard input unread"; else fail "exec without -i leaves standard input unread"; fi
+exec 3<&-
+exec 3< "$TMP/stdin"
+STUB_LOG=/dev/null "$STUB_BIN/docker" exec -i pg psql <&3
+if ! IFS= read -r _ <&3; then ok "exec -i reads standard input"; else fail "exec -i reads standard input"; fi
+exec 3<&-
 
 # --- invalid VERSION: exit 1 before any docker call ---
 rc="$(run_smoke 1.0.0)"
