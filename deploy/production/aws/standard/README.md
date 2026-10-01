@@ -1,8 +1,9 @@
 # Margince on AWS
 
 Terraform root module that deploys Margince into your own AWS account, sized
-for a small team (about 40 users). It deploys the images that the template's
-`make release` builds (Section 3), the same flow as the Azure standard stack.
+for a small team (about 40 users). Image creation and publication remain in
+the Margince source repository; this module integrates its published release
+artifacts with ECS Fargate.
 
 ## What it creates
 
@@ -11,19 +12,44 @@ for a small team (about 40 users). It deploys the images that the template's
 | Edge | Application Load Balancer: the only public entry. TLS 1.2/1.3 with the ACM certificate `acm_certificate_arn`, HTTP to HTTPS redirect, deletion protection, access logs. AWS WAF web ACL (six AWS managed rule groups, two per-IP rate limits), `waf_mode` count or block. See "WAF rollout". |
 | Compute | ECS Fargate cluster: **api** (2 to 4 tasks, CPU autoscaling), **worker** (1 to 3 tasks), **web** (nginx + SPA, 2 tasks). Each has its own security group, task role and least-privilege execution role. |
 | Data | RDS PostgreSQL 16 (Multi-AZ, gp3 with storage autoscaling, 7-day backups, deletion protection, Performance Insights), ElastiCache Valkey 7.2 (two nodes, automatic failover, TLS required, AUTH token), S3 attachment bucket (versioned, SSE-KMS enforced), EFS for `margince.yaml` |
-| Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; ECR, SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
+| Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
 | Secrets | SSM Parameter Store SecureStrings under `/<name_prefix>/`, one customer-managed KMS key (rotation on) for everything stored at rest |
-| Delivery | ECR repositories `<instance_name>/api|web|worker` (IMMUTABLE tags, enhanced scanning, lifecycle policy), a bootstrap host security group and instance profile |
+| Delivery | Digest-pinned api, web and worker artifacts from one Margince source release, pulled over the NAT gateways; a bootstrap host security group and instance profile |
 | Protection | CloudWatch alarms to a CMK-encrypted SNS topic, `prevent_destroy` on the stateful resources, EFS backup, CloudWatch log groups (30 days) |
 
+```mermaid
+flowchart LR
+  users(["Users, any network"]) -->|"HTTPS"| alb["ALB + AWS WAF<br/>ACM TLS, WAF web ACL"]
+  subgraph vpc["VPC: private subnets, and VPC endpoints for S3, SSM, KMS, Logs"]
+    web["web<br/>nginx, SPA"]
+    api["api"]
+    worker["worker"]
+    pg[("RDS PostgreSQL 16<br/>Multi-AZ, KMS")]
+    cache[("ElastiCache Valkey 7.2<br/>TLS, AUTH")]
+    s3[("S3 attachments<br/>SSE-KMS")]
+    efs[("EFS<br/>margince.yaml")]
+    ssm["SSM Parameter Store<br/>secrets, KMS"]
+    nat["NAT gateways"]
+    ops["Bootstrap host<br/>SSM, temporary"]
+  end
+  alb -->|"/"| web
+  alb -->|"/v1, /oauth, /mcp, /webhooks"| api
+  api --> pg
+  api --> cache
+  worker --> pg
+  worker --> cache
+  api --> s3
+  api --> efs
+  api -.->|"secrets"| ssm
+  worker -.->|"secrets"| ssm
+  api --> nat
+  worker --> nat
+  nat --> ext(["Graph, LLM, SMTP"])
+  nat -.->|"pull digest-pinned artifacts"| reg(["Margince source release<br/>api, web, worker"])
+  ops -.->|"bootstrap"| pg
+  alarms["CloudWatch alarms, SNS"] -.-> mail(["alert_email"])
 ```
-Internet ──HTTPS──> ALB + AWS WAF ──HTTP (private subnets)──> web (nginx :8080, SPA)
-                         │
-                         └── /v1*, /oauth/*, /mcp*, /webhooks/*, /healthz ──> api (:8080) ──> RDS PostgreSQL (TLS, verify-full)
-                                                                                 │          ElastiCache Valkey (TLS)
-worker (no ingress) ─────────────────────────────────────────────────────────────┤          S3 (SSE-KMS), EFS config
-                                                                                 └─> NAT ─> Graph, LLM, SMTP
-```
+
 
 ## Before you start
 
@@ -34,10 +60,9 @@ worker (no ingress) ────────────────────
 - **Tools**: Terraform 1.10 or newer, AWS CLI with the Session Manager
   plugin, `jq`, `psql`; Docker with buildx for a manual image push
   (Section 3).
-- **Margince**: a licence token, and this instance repository with its `core/`
-  submodule checked out (`git submodule update --init`). The images come from
-  `make release`; the bootstrap SQL and `margince.example.yaml` come from
-  `core/`.
+- **Margince**: a licence token and the three digest-pinned image references
+  published together by one Margince source release. The bootstrap SQL and
+  `margince.example.yaml` come from the pinned `core/` submodule.
 - **Remote state**: state holds every generated password. Create a protected
   state bucket first (`backend.hcl.example`) and never keep state on a laptop.
 
@@ -49,10 +74,9 @@ cp backend.hcl.example backend.hcl            # fill in
 cp terraform.tfvars.example terraform.tfvars  # fill in
 terraform init -backend-config=backend.hcl
 
-# Everything the database bootstrap and the image push need, but not the ECS
-# services: they would start pointed at a tag ECR does not have yet.
+# Everything the database bootstrap needs, but not the
+# ECS services: they would start pointed at a tag the registry does not have yet.
 terraform apply \
-  -target=aws_ecr_repository.api -target=aws_ecr_repository.worker -target=aws_ecr_repository.web \
   -target=aws_db_instance.this -target=aws_elasticache_replication_group.this \
   -target=aws_s3_bucket.blobstore -target=aws_efs_file_system.config \
   -target=aws_efs_mount_target.config -target=aws_efs_access_point.config \
@@ -62,8 +86,8 @@ terraform apply \
 ```
 
 `terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
-`release_version`, `license_token` and `admin_bootstrap_password`, and
-usually `alert_email`. See "Variables".
+`image_refs`, `license_token` and `admin_bootstrap_password`, and usually
+`source_registry_credentials_arn` and `alert_email`. See "Variables".
 
 ## 2. Bootstrap the database (once)
 
@@ -115,59 +139,29 @@ psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432
 The master password exists only as the `/<name_prefix>/rds-master-password`
 parameter, for this step; no ECS task or execution role can read it.
 
-## 3. Build and push the images
+## 3. Select the Margince source release
 
-The images are the ones `make release` (the `release.yml` workflow) or
-`make package` builds from core's `Dockerfile`, named
-`<REGISTRY>/<instance_name>/<role>:<VERSION>` (the instance repository's
-`docs/release.md`, Section 6). This stack deploys
-`<registry>/<instance_name>/<role>:<release_version>`
-(`terraform output image_refs`).
+The Margince source repository owns the Dockerfile, bake definition, release
+checks, multi-platform build and publication. Its release publishes api, web
+and worker together and records each image by digest. This AWS module neither
+rebuilds nor republishes them.
 
-1. Set the image registry. `REGISTRY` is this account's ECR registry host:
+1. Select one published Margince source release that includes this stack's
+   `cpu_architecture` (`terraform output -raw image_platform`).
+2. Copy its three digest-pinned references into `image_refs` in
+   `terraform.tfvars`. Do not combine roles from different releases.
+3. If the source registry requires authentication, create an AWS Secrets
+   Manager secret containing the Docker credentials JSON:
 
-   ```sh
-   terraform output -raw registry   # <account>.dkr.ecr.<region>.amazonaws.com
+   ```json
+   {"username":"<user>","password":"<token>"}
    ```
 
-   For `release.yml`, set it as the repository variable `REGISTRY`. For a
-   manual push, export it in your shell. `instance_name` must equal `name`
-   in `instance.yaml`.
-
-2. Log in to the registry. `release.yml` logs in with the repository
-   secrets `REGISTRY_USERNAME` (`AWS`) and `REGISTRY_PASSWORD`. An ECR
-   password expires after 12 hours, so refresh it right before each release:
-
-   ```sh
-   aws ecr get-login-password --region <aws_region> | gh secret set REGISTRY_PASSWORD
-   gh secret set REGISTRY_USERNAME --body AWS
-   ```
-
-   For a manual push:
-
-   ```sh
-   aws ecr get-login-password --region <aws_region> \
-     | docker login --username AWS --password-stdin "$REGISTRY"
-   ```
-
-3. Build and push the release, one of:
-
-   ```sh
-   make release VERSION=v0.3.0                      # release.yml builds, tests and pushes
-   make package VERSION=v0.3.0 && for role in api web worker; do
-     docker push "$REGISTRY/<instance_name>/$role:v0.3.0"
-   done                                             # manual push
-   ```
-
-The identity that pushes needs `ecr:GetAuthorizationToken` on `*`, and
-`ecr:BatchCheckLayerAvailability`, `ecr:InitiateLayerUpload`,
-`ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage` and
-`ecr:BatchGetImage` on the three repositories, plus `kms:GenerateDataKey`
-and `kms:Decrypt` on `kms_key_arn` (the repositories are encrypted with it).
-The repositories are `IMMUTABLE`: a pushed tag is never overwritten. The
-tasks run `cpu_architecture` (default `X86_64`, what `release.yml` builds by
-default); for `ARM64`, set the repository variable
-`PLATFORMS = "linux/amd64,linux/arm64"` first.
+   Set `source_registry_credentials_arn` to that secret's ARN. ECS reads it
+   through the execution roles and passes it to the registry; the value does
+   not enter the task environment.
+4. Run `terraform apply` (step 5 the first time). The task definitions retain
+   the supplied `@sha256:` references unchanged.
 
 ## 4. Upload `margince.yaml` (once)
 
@@ -235,9 +229,10 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 
 ## 7. Releases
 
-Follow Section 3 for each new version, then set `release_version` in
-`terraform.tfvars` and run `terraform apply`. All three services get a new
-task definition in the same apply; api, worker and web move together.
+Follow Section 3 for each new version: copy all three digest-pinned references
+from one Margince source release into `image_refs`, then run `terraform apply`.
+All three services get a new task definition in the same apply; api, worker
+and web move together.
 
 ## Sign-in
 
@@ -304,13 +299,14 @@ uses it.
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the ALB serves |
 | `acm_certificate_arn` | required | ACM certificate for that host |
-| `release_version` | required | Release to deploy (image tag) |
+| `image_refs` | required | Digest-pinned api, worker and web references from one Margince source release |
+| `source_registry_credentials_arn` | `""` | Secrets Manager ARN with Docker pull credentials; empty only for anonymous pulls |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `alert_email` | `""` | Alert subscription |
-| `aws_region`, `name_prefix`, `instance_name` | `eu-central-1`, `margince`, `margince-default` | Placement and names |
+| `aws_region`, `name_prefix` | `eu-central-1`, `margince` | Placement and names |
 | `az_count` | `2` | Availability Zones (one NAT gateway each) |
-| `cpu_architecture` | `X86_64` | Fargate architecture of the images |
+| `cpu_architecture` | `X86_64` | `X86_64` or `ARM64`, matching a platform in the selected source release |
 | `db_instance_class`, `db_multi_az` | `db.t4g.medium`, `true` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `2`, `4` | api scale bounds |
 | `waf_mode` | `count` | `count` then `block` |
@@ -329,19 +325,19 @@ Rough list prices in eu-central-1, per month, before usage-based traffic:
 
 | Item | USD |
 |---|---|
-| ECS Fargate: api (2-4 tasks), worker (1-3), web (2) | 80-165 |
+| ECS Fargate X86_64: api (2-4 tasks), worker (1-3), web (2) | 80-165 |
 | RDS db.t4g.medium Multi-AZ, 50 GB gp3 | 130-145 |
 | ElastiCache cache.t4g.small, two nodes | 60 |
 | NAT gateways (2) and data processing | 65-90 |
 | ALB | 30-45 |
-| VPC endpoints (5 interface; the S3 gateway endpoint is free) | 40 |
+| VPC endpoints (3 interface; the S3 gateway endpoint is free) | 22 |
 | AWS WAF | 15-25 |
 | CloudWatch logs and alarms, SNS | 10-20 |
-| S3, EFS, ECR, KMS key and SSM Standard | 10-20 |
-| **Total** | **about 440-660** |
+| S3, EFS, KMS key and SSM Standard | 10-20 |
+| **Total** | **about 407-557** |
 
-A Graviton release (`cpu_architecture = "ARM64"`, `PLATFORMS` including
-`linux/arm64`) cuts the Fargate line by about 20%.
+Setting `cpu_architecture = "ARM64"` (Graviton) costs about 20% less on the
+Fargate line than the `X86_64` default.
 
 ## Security notes
 
@@ -350,7 +346,7 @@ A Graviton release (`cpu_architecture = "ARM64"`, `PLATFORMS` including
   header fields and does not route `/metrics`.
 - **Encryption at rest**: one customer-managed KMS key (`kms.tf`, rotation
   on) for RDS, ElastiCache, S3 (SSE-KMS with Bucket Keys, other keys denied),
-  EFS, every SSM parameter, the ECR repositories, the SNS topic and the WAF
+  EFS, every SSM parameter, the SNS topic and the WAF
   log group. The ALB log bucket uses SSE-S3, the only option ELB access
   logging supports.
 - **Encryption in transit**: TLS 1.2/1.3 at the ALB, HTTP to HTTPS redirect;
@@ -368,12 +364,14 @@ A Graviton release (`cpu_architecture = "ARM64"`, `PLATFORMS` including
   with `aws:SourceAccount`/`aws:SourceArn`, no
   `AmazonECSTaskExecutionRolePolicy`. `web` reads no secrets. The RDS master
   password parameter is readable by no task.
+- **Image source**: the Margince source repository builds, verifies and
+  publishes all three roles. This stack only consumes its digest-pinned
+  artifacts. Optional pull credentials stay in Secrets Manager and are
+  readable only by the ECS execution roles.
 - **Containers**: all Linux capabilities dropped, explicit
   `runtime_platform`, `stopTimeout = 60` for api and worker.
-- **Images**: IMMUTABLE ECR tags, so `release_version` pins the deployed
-  images; continuous enhanced scanning (Amazon Inspector, metered) for this
-  instance's repositories; untagged images expire after 14 days, and the 30
-  most recent releases are kept.
+- **Images**: every task definition uses the supplied `@sha256:` reference;
+  tasks pull over the NAT gateways at task start.
 - **Sign-in**: the WAF's auth-path rate rule is the one fleet-wide login
   limit; the api's own login limiters are per task.
 - **Protection**: RDS and ALB deletion protection; `prevent_destroy` on the

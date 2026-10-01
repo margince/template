@@ -1,7 +1,6 @@
 # One customer-managed key for the data this stack stores at rest: the
 # Storage Account and Postgres Flexible Server reference
-# azurerm_key_vault_key.data below (the registry, which holds only images,
-# uses Microsoft-managed keys, acr.tf). One key is enough because the per-consumer
+# azurerm_key_vault_key.data below. One key is enough because the per-consumer
 # RBAC grants are already the blast-radius boundary. Redis keeps its data on
 # the storage account's redis share, so the same key covers it.
 #

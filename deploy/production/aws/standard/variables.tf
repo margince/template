@@ -38,31 +38,43 @@ variable "az_count" {
 }
 
 # ---- Release ------------------------------------------------------------------------
-# Images are <registry>/<instance_name>/<role>:<release_version>, as
-# `make release` or `make package` names them (docs/release.md, Section 6).
-# The ECR repositories are IMMUTABLE (ecs.tf): a released tag never changes.
+# The Margince source release publishes one digest-pinned reference per role.
+# This stack consumes those artifacts unchanged; it does not build or publish
+# application images.
 
-variable "instance_name" {
-  description = "The instance's name from instance.yaml (`name`): the image namespace and the ECR repository prefix."
-  type        = string
-  default     = "margince-default"
+variable "image_refs" {
+  description = "Digest-pinned api, worker and web image references from one published Margince source release. Copy the three references from that release; all must end in @sha256:<64 hex characters>."
+  type = object({
+    api    = string
+    worker = string
+    web    = string
+  })
   validation {
-    condition     = can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.instance_name))
-    error_message = "instance_name must match instance.yaml's name format: lowercase letters and digits, separated by single hyphens."
+    condition = alltrue([
+      for ref in values(var.image_refs) : can(regex("@sha256:[0-9a-f]{64}$", ref))
+    ])
+    error_message = "Every image_refs value must be the digest-pinned reference published by the Margince source release, ending in @sha256:<64 lowercase hex characters>."
+  }
+  validation {
+    condition = length(toset([
+      for ref in values(var.image_refs) : split("/", ref)[0]
+    ])) == 1
+    error_message = "Every image_refs value must use the same source registry host."
   }
 }
 
-variable "release_version" {
-  description = "The release to deploy for api, worker and web: the VERSION of `make release`, which is also the image tag. Push it before the apply that references it."
+variable "source_registry_credentials_arn" {
+  description = "Optional Secrets Manager ARN containing the username/password JSON used by ECS to pull the source-published images. Leave empty only when those image references allow anonymous pulls."
   type        = string
+  default     = ""
   validation {
-    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
-    error_message = "release_version must be a release version such as v0.3.0 or v1.3.0-rc.1 (docs/release.md, Section 2)."
+    condition     = var.source_registry_credentials_arn == "" || can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:", var.source_registry_credentials_arn))
+    error_message = "source_registry_credentials_arn must be empty or an AWS Secrets Manager secret ARN."
   }
 }
 
 variable "cpu_architecture" {
-  description = "Fargate CPU architecture for all three tasks: X86_64 (the linux/amd64 images release.yml builds by default) or ARM64 (set PLATFORMS = \"linux/amd64,linux/arm64\" for the release first)."
+  description = "Fargate CPU architecture for all three tasks: X86_64 or ARM64. The selected Margince source release must include the matching linux/amd64 or linux/arm64 image variant."
   type        = string
   default     = "X86_64"
   validation {

@@ -14,134 +14,14 @@ locals {
   }
 }
 
-# Named <instance_name>/<role>, so the images `make release` pushes with
-# REGISTRY set to this account's ECR registry land here unchanged
-# (docs/release.md, Section 6). IMMUTABLE: a released tag can never be
-# silently overwritten; the only way to ship a new image is a new
-# release_version. The Azure standard stack locks its ACR tags the same way. Each repo's own KMS encryption_configuration is what makes each
-# execution role's own UseDataKey grant (iam.tf) meaningful — api/worker
-# under the shared execution role's grant, web under execution_web's own.
-resource "aws_ecr_repository" "api" {
-  name                 = "${var.instance_name}/api"
-  image_tag_mutability = "IMMUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.data.arn
-  }
-  tags = { Name = "${var.name_prefix}-api", Component = "container-registry" }
-}
-
-resource "aws_ecr_repository" "worker" {
-  name                 = "${var.instance_name}/worker"
-  image_tag_mutability = "IMMUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.data.arn
-  }
-  tags = { Name = "${var.name_prefix}-worker", Component = "container-registry" }
-}
-
-resource "aws_ecr_repository" "web" {
-  name                 = "${var.instance_name}/web"
-  image_tag_mutability = "IMMUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.data.arn
-  }
-  tags = { Name = "${var.name_prefix}-web", Component = "container-registry" }
-}
-
-# IMMUTABLE tags mean every push accumulates rather than overwrites — an
-# untagged image (the previous digest, once a tag moves) is dead weight and
-# attack surface (an unpatched image nobody references) with no reason to
-# keep it. `sinceImagePulled` cannot pair with `expire` (it only drives
-# `transition`, per ECR's own lifecycle semantics), so this is the direct
-# `expire untagged after N days` rule rather than a pull-activity-based one.
-#
-# Untagged cleanup alone still leaves every TAGGED (released) image growing
-# forever — IMMUTABLE means a tag is never reused, so nothing ever naturally
-# frees one, unlike a mutable "latest"-style repo where a new push already
-# reclaims the old digest's tag. Rule 2 is the tagged-image half of the same
-# cleanup: keep the most recent 30 releases
-# (rollback material), expire the rest. tagPatternList = ["*"] matches every
-# tag rather than naming release-version tags one at a time, since this
-# stack's release_version tags all follow one format, and every tag in these
-# repositories is a release.
+# The Margince source release publishes these three digest-pinned artifacts.
+# AWS consumes them unchanged; image creation remains owned by the source repo.
 locals {
-  untagged_expiry_policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Expire untagged images after 14 days"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 14
-        }
-        action = { type = "expire" }
-      },
-      {
-        rulePriority = 2
-        description  = "Keep only the most recent 30 tagged (released) images"
-        selection = {
-          tagStatus      = "tagged"
-          tagPatternList = ["*"]
-          countType      = "imageCountMoreThan"
-          countNumber    = 30
-        }
-        action = { type = "expire" }
-      },
-    ]
-  })
-}
-
-resource "aws_ecr_lifecycle_policy" "api" {
-  repository = aws_ecr_repository.api.name
-  policy     = local.untagged_expiry_policy
-}
-
-resource "aws_ecr_lifecycle_policy" "worker" {
-  repository = aws_ecr_repository.worker.name
-  policy     = local.untagged_expiry_policy
-}
-
-resource "aws_ecr_lifecycle_policy" "web" {
-  repository = aws_ecr_repository.web.name
-  policy     = local.untagged_expiry_policy
-}
-
-# Registry-level, not repository-level, and scoped to only THIS stack's
-# repos: aws_ecr_registry_scanning_configuration is a singleton per
-# account+region — applying an unscoped rule here would silently start
-# billing and scanning every OTHER repo in the account too, not just the
-# three this stack owns. Enhanced scanning (continuous, Inspector-backed)
-# supersedes each repo's own scan_on_push for any repo the filter below
-# matches — it re-scans on every new CVE disclosure, not only at push time,
-# which scan_on_push alone never catches for an image already sitting in the
-# repo. This is a metered feature (Inspector charges per image scanned) on
-# top of the basic scanning this stack shipped with — see README.md.
-resource "aws_ecr_registry_scanning_configuration" "this" {
-  scan_type = "ENHANCED"
-
-  rule {
-    scan_frequency = "CONTINUOUS_SCAN"
-    repository_filter {
-      filter      = "${var.instance_name}/*"
-      filter_type = "WILDCARD"
+  images = var.image_refs
+  repository_credentials = var.source_registry_credentials_arn == "" ? {} : {
+    repositoryCredentials = {
+      credentialsParameter = var.source_registry_credentials_arn
     }
-  }
-}
-
-# The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>.
-locals {
-  images = {
-    api    = "${aws_ecr_repository.api.repository_url}:${var.release_version}"
-    worker = "${aws_ecr_repository.worker.repository_url}:${var.release_version}"
-    web    = "${aws_ecr_repository.web.repository_url}:${var.release_version}"
   }
 }
 
@@ -218,7 +98,7 @@ resource "aws_ecs_task_definition" "api" {
   tags = { Name = "${var.name_prefix}-api", Component = "compute-api" }
 
   container_definitions = jsonencode([
-    {
+    merge({
       name      = "api"
       image     = local.images.api
       essential = true
@@ -250,7 +130,7 @@ resource "aws_ecs_task_definition" "api" {
           "awslogs-stream-prefix" = "api"
         }
       }
-    }
+    }, local.repository_credentials)
   ])
 }
 
@@ -283,7 +163,7 @@ resource "aws_ecs_task_definition" "worker" {
   tags = { Name = "${var.name_prefix}-worker", Component = "compute-worker" }
 
   container_definitions = jsonencode([
-    {
+    merge({
       name      = "worker"
       image     = local.images.worker
       essential = true
@@ -317,7 +197,7 @@ resource "aws_ecs_task_definition" "worker" {
           "awslogs-stream-prefix" = "worker"
         }
       }
-    }
+    }, local.repository_credentials)
   ])
 }
 
@@ -340,7 +220,7 @@ resource "aws_ecs_task_definition" "web" {
   tags = { Name = "${var.name_prefix}-web", Component = "compute-web" }
 
   container_definitions = jsonencode([
-    {
+    merge({
       name      = "web"
       image     = local.images.web
       essential = true
@@ -358,7 +238,7 @@ resource "aws_ecs_task_definition" "web" {
           "awslogs-stream-prefix" = "web"
         }
       }
-    }
+    }, local.repository_credentials)
   ])
 }
 

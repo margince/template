@@ -4,7 +4,7 @@
 # ---- Placement and naming ------------------------------------------------------
 
 variable "azure_region" {
-  description = "Azure region for every resource. westeurope supports every service this stack uses (Container Apps, Premium ACR, Postgres zone-redundant HA); confirm availability before choosing another."
+  description = "Azure region for every resource. westeurope supports every service this stack uses (Container Apps, Postgres zone-redundant HA); confirm availability before choosing another."
   type        = string
   default     = "westeurope"
 }
@@ -20,26 +20,45 @@ variable "name_prefix" {
 }
 
 # ---- Release ------------------------------------------------------------------------
-# Images are <registry>/<instance_name>/<role>:<release_version>, as
-# `make release` or `make package` names them (docs/release.md, Section 6).
-# Released tags are locked read-only after the push (README.md, "Releases").
+# The Margince source release publishes one digest-pinned reference per role.
+# This stack consumes those artifacts unchanged; it does not build or publish
+# application images.
 
-variable "instance_name" {
-  description = "The instance's name from instance.yaml (`name`): the image namespace."
-  type        = string
-  default     = "margince-default"
+variable "image_refs" {
+  description = "Digest-pinned api, worker and web image references from one published Margince source release. Copy the three references from that release; all must end in @sha256:<64 hex characters>."
+  type = object({
+    api    = string
+    worker = string
+    web    = string
+  })
   validation {
-    condition     = can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.instance_name))
-    error_message = "instance_name must match instance.yaml's name format: lowercase letters and digits, separated by single hyphens."
+    condition = alltrue([
+      for ref in values(var.image_refs) : can(regex("@sha256:[0-9a-f]{64}$", ref))
+    ])
+    error_message = "Every image_refs value must be the digest-pinned reference published by the Margince source release, ending in @sha256:<64 lowercase hex characters>."
+  }
+  validation {
+    condition = length(toset([
+      for ref in values(var.image_refs) : split("/", ref)[0]
+    ])) == 1
+    error_message = "Every image_refs value must use the same source registry host."
   }
 }
 
-variable "release_version" {
-  description = "The release to deploy for api, worker and web: the VERSION of `make release`, which is also the image tag."
+variable "source_registry_username" {
+  description = "Optional username for Container Apps to pull the source-published images. Leave empty only when those references allow anonymous pulls."
   type        = string
+  default     = ""
+}
+
+variable "source_registry_password" {
+  description = "Password or token paired with source_registry_username. Terraform stores it in Key Vault for Container Apps; leave empty for anonymous pulls."
+  type        = string
+  sensitive   = true
+  default     = ""
   validation {
-    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
-    error_message = "release_version must be a release version such as v0.3.0 or v1.3.0-rc.1 (docs/release.md, Section 2)."
+    condition     = (var.source_registry_username == "") == (var.source_registry_password == "")
+    error_message = "source_registry_username and source_registry_password must either both be set or both be empty."
   }
 }
 
@@ -89,7 +108,7 @@ variable "include_bootstrap_admin" {
 # ---- Access -----------------------------------------------------------------------------
 
 variable "operator_ip_allowlist" {
-  description = "Public IPv4 addresses (no /prefix) let through the Key Vault, Storage and registry firewalls while you set up or push a release. Leave empty in steady state; Postgres and Redis are never reachable this way (use the jumpbox)."
+  description = "Public IPv4 addresses (no /prefix) let through the Key Vault and Storage firewalls while you set up. Leave empty in steady state; Postgres and Redis are never reachable this way (use the jumpbox)."
   type        = list(string)
   default     = []
   validation {
@@ -166,7 +185,7 @@ variable "alert_email" {
 }
 
 variable "enable_resource_locks" {
-  description = "CanNotDelete locks on Postgres, storage, Key Vault, the Recovery Services vault and ACR. Set false and apply before terraform destroy."
+  description = "CanNotDelete locks on Postgres, storage, Key Vault and the Recovery Services vault. Set false and apply before terraform destroy."
   type        = bool
   default     = true
 }

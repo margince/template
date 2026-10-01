@@ -22,8 +22,8 @@ cloud services differ.
 | Application | Docker Compose on one Ubuntu 24.04 VM: Caddy with automatic HTTPS, then nginx | Managed containers: api (with the nginx edge), worker, web |
 | Postgres and Redis | Containers on the VM, data on a separate disk with daily snapshots | Managed Postgres 16; Redis 7.2 |
 | Entry and filtering | nginx rate-limits the credential endpoints per client address (`AUTH_RATE_LIMIT_PER_MINUTE`) | Managed WAF, `waf_mode` count then block, the same rules and variables |
-| Azure | VM, managed disk, Azure Backup, Key Vault | Application Gateway WAF v2, Container Apps, Postgres Flexible Server, Redis 7.2 container, ACR, Key Vault |
-| AWS | EC2 instance, EBS volume, DLM snapshots, SSM Parameter Store | ALB with AWS WAF, ECS Fargate, RDS Multi-AZ, ElastiCache Valkey 7.2, ECR, SSM Parameter Store |
+| Azure | VM, managed disk, Azure Backup, Key Vault | Application Gateway WAF v2, Container Apps, Postgres Flexible Server, Redis 7.2 container, Key Vault |
+| AWS | EC2 instance, EBS volume, DLM snapshots, SSM Parameter Store | ALB with AWS WAF, ECS Fargate, RDS Multi-AZ, ElastiCache Valkey 7.2, SSM Parameter Store |
 
 ## 3. Versions
 

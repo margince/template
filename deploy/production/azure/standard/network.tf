@@ -83,7 +83,7 @@ resource "azurerm_subnet" "postgres" {
 
 resource "azurerm_subnet" "private_endpoints" {
   # Shared by every azurerm_private_endpoint in this stack (storage blob and
-  # file, Key Vault, ACR; privateendpoints.tf). Private endpoints need
+  # file, Key Vault; privateendpoints.tf). Private endpoints need
   # no subnet exclusivity, and all are reached by the same caller
   # (containerapps), so one subnet is enough.
   name                 = "${var.name_prefix}-private-endpoints"
@@ -99,9 +99,11 @@ resource "azurerm_subnet" "private_endpoints" {
 # ---- NAT egress ----------------------------------------------------------
 # The api and worker containers call public internet endpoints (AI provider
 # APIs, Nominatim, VIES, crt.sh, OAuth token endpoints, license validation,
-# outbound mail), and the redis app pulls its image from Docker Hub. Postgres,
-# Storage, Key Vault and ACR are reached over private endpoints or VNet
-# integration. The NAT gateway therefore attaches to the containerapps subnet
+# outbound mail), and every app pulls its image from an external registry:
+# api, worker and web from the Margince source release, redis from Docker Hub. The
+# containerapps NSG has no outbound rule, so Azure's default AllowInternetOutBound
+# lets those pulls out over 443. Postgres, Storage and Key Vault are reached
+# over private endpoints or VNet integration. The NAT gateway therefore attaches to the containerapps subnet
 # (and the ops subnet, jumpbox.tf).
 #
 # Known gap: this NAT gateway is not zone-redundant. A Standard-SKU NAT

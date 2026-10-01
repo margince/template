@@ -12,7 +12,11 @@ mock_provider "random" {}
 mock_provider "time" {}
 
 variables {
-  release_version          = "v0.3.0"
+  image_refs = {
+    api    = "source.example/margince/api:1970.42@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
   public_base_url          = "https://crm.example.com"
   admin_bootstrap_password = "change-me-before-first-boot"
   license_token            = "test-licence"
@@ -46,8 +50,8 @@ run "first_apply_without_apps" {
     error_message = "Postgres has auto-grow and Entra authentication on."
   }
   assert {
-    condition     = length(azurerm_management_lock.this) == 5
-    error_message = "Postgres, storage, Key Vault, ACR and the Recovery Services vault are locked."
+    condition     = length(azurerm_management_lock.this) == 4
+    error_message = "Postgres, storage, Key Vault and the Recovery Services vault are locked."
   }
   assert {
     condition = (
@@ -77,12 +81,10 @@ run "first_apply_without_apps" {
   }
   assert {
     condition = (
-      !azurerm_container_registry.this.public_network_access_enabled &&
-      one(azurerm_container_registry.this.network_rule_set).default_action == "Deny" &&
       length(azurerm_storage_account.this.customer_managed_key) == 1 &&
       length(azurerm_postgresql_flexible_server.this.customer_managed_key) == 1
     )
-    error_message = "The registry has no public endpoint without operator_ip_allowlist; storage and Postgres use the customer-managed key."
+    error_message = "Storage and Postgres use the customer-managed key."
   }
 }
 
@@ -115,14 +117,6 @@ run "full_apply_with_apps_and_gateway" {
     override_during = plan
     values = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/margince/providers/Microsoft.Network/applicationGatewayWebApplicationFirewallPolicies/margince-waf"
-    }
-  }
-  override_resource {
-    target          = azurerm_container_registry.this
-    override_during = plan
-    values = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/margince/providers/Microsoft.ContainerRegistry/registries/marginceabcdeacr"
-      login_server = "marginceabcdeacr.azurecr.io"
     }
   }
   override_resource {
@@ -202,11 +196,13 @@ run "full_apply_with_apps_and_gateway" {
     error_message = "The apps get no Entra app settings; sign-in apps are configured in Margince under Settings."
   }
   assert {
-    condition = alltrue([
-      for role in ["api", "worker", "web"] :
-      local.images[role] == "marginceabcdeacr.azurecr.io/margince-default/${role}:v0.3.0"
-    ]) && azurerm_container_app.api[0].template[0].container[0].image == local.images.api && azurerm_container_app.api[0].template[0].container[1].image == local.images.web && azurerm_container_app.worker[0].template[0].container[0].image == local.images.worker
-    error_message = "Images are <registry>/<instance_name>/<role>:<release_version>."
+    condition = (
+      local.images == var.image_refs &&
+      azurerm_container_app.api[0].template[0].container[0].image == var.image_refs.api &&
+      azurerm_container_app.api[0].template[0].container[1].image == var.image_refs.web &&
+      azurerm_container_app.worker[0].template[0].container[0].image == var.image_refs.worker
+    )
+    error_message = "Azure must deploy the three digest-pinned references supplied by the Margince source release unchanged."
   }
   assert {
     condition     = contains(keys(azurerm_monitor_metric_alert.this), "waf-blocked-requests") && contains(keys(local.diagnostic_settings), "appgw")
@@ -324,10 +320,69 @@ run "waf_block_mode" {
   }
 }
 
-run "release_version_must_be_a_release" {
+run "image_refs_must_be_digest_pinned" {
   command = plan
   variables {
-    release_version = "latest"
+    image_refs = {
+      api    = "source.example/margince/api:latest"
+      worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
   }
-  expect_failures = [var.release_version]
+  expect_failures = [var.image_refs]
+}
+
+run "source_registry_credentials_are_wired" {
+  command = plan
+  variables {
+    deploy_apps              = true
+    source_registry_username = "source-reader"
+    source_registry_password = "test-only-token"
+  }
+  override_resource {
+    target          = azurerm_container_app_environment.this
+    override_during = plan
+    values = {
+      id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/margince/providers/Microsoft.App/managedEnvironments/margince-env"
+      default_domain    = "example-1234.westeurope.azurecontainerapps.io"
+      static_ip_address = "10.20.2.10"
+    }
+  }
+  assert {
+    condition     = local.source_registry_credentials && local.source_registry_server == "source.example"
+    error_message = "Container Apps must derive the source registry server and enable credentials when both values are provided."
+  }
+  assert {
+    condition     = length(azurerm_key_vault_secret.source_registry_password) == 1 && length(azurerm_role_assignment.api_source_registry_password) == 1 && length(azurerm_role_assignment.worker_source_registry_password) == 1
+    error_message = "The source-registry password must live in Key Vault and be readable by only the two app identities."
+  }
+}
+
+run "jumpbox_is_operator_only" {
+  command = plan
+  assert {
+    condition = (
+      azurerm_linux_virtual_machine.jumpbox.size == "Standard_B2ms" &&
+      alltrue([for c in azurerm_network_interface.jumpbox.ip_configuration : c.public_ip_address_id == null]) &&
+      !anytrue([for r in azurerm_network_security_group.ops.security_rule : r.direction == "Inbound" && r.access == "Allow" && r.source_address_prefix != "168.63.129.16"])
+    )
+    error_message = "The jumpbox has no public IP and no inbound beyond Bastion Developer SSH."
+  }
+  assert {
+    condition = (
+      strcontains(local.jumpbox_cloud_init, "postgresql-client") &&
+      strcontains(local.jumpbox_cloud_init, "cifs-utils") &&
+      !strcontains(local.jumpbox_cloud_init, "actions-runner") &&
+      !strcontains(local.jumpbox_cloud_init, "acr login")
+    )
+    error_message = "cloud-init installs the operator toolchain only: no release runner and no registry login."
+  }
+}
+
+run "arm64_refused" {
+  command = plan
+  variables {
+    architecture = "arm64"
+  }
+  expect_failures = [var.architecture]
 }

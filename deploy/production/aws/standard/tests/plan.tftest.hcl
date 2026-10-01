@@ -16,8 +16,12 @@ mock_provider "aws" {
 mock_provider "random" {}
 
 variables {
-  public_base_url          = "https://crm.example.com"
-  release_version          = "v0.1.0"
+  public_base_url = "https://crm.example.com"
+  image_refs = {
+    api    = "source.example/margince/api:1970.42@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
   admin_bootstrap_password = "test-only-password-not-real"
   acm_certificate_arn      = "arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
   license_token            = "test-licence"
@@ -278,10 +282,10 @@ run "naming_sg_split_and_cache_version" {
       aws_vpc_security_group_ingress_rule.web_from_alb.from_port == 8080 &&
       aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.referenced_security_group_id == aws_security_group.vpc_endpoints.id &&
       aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.from_port == 443 &&
-      aws_vpc_security_group_egress_rule.web_to_s3.from_port == 443 &&
+      aws_vpc_security_group_egress_rule.web_to_internet.cidr_ipv4 == "0.0.0.0/0" &&
       length(aws_security_group.web.ingress) == 0
     )
-    error_message = "web SG: 8080 from the ALB only; egress 443 to the endpoints SG and the S3 prefix list."
+    error_message = "web SG: 8080 from the ALB only; egress 443 to the endpoints SG and the internet (image pull)."
   }
 
   assert {
@@ -363,7 +367,7 @@ run "block_mode_and_alert_email" {
   }
 }
 
-run "images_follow_the_release_naming" {
+run "images_follow_the_source_release" {
   command = plan
 
   override_resource {
@@ -372,64 +376,38 @@ run "images_follow_the_release_naming" {
     values          = { id = "sg-0ops0000000000000" }
   }
 
-  override_resource {
-    target          = aws_ecr_repository.api
-    override_during = plan
-    values = {
-      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/api"
-      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/api"
-    }
-  }
-
-  override_resource {
-    target          = aws_ecr_repository.worker
-    override_during = plan
-    values = {
-      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/worker"
-      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/worker"
-    }
-  }
-
-  override_resource {
-    target          = aws_ecr_repository.web
-    override_during = plan
-    values = {
-      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/web"
-      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/web"
-    }
+  assert {
+    condition     = local.images == var.image_refs && output.image_refs == var.image_refs
+    error_message = "AWS must deploy the three digest-pinned references supplied by the Margince source release unchanged."
   }
 
   assert {
-    condition     = aws_ecr_repository.api.name == "margince-default/api" && aws_ecr_repository.worker.name == "margince-default/worker" && aws_ecr_repository.web.name == "margince-default/web"
-    error_message = "ECR repositories are named <instance_name>/<role>, as make release names the images."
-  }
-
-  assert {
-    condition = alltrue([
-      for r in [aws_ecr_repository.api, aws_ecr_repository.worker, aws_ecr_repository.web] : r.image_tag_mutability == "IMMUTABLE"
-    ])
-    error_message = "Released tags are immutable."
-  }
-
-  assert {
-    condition = alltrue([
-      for role, ref in local.images : ref == "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/${role}:v0.1.0"
-    ]) && length(local.images) == 3
-    error_message = "Images are <registry>/<instance_name>/<role>:<release_version>."
-  }
-
-  assert {
-    condition     = var.cpu_architecture == "X86_64"
-    error_message = "The default architecture matches the linux/amd64 images make release builds by default."
+    condition     = var.cpu_architecture == "X86_64" && aws_ecs_task_definition.api.runtime_platform[0].cpu_architecture == "X86_64"
+    error_message = "The default architecture is X86_64; the selected Margince source release must include linux/amd64."
   }
 }
 
-run "release_version_must_be_a_release" {
+run "image_refs_must_be_digest_pinned" {
   command = plan
   variables {
-    release_version = "latest"
+    image_refs = {
+      api    = "source.example/margince/api:latest"
+      worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
   }
-  expect_failures = [var.release_version]
+  expect_failures = [var.image_refs]
+}
+
+run "source_registry_credentials_are_wired" {
+  command = plan
+  variables {
+    source_registry_credentials_arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:margince-source-registry-AbCdEf"
+  }
+  assert {
+    condition     = local.repository_credentials.repositoryCredentials.credentialsParameter == var.source_registry_credentials_arn
+    error_message = "Every task merges the optional source-registry credential secret into its ECS container definition."
+  }
 }
 
 run "missing_licence_is_refused" {
@@ -457,7 +435,7 @@ run "security_group_and_iam_descriptions_are_ascii" {
     condition = alltrue([
       for d in concat(
         [for sg in [aws_security_group.alb, aws_security_group.ecs_tasks, aws_security_group.web, aws_security_group.db, aws_security_group.redis, aws_security_group.efs, aws_security_group.ops, aws_security_group.vpc_endpoints] : sg.description],
-        [aws_vpc_security_group_ingress_rule.web_from_alb.description, aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.description, aws_vpc_security_group_egress_rule.web_to_s3.description],
+        [aws_vpc_security_group_ingress_rule.web_from_alb.description, aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.description, aws_vpc_security_group_egress_rule.web_to_internet.description],
       ) : can(regex("^[a-zA-Z0-9. _:/()#,@\\[\\]+=&;{}!$*-]*$", d))
     ])
     error_message = "A security group or rule description uses a character EC2 refuses."

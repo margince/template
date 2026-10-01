@@ -1,8 +1,8 @@
 # User-assigned managed identities and the RBAC role assignments that give
 # each one only what it needs.
 #
-# Container Apps uses one identity per app for both registry pull and Key
-# Vault secret references (containerapps.tf's `secret` blocks). Azure Files
+# Container Apps uses one identity per app for its Key Vault secret
+# references (containerapps.tf's `secret` blocks). Azure Files
 # mounts (containerapps.tf's environment storage) authenticate with the
 # storage account key, not an identity, so no storage-mount role is granted.
 
@@ -57,24 +57,23 @@ resource "azurerm_role_assignment" "worker_secret" {
   principal_id         = azurerm_user_assigned_identity.worker.principal_id
 }
 
-# Registry-wide AcrPull: repository-scoped permissions on ACR (ABAC
-# conditions) exist but were not verified for this provider version, so
-# either identity can pull any of the three images.
-resource "azurerm_role_assignment" "api_acr_pull" {
-  scope                = azurerm_container_registry.this.id
-  role_definition_name = "AcrPull"
+resource "azurerm_role_assignment" "api_source_registry_password" {
+  count                = local.source_registry_credentials ? 1 : 0
+  scope                = azurerm_key_vault_secret.source_registry_password[0].resource_versionless_id
+  role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.api.principal_id
 }
 
-resource "azurerm_role_assignment" "worker_acr_pull" {
-  scope                = azurerm_container_registry.this.id
-  role_definition_name = "AcrPull"
+resource "azurerm_role_assignment" "worker_source_registry_password" {
+  count                = local.source_registry_credentials ? 1 : 0
+  scope                = azurerm_key_vault_secret.source_registry_password[0].resource_versionless_id
+  role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.worker.principal_id
 }
 
 # There is no separate web app: the SPA is served by the edge container inside
 # the api app (containerapps.tf), which pulls the web image with the api
-# identity's AcrPull grant above.
+# app's settings.
 
 # ---- dataverse: Margince's server-to-server identity in Dataverse --------------
 # Attached to api and worker. It holds no Azure role at all: its only use is

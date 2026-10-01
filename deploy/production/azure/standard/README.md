@@ -1,9 +1,9 @@
 # Margince on Azure
 
 Terraform root module that deploys Margince into your own Azure subscription,
-sized for a small team (about 40 users). It deploys the
-images that the template's `make release` builds (Section 3), the same flow as
-the AWS standard stack.
+sized for a small team (about 40 users). Image creation and publication remain
+in the Margince source repository; this module integrates its published
+release artifacts with Azure Container Apps.
 
 ## What it creates
 
@@ -12,20 +12,44 @@ the AWS standard stack.
 | Edge | Application Gateway WAF v2 with a static public IP: the only public entry. TLS with the Key Vault certificate `public-tls`, HTTP to HTTPS redirect, WAF policy (Microsoft Default Rule Set 2.1, Bot Manager 1.1, two per-IP rate limits), `waf_mode` count or block. See "WAF rollout". |
 | Compute | Container Apps environment (internal: private IP only, workload profiles, Consumption profile, zone-redundant). **api** app (3 to 6 replicas, CPU and HTTP scale rules): `cmd/api` plus an **edge** nginx container that serves the SPA; its ingress is reachable only from the gateway. **worker** app: no ingress. **redis** app: Redis 7.2, one replica, internal TCP only. |
 | Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
-| Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, registry, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
+| Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
 | Identity | Managed identities for api, worker, Dataverse and customer-managed keys |
-| Delivery | Container Registry Premium (images from `make release`, private endpoint), jumpbox VM with Azure Bastion Developer |
+| Delivery | Digest-pinned api, web and worker artifacts from one Margince source release, pulled over the NAT gateway; jumpbox VM with Azure Bastion Developer for operator tasks |
 | Protection | Share soft delete and daily Azure Backup (attachments, redis), delete locks on the stateful resources, diagnostic settings on every resource that has them, metric alerts, Log Analytics (90 days) |
 
+```mermaid
+flowchart LR
+  users(["Users, any network"]) -->|"HTTPS"| agw["Application Gateway WAF v2<br/>public IP, TLS, WAF policy"]
+  subgraph vnet["VNet"]
+    subgraph env["Container Apps environment (internal)"]
+      subgraph apiapp["api app"]
+        edge["edge nginx<br/>SPA, rate limits"] --> api["cmd/api"]
+      end
+      worker["worker"]
+      redis[("Redis 7.2")]
+    end
+    pg[("Postgres Flexible 16<br/>CMK")]
+    files[("Storage: config, attachments, redis<br/>CMK, private endpoint")]
+    kv["Key Vault<br/>secrets, CMK, certificate"]
+    jump["Jumpbox<br/>Bastion Developer, operator tasks"]
+    nat["NAT Gateway<br/>fixed egress IP"]
+  end
+  agw -->|"HTTPS"| edge
+  api --> pg
+  api --> redis
+  worker --> pg
+  worker --> redis
+  api -->|"SMB"| files
+  api -.->|"secrets"| kv
+  worker --> nat
+  api --> nat
+  nat --> ext(["Graph, LLM, SMTP"])
+  source["Margince source repository<br/>build, verify, publish"] --> reg(["Source release images<br/>api, web, worker, @sha256"])
+  env -.->|"pull over NAT"| reg
+  jump -.->|"bootstrap"| pg
+  logs["Log Analytics, alerts"] -.-> mail(["alert_email"])
 ```
-Internet ──HTTPS──> Application Gateway WAF v2 ──HTTPS──> api app ingress (private) ──> edge (nginx :8081) ──localhost──> cmd/api (:8080)
-                                         │  serves the SPA                  │
-                                         │  rate limits auth paths          ├─> Postgres (VNet)
-                                         │                                  ├─> redis app (TCP 6379, in the environment)
-                                         │                                  ├─> Key Vault, Files (private endpoints)
-                                         │                                  └─> NAT fixed IP ─> Graph, Dataverse, LLM
-worker (no ingress) ───────────────────────────────────────────────────────────┘
-```
+
 
 Staff sign in as described in "Sign-in". Guests reach only their scoped links (booking, Deal Room,
 unsubscribe), which the app protects with tokens.
@@ -45,12 +69,10 @@ unsubscribe), which the app protects with tokens.
   Network Watcher in the region (`NetworkWatcher_<region>` in
   `NetworkWatcherRG`), which Azure creates with the first VNet unless the
   subscription opted out.
-- **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`; Docker with buildx for
-  a manual image push (Section 3).
-- **Margince**: a licence token, and this instance repository with its `core/`
-  submodule checked out (`git submodule update --init`). The images come from
-  `make release`; the bootstrap SQL and `margince.example.yaml` come from
-  `core/`, so every stack deploys the core version `instance.yaml` pins.
+- **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`.
+- **Margince**: a licence token and the three digest-pinned image references
+  published together by one Margince source release. The bootstrap SQL and
+  `margince.example.yaml` come from the pinned `core/` submodule.
 - **TLS certificate** for the host in `public_base_url`, as a PFX file, to
   import into Key Vault in step 5.
 - **Remote state**: state holds every generated password and key. Create a state storage account first (`backend.hcl.example`)
@@ -66,14 +88,14 @@ terraform init -backend-config=backend.hcl
 terraform apply                               # deploy_apps = false
 ```
 
-`terraform.tfvars` needs `release_version`, `public_base_url`,
+`terraform.tfvars` needs `image_refs`, `public_base_url`,
 `admin_bootstrap_password`, `license_token` and `jumpbox_ssh_public_key`
 (`ssh-keygen -t ed25519`; RSA also works), and usually
 `operator_ip_allowlist` (your public IP, from
 `curl -s https://api.ipify.org`). See "Variables".
 
 This creates everything except the Container Apps: network, Key Vault and its
-secrets, Postgres, the redis app, storage and shares, registry, private
+secrets, Postgres, the redis app, storage and shares, private
 endpoints and the jumpbox. `operator_ip_allowlist` lets Terraform write
 Key Vault secrets and file shares from your machine; it is closed in step 6.
 
@@ -109,69 +131,24 @@ rerun. It creates the `margince` database and the `margince_owner` and
 `pg_trgm`, `btree_gist`) are already allow-listed by Terraform. Migrations run
 later, from the api's entrypoint, with the owner role.
 
-## 3. Build and push the images
+## 3. Select the Margince source release
 
-The AWS standard stack uses the same flow. The images are the ones
-`make release` (the `release.yml` workflow) or `make package` builds from
-core's `Dockerfile`, named `<REGISTRY>/<instance_name>/<role>:<VERSION>`
-(the instance repository's `docs/release.md`, Section 6). This stack deploys
-`<registry>/<instance_name>/<role>:<release_version>`
-(`terraform output image_refs`). Container Apps runs `linux/amd64` images
-only, the platform `release.yml` builds by default.
+The Margince source repository owns the Dockerfile, bake definition, release
+checks, multi-platform build and publication. Its release publishes api, web
+and worker together and records each image by digest. This Azure module neither
+rebuilds nor republishes them.
 
-1. Set the image registry. `REGISTRY` is this stack's ACR login server:
-
-   ```sh
-   terraform output -raw registry   # <acr_name>.azurecr.io
-   ```
-
-   For `release.yml`, set it as the repository variable `REGISTRY`. For a
-   manual push, export it in your shell. `instance_name` must equal `name`
-   in `instance.yaml`.
-
-2. Log in to the registry. The registry accepts pushes only from
-   `operator_ip_allowlist` and the VNet (the jumpbox). GitHub-hosted runners
-   are neither, so `release.yml` can push here only from a self-hosted runner
-   in the VNet or with the runner's address added to `operator_ip_allowlist`
-   for the release; the registry is never open to every source. `release.yml` logs in with the repository secrets
-   `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`: create a repository-scoped
-   token with push rights for them:
-
-   ```sh
-   ACR="$(terraform output -raw acr_name)"
-   az acr token create -r "$ACR" -n release --repository "<instance_name>/api" content/write content/read \
-     --repository "<instance_name>/web" content/write content/read \
-     --repository "<instance_name>/worker" content/write content/read
-   # use the token name as REGISTRY_USERNAME and one of its passwords as REGISTRY_PASSWORD
-   ```
-
-   For a manual push from an allowlisted machine or the jumpbox:
-
-   ```sh
-   az acr login -n "$(terraform output -raw acr_name)"
-   ```
-
-3. Build and push the release, one of:
-
-   ```sh
-   make release VERSION=v0.3.0                      # release.yml builds, tests and pushes
-   make package VERSION=v0.3.0 && for role in api web worker; do
-     docker push "$REGISTRY/<instance_name>/$role:v0.3.0"
-   done                                             # manual push
-   ```
-
-4. Lock the pushed tags, the counterpart of the AWS stack's `IMMUTABLE`
-   repositories, so a release is never overwritten:
-
-   ```sh
-   for role in api web worker; do
-     az acr repository update -n "$ACR" --image "<instance_name>/$role:v0.3.0" --write-enabled false
-   done
-   ```
-
-5. Set `release_version = "v0.3.0"` in `terraform.tfvars` and run
-   `terraform apply` (step 5 the first time). api and worker roll together;
-   the api startup probe allows five minutes for migrations.
+1. Select one published Margince source release. Container Apps requires its
+   `linux/amd64` image variant.
+2. Copy its three digest-pinned references into `image_refs` in
+   `terraform.tfvars`. Do not combine roles from different releases.
+3. If the source registry requires authentication, set
+   `source_registry_username` and `source_registry_password`. Terraform stores
+   the password in Key Vault. The api and worker identities may read only that
+   secret, and Container Apps uses it only for image pulls.
+4. Run `terraform apply -var deploy_apps=true` (step 5 the first time). The
+   Container Apps retain the supplied `@sha256:` references unchanged; api,
+   worker and web move together.
 
 ## 4. Upload `margince.yaml` (once)
 
@@ -227,9 +204,9 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 
 ## 7. Releases
 
-Follow Section 3 for each new version: `make release VERSION=<v>` (or
-`make package` and a manual push), lock the tags, set `release_version` and
-run `terraform apply` from the jumpbox or an allowlisted machine.
+Follow Section 3 for each new version: copy all three digest-pinned references
+from one Margince source release into `image_refs`, then run `terraform apply`
+from the jumpbox or an allowlisted machine.
 
 ## Sign-in
 
@@ -280,19 +257,21 @@ uses it.
 | Variable | Default | Purpose |
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the gateway serves |
-| `release_version` | required | Release to deploy (image tag) |
+| `image_refs` | required | Digest-pinned api, worker and web references from one Margince source release |
+| `source_registry_username`, `source_registry_password` | `""`, `""` | Optional source-registry pull credentials; password is stored in Key Vault |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `jumpbox_ssh_public_key` | required | SSH key for the jumpbox |
 | `deploy_apps` | `false` | Two-phase apply: `true` once prerequisites exist (step 5) |
-| `operator_ip_allowlist` | `[]` | Setup IPs through the Key Vault, Storage and registry firewalls |
+| `operator_ip_allowlist` | `[]` | Setup IPs through the Key Vault and Storage firewalls |
 | `key_vault_admin_principal_ids` | `[]` (the applying identity) | Key Vault Administrators |
 | `alert_email` | `""` | Alert receiver |
 | `include_bootstrap_admin` | `true` | `false` after the first admin login (step 6) |
-| `azure_region`, `name_prefix`, `instance_name` | `westeurope`, `margince`, `margince-default` | Placement and names (`name_prefix` is also the resource group) |
+| `azure_region`, `name_prefix` | `westeurope`, `margince` | Placement and names (`name_prefix` is also the resource group) |
 | `db_sku_name`, `db_zone_redundant_ha` | `B_Standard_B2s`, `false` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `3`, `6` | api scale bounds |
 | `waf_mode` | `count` | `count` then `block` |
+| `architecture` | `amd64` | `amd64` only: Azure Container Apps runs `linux/amd64` images. For arm64 on Azure, use the light stack with an Ampere VM |
 | `enable_resource_locks` | `true` | `false` and apply before `terraform destroy` |
 
 ## Dataverse (optional)
@@ -326,13 +305,12 @@ Rough list prices in West Europe, per month, before usage-based traffic:
 | Application Gateway WAF v2 (fixed charge, autoscale 1 to 10 units) | 250-350 |
 | Container Apps: api (3 replicas), worker, redis | 170-260 |
 | Postgres B_Standard_B2s, 64 GiB, backups | 65 |
-| Container Registry Premium | 45 |
 | NAT Gateway and IP | 35 |
-| Private endpoints (4) | 30 |
+| Private endpoints (3) | 22 |
 | Log Analytics, flow logs, traffic analytics | 30-50 |
 | Storage (ZRS), Backup, Key Vault | 25-35 |
-| Jumpbox (runs on demand), Bastion Developer (free) | 10-25 |
-| **Total** | **about 660-895** |
+| Jumpbox, Standard_B2ms (runs on demand, stops at 20:00), Bastion Developer (free) | 10-25 |
+| **Total** | **about 610-845** |
 
 Microsoft recommends General Purpose for production Postgres:
 `db_sku_name = "GP_Standard_D2ds_v5"` adds about EUR 75, and
@@ -342,7 +320,7 @@ Microsoft recommends General Purpose for production Postgres:
 
 - **Public surface**: the Application Gateway only (WAF v2). The api app's
   ingress is private, in the internal environment. `cmd/api` is reached on localhost; the worker, Redis (internal
-  TCP ingress), Postgres, Key Vault, storage and registry have no public
+  TCP ingress), Postgres, Key Vault and storage have no public
   endpoint once `operator_ip_allowlist` is empty.
 - **Sign-in**: password login is open from any address (see "Sign-in"); the
   client address comes from the rightmost `X-Forwarded-For` entry, which the
@@ -357,26 +335,28 @@ Microsoft recommends General Purpose for production Postgres:
   process uses. The api app's identities are also available to its edge
   container; keep the web image current.
 - **Encryption**: customer-managed key for Postgres and storage, always on
-  (verify in a test subscription that both reach the firewalled vault). The
-  registry, which holds only images, uses Microsoft-managed keys. Redis data
-  sits on the storage account's `redis` share, under the same key. TLS
+  (verify in a test subscription that both reach the firewalled vault).
+  Redis data sits on the storage account's `redis` share, under the same key. TLS
   everywhere except the password-protected Redis connection, which never
   leaves the environment.
 - **Postgres**: TLS 1.2 minimum, connection throttling after failed logins,
   Entra authentication alongside passwords. Add an Entra administrator in
   the portal (Authentication) if you want one.
 - **Logs**: nginx logs paths without query strings and redacts capability
-  tokens in public links. Key Vault, blob and file audit logs, NSG events,
-  registry logins and backup jobs go to Log Analytics; VNet flow logs go to
+  tokens in public links. Key Vault, blob and file audit logs, NSG events
+  and backup jobs go to Log Analytics; VNet flow logs go to
   the storage account for 90 days.
 - **Jumpbox**: Trusted Launch (secure boot, vTPM), encryption at host,
   platform-managed OS patching, boot diagnostics.
-- **Locks**: `CanNotDelete` locks on Postgres, storage, Key Vault, the
-  Recovery Services vault and the registry (`enable_resource_locks`). Set it
+- **Locks**: `CanNotDelete` locks on Postgres, storage, Key Vault and the
+  Recovery Services vault (`enable_resource_locks`). Set it
   to `false` and apply before `terraform destroy`.
-- **Images**: `make release` images, released tags locked read-only after
-  the push (Section 3), so `release_version` pins the deployed images. Limit
-  who can run commands on the jumpbox VM.
+- **Image source**: the Margince source repository builds, verifies and
+  publishes all three roles. This stack only consumes its digest-pinned
+  artifacts. Optional pull credentials stay in Key Vault and are readable
+  only by the api and worker identities.
+- **Images**: every Container App uses the supplied `@sha256:` reference;
+  tasks pull over the NAT gateway at revision start.
 - **Storage key**: Azure Files SMB mounts need the account key, which is in
   state and in the environment's storage configuration. Rotate it with the
   secondary key on a schedule.

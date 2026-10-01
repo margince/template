@@ -1,4 +1,4 @@
-# Keeps ECS→AWS-API traffic (ECR pulls, SSM parameter reads, KMS decrypts,
+# Keeps ECS→AWS-API traffic (SSM parameter reads, KMS decrypts,
 # CloudWatch Logs writes) inside the VPC instead of round-tripping through the
 # NAT gateway and the public internet path — the same traffic the ecs_tasks
 # security group's 0.0.0.0/0:443 egress rule (network.tf) would otherwise
@@ -17,11 +17,7 @@
 # credentials (a copy-pasted key, a supply-chain compromise), those
 # credentials could still authenticate to AWS — but this condition refuses
 # them at the endpoint before the call ever reaches the service, because
-# they're not THIS account's principal. This is deliberately NOT
-# s3:ResourceAccount-style resource restriction on the S3 endpoint — this
-# same Gateway endpoint carries ECR's own image-layer blob storage (comment
-# below), which lives in AWS-owned buckets outside this account entirely;
-# restricting by resource account would break every image pull.
+# they're not THIS account's principal.
 data "aws_iam_policy_document" "vpc_endpoint_same_account_only" {
   statement {
     effect  = "Allow"
@@ -39,26 +35,10 @@ data "aws_iam_policy_document" "vpc_endpoint_same_account_only" {
   }
 }
 
-# S3 is a Gateway endpoint (route-table based, no hourly cost, no ENI) — used
-# by the ECR interface endpoints below for the actual image-layer blob
-# storage backing ECR, which the interface endpoint alone does not cover.
-# ECR image layers are served from an AWS-owned bucket through presigned URLs
-# that ECR's own principal signs, so the same-account condition above does not
-# match them. This extra statement lets tasks download layers, read-only and
-# only from that bucket.
+# S3 is a Gateway endpoint (route-table based, no hourly cost, no ENI) —
+# the tasks' blobstore traffic stays inside the VPC with it.
 data "aws_iam_policy_document" "vpc_endpoint_s3" {
   source_policy_documents = [data.aws_iam_policy_document.vpc_endpoint_same_account_only.json]
-
-  statement {
-    sid     = "AllowEcrLayerDownloads"
-    effect  = "Allow"
-    actions = ["s3:GetObject"]
-    principals {
-      type        = "AWS"
-      identifiers = ["*"]
-    }
-    resources = ["arn:aws:s3:::prod-${var.aws_region}-starport-layer-bucket/*"]
-  }
 }
 
 resource "aws_vpc_endpoint" "s3" {
@@ -72,7 +52,7 @@ resource "aws_vpc_endpoint" "s3" {
 
 resource "aws_security_group" "vpc_endpoints" {
   name_prefix = "${var.name_prefix}-vpce-"
-  description = "Interface VPC endpoints (ECR, SSM, KMS, CloudWatch Logs); HTTPS ingress from ECS tasks (api/worker and web) and the bootstrap host only, no egress."
+  description = "Interface VPC endpoints (SSM, KMS, CloudWatch Logs); HTTPS ingress from ECS tasks (api/worker and web) and the bootstrap host only, no egress."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-vpce", Component = "network" }
 
@@ -84,9 +64,9 @@ resource "aws_security_group" "vpc_endpoints" {
     security_groups = [aws_security_group.ecs_tasks.id]
   }
 
-  # web tasks have their own SG (network.tf) and need ECR + Logs only.
+  # web tasks have their own SG (network.tf) and need the Logs endpoint only.
   ingress {
-    description     = "HTTPS from web tasks (ECR pulls, CloudWatch Logs)"
+    description     = "HTTPS from web tasks (CloudWatch Logs)"
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
@@ -117,8 +97,6 @@ locals {
   # identical resources — the five services need nothing different from each
   # other: same subnets, same security group, same private-DNS setting.
   interface_endpoint_services = toset([
-    "ecr.api",
-    "ecr.dkr",
     # ECS resolves task "secrets" through the SSM API (secrets.tf).
     "ssm",
     "kms",

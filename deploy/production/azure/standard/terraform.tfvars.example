@@ -5,8 +5,18 @@
 # MARGINCE_PUBLIC_BASE_URL: the canonical external scheme and host.
 public_base_url = "https://crm.example.com"
 
-# The release to deploy: the VERSION of `make release` (docs/release.md).
-release_version = "v0.3.0"
+# Copy the digest-pinned image references from one published Margince source
+# release. Keep all three on the same release; Terraform does not build images.
+image_refs = {
+  api    = "<source-registry>/margince/api:<version>@sha256:<digest>"
+  worker = "<source-registry>/margince/worker:<version>@sha256:<digest>"
+  web    = "<source-registry>/margince/web:<version>@sha256:<digest>"
+}
+
+# If the source registry requires authentication, set both. Terraform stores
+# the password in Key Vault and Container Apps references it from there.
+# source_registry_username = "<user>"
+# source_registry_password = "<token>"
 
 # Licence token issued for this installation.
 license_token = "<licence token>"
@@ -38,7 +48,6 @@ operator_ip_allowlist = ["203.0.113.20"]
 
 # azure_region            = "westeurope"
 # name_prefix             = "margince"          # also the resource group name
-# instance_name           = "margince-default"  # instance.yaml's name
 # db_sku_name             = "B_Standard_B2s"    # "GP_Standard_D2ds_v5": Microsoft's production recommendation
 # db_zone_redundant_ha    = false               # true needs a GP_ or MO_ SKU
 # api_min_replicas        = 3

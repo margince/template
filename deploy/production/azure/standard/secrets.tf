@@ -174,3 +174,13 @@ resource "azurerm_key_vault_secret" "metrics_token" {
 
   depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
 }
+
+resource "azurerm_key_vault_secret" "source_registry_password" {
+  count        = local.source_registry_credentials ? 1 : 0
+  name         = "margince-source-registry-password"
+  value        = var.source_registry_password
+  key_vault_id = azurerm_key_vault.this.id
+  tags         = merge(local.common_tags, { Name = "${var.name_prefix}-source-registry-password", Component = "secrets" })
+
+  depends_on = [azurerm_role_assignment.terraform_key_vault_administrator]
+}

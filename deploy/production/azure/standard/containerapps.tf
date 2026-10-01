@@ -134,14 +134,14 @@ locals {
   })
 }
 
-# Role assignments take up to a minute to reach Key Vault and the registry;
-# a revision created sooner fails its secret fetch or image pull.
+# Role assignments take up to a minute to reach Key Vault; a revision
+# created sooner fails its secret fetch.
 resource "time_sleep" "rbac_propagation" {
   depends_on = [
     azurerm_role_assignment.api_secret,
     azurerm_role_assignment.worker_secret,
-    azurerm_role_assignment.api_acr_pull,
-    azurerm_role_assignment.worker_acr_pull,
+    azurerm_role_assignment.api_source_registry_password,
+    azurerm_role_assignment.worker_source_registry_password,
     azurerm_role_assignment.redis_secret,
   ]
   create_duration = "60s"
@@ -163,9 +163,22 @@ resource "azurerm_container_app" "api" {
     ]
   }
 
-  registry {
-    server   = azurerm_container_registry.this.login_server
-    identity = azurerm_user_assigned_identity.api.id
+  dynamic "registry" {
+    for_each = local.source_registry_credentials ? [1] : []
+    content {
+      server               = local.source_registry_server
+      username             = var.source_registry_username
+      password_secret_name = "source-registry-password"
+    }
+  }
+
+  dynamic "secret" {
+    for_each = local.source_registry_credentials ? [1] : []
+    content {
+      name                = "source-registry-password"
+      key_vault_secret_id = azurerm_key_vault_secret.source_registry_password[0].id
+      identity            = azurerm_user_assigned_identity.api.id
+    }
   }
 
   dynamic "secret" {
@@ -315,16 +328,14 @@ resource "azurerm_container_app" "api" {
 
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-api", Component = "compute-api" })
 
-  # Everything a revision needs before it can pull its image and read its
-  # secrets over the private endpoints.
+  # Everything a revision needs before it can read its secrets over the
+  # private endpoints.
   depends_on = [
     time_sleep.rbac_propagation,
     azurerm_private_endpoint.key_vault,
-    azurerm_private_endpoint.acr,
     azurerm_private_endpoint.storage,
     azurerm_container_app.redis,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
-    azurerm_private_dns_zone_virtual_network_link.acr,
     azurerm_private_dns_zone_virtual_network_link.storage_file,
     azurerm_postgresql_flexible_server_configuration.azure_extensions,
   ]
@@ -346,9 +357,22 @@ resource "azurerm_container_app" "worker" {
     ]
   }
 
-  registry {
-    server   = azurerm_container_registry.this.login_server
-    identity = azurerm_user_assigned_identity.worker.id
+  dynamic "registry" {
+    for_each = local.source_registry_credentials ? [1] : []
+    content {
+      server               = local.source_registry_server
+      username             = var.source_registry_username
+      password_secret_name = "source-registry-password"
+    }
+  }
+
+  dynamic "secret" {
+    for_each = local.source_registry_credentials ? [1] : []
+    content {
+      name                = "source-registry-password"
+      key_vault_secret_id = azurerm_key_vault_secret.source_registry_password[0].id
+      identity            = azurerm_user_assigned_identity.worker.id
+    }
   }
 
   dynamic "secret" {
@@ -449,16 +473,14 @@ resource "azurerm_container_app" "worker" {
 
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-worker", Component = "compute-worker" })
 
-  # Everything a revision needs before it can pull its image and read its
-  # secrets over the private endpoints.
+  # Everything a revision needs before it can read its secrets over the
+  # private endpoints.
   depends_on = [
     time_sleep.rbac_propagation,
     azurerm_private_endpoint.key_vault,
-    azurerm_private_endpoint.acr,
     azurerm_private_endpoint.storage,
     azurerm_container_app.redis,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
-    azurerm_private_dns_zone_virtual_network_link.acr,
     azurerm_private_dns_zone_virtual_network_link.storage_file,
     azurerm_postgresql_flexible_server_configuration.azure_extensions,
   ]

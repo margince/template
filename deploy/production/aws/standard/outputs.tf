@@ -6,25 +6,8 @@ output "ecs_cluster_name" {
   value = aws_ecs_cluster.this.name
 }
 
-output "ecr_api_repository_url" {
-  value = aws_ecr_repository.api.repository_url
-}
-
-output "ecr_worker_repository_url" {
-  value = aws_ecr_repository.worker.repository_url
-}
-
-output "ecr_web_repository_url" {
-  value = aws_ecr_repository.web.repository_url
-}
-
-output "registry" {
-  description = "The REGISTRY value for `make release` and `make package` (docs/release.md, Section 5): this account's ECR registry host."
-  value       = split("/", aws_ecr_repository.api.repository_url)[0]
-}
-
 output "image_refs" {
-  description = "The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>."
+  description = "The digest-pinned Margince source-release images this stack deploys unchanged."
   value       = local.images
 }
 

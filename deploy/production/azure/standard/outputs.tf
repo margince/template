@@ -49,13 +49,8 @@ output "container_app_environment_name" {
   value = azurerm_container_app_environment.this.name
 }
 
-output "registry" {
-  description = "The REGISTRY value for `make release` and `make package` (docs/release.md, Section 5): this stack's registry login server."
-  value       = azurerm_container_registry.this.login_server
-}
-
 output "image_refs" {
-  description = "The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>. ACR creates the repositories on the first push."
+  description = "The digest-pinned Margince source-release images this stack deploys unchanged."
   value       = local.images
 }
 
@@ -82,10 +77,6 @@ output "log_analytics_workspace_id" {
 
 output "resource_group_name" {
   value = azurerm_resource_group.this.name
-}
-
-output "acr_name" {
-  value = azurerm_container_registry.this.name
 }
 
 output "jumpbox_name" {
