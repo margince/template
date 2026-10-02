@@ -1,5 +1,5 @@
 # One customer-managed key for everything this stack stores at rest: RDS,
-# ElastiCache, S3, EFS, SSM SecureString parameters, ECR, the SNS alert
+# ElastiCache, S3, EFS, SSM SecureString parameters, the SNS alert
 # topic and the WAF log group. A CMK over the AWS-managed
 # defaults buys two things a managed key cannot: a key-usage trail in
 # CloudTrail (who decrypted what, when) and the ability to disable or
@@ -72,7 +72,7 @@ data "aws_iam_policy_document" "kms_data" {
 }
 
 resource "aws_kms_key" "data" {
-  description             = "${var.name_prefix} CMK for RDS, ElastiCache, S3, EFS, SSM parameters, ECR, SNS alerts and WAF logs at rest"
+  description             = "${var.name_prefix} CMK for RDS, ElastiCache, S3, EFS, SSM parameters, SNS alerts and WAF logs at rest"
   enable_key_rotation     = true
   deletion_window_in_days = 30
   policy                  = data.aws_iam_policy_document.kms_data.json

@@ -18,12 +18,14 @@ cloud services differ.
 
 | | Light: proof of concept, small pilots | Standard: mid-size production |
 |---|---|---|
-| Deployment | Terraform creates the server; the `host` adapter deploys: `make release`, `make host-bootstrap`, `make deploy` | Terraform deploys the images `make release` pushed, set by `release_version` |
+| Images | The three role images of one instance release, `<REGISTRY>/<name>/<role>:<v>`, pulled by tag from a public registry | The same |
+| Ship a release | `make release VERSION=<v>`, then `make deploy ENV=<env> VERSION=<v>` through the `host` adapter | `make release VERSION=<v>`, then `make deploy ENV=<env> VERSION=<v>` through the `hook` adapter and the stack's `hooks/` (Terraform apply) |
+| First setup | Terraform creates the server; `make host-bootstrap` installs Docker | Terraform creates the services; the stack README's first steps set up the database and `margince.yaml` |
 | Application | Docker Compose on one Ubuntu 24.04 VM: Caddy with automatic HTTPS, then nginx | Managed containers: api (with the nginx edge), worker, web |
 | Postgres and Redis | Containers on the VM, data on a separate disk with daily snapshots | Managed Postgres 16; Redis 7.2 |
 | Entry and filtering | nginx rate-limits the credential endpoints per client address (`AUTH_RATE_LIMIT_PER_MINUTE`) | Managed WAF, `waf_mode` count then block, the same rules and variables |
-| Azure | VM, managed disk, Azure Backup, Key Vault | Application Gateway WAF v2, Container Apps, Postgres Flexible Server, Redis 7.2 container, ACR, Key Vault |
-| AWS | EC2 instance, EBS volume, DLM snapshots, SSM Parameter Store | ALB with AWS WAF, ECS Fargate, RDS Multi-AZ, ElastiCache Valkey 7.2, ECR, SSM Parameter Store |
+| Azure | VM, managed disk, Azure Backup, Key Vault | Application Gateway WAF v2, Container Apps, Postgres Flexible Server, Redis 7.2 container, Key Vault |
+| AWS | EC2 instance, EBS volume, DLM snapshots, SSM Parameter Store | ALB with AWS WAF, ECS Fargate, RDS Multi-AZ, ElastiCache Valkey 7.2, SSM Parameter Store |
 
 ## 3. Versions
 

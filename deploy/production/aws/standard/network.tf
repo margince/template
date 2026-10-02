@@ -124,10 +124,10 @@ resource "aws_eip" "nat" {
   tags   = { Name = "${var.name_prefix}-nat-${count.index}" }
 }
 
-# One NAT gateway per AZ: private-subnet tasks (ECS pulling images, RDS/Redis
-# reached only from here) need egress for the ECR/SSM API calls
-# ECS makes on their behalf, and a single shared NAT would make every AZ
-# depend on one that isn't its own.
+# One NAT gateway per AZ: private-subnet tasks (RDS/Redis reached only from
+# here) need egress for the image pull from the source registry and the
+# AWS API calls ECS makes on their behalf, and a single shared NAT would
+# make every AZ depend on one that isn't its own.
 resource "aws_nat_gateway" "this" {
   count         = var.az_count
   allocation_id = aws_eip.nat[count.index].id
@@ -290,7 +290,7 @@ resource "aws_security_group" "ecs_tasks" {
 
 # ---- web (nginx SPA) tasks ---------------------------------------------------
 # The web service serves static files and talks to nothing but AWS itself
-# (ECR for its image, CloudWatch Logs for its output), so it gets its own SG
+# (CloudWatch Logs for its output), so it gets its own SG
 # instead of sharing ecs_tasks' reach into RDS, ElastiCache, EFS and the
 # internet. Rules are standalone resources (not inline blocks) because the
 # ALB and VPC-endpoint SGs reference this one inline; inline rules on both
@@ -298,7 +298,7 @@ resource "aws_security_group" "ecs_tasks" {
 # allow-all egress rule when it creates the group.
 resource "aws_security_group" "web" {
   name_prefix = "${var.name_prefix}-web-"
-  description = "web (nginx SPA) tasks; ingress 8080 from the ALB only, egress 443 to the VPC interface endpoints and the S3 gateway endpoint only."
+  description = "web (nginx SPA) tasks; ingress 8080 from the ALB only, egress 443 to the VPC interface endpoints and the internet (image pull) only."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-web", Component = "network" }
 
@@ -315,12 +315,11 @@ resource "aws_vpc_security_group_ingress_rule" "web_from_alb" {
   tags                         = { Name = "${var.name_prefix}-web-from-alb", Component = "network" }
 }
 
-# ECR API/registry and CloudWatch Logs via the interface endpoints
-# (vpc-endpoints.tf). web reads no SSM parameters (execution_web, iam.tf);
-# the ECR repo's KMS decrypt is made by ECR itself, not by the task.
+# CloudWatch Logs via the interface endpoints (vpc-endpoints.tf). web reads
+# no SSM parameters (execution_web, iam.tf).
 resource "aws_vpc_security_group_egress_rule" "web_to_vpc_endpoints" {
   security_group_id            = aws_security_group.web.id
-  description                  = "HTTPS to the interface VPC endpoints (ECR, CloudWatch Logs)"
+  description                  = "HTTPS to the interface VPC endpoints (CloudWatch Logs)"
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
@@ -328,21 +327,21 @@ resource "aws_vpc_security_group_egress_rule" "web_to_vpc_endpoints" {
   tags                         = { Name = "${var.name_prefix}-web-to-vpce", Component = "network" }
 }
 
-# ECR image layers come from S3 through the gateway endpoint, which has no
-# ENI or SG; its managed prefix list is the only way to name it here.
-resource "aws_vpc_security_group_egress_rule" "web_to_s3" {
+# Fargate pulls the image through the task's own ENI from the source
+# registry — this is web's only internet egress.
+resource "aws_vpc_security_group_egress_rule" "web_to_internet" {
   security_group_id = aws_security_group.web.id
-  description       = "HTTPS to S3 via the gateway endpoint (ECR image layers)"
+  description       = "HTTPS to the internet (image pull from the source registry over NAT)"
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
-  prefix_list_id    = aws_vpc_endpoint.s3.prefix_list_id
-  tags              = { Name = "${var.name_prefix}-web-to-s3", Component = "network" }
+  cidr_ipv4         = "0.0.0.0/0"
+  tags              = { Name = "${var.name_prefix}-web-to-internet", Component = "network" }
 }
 
 resource "aws_security_group" "db" {
   name_prefix = "${var.name_prefix}-db-"
-  description = "RDS Postgres; ingress on 5432 from ECS tasks and the bootstrap host only, no egress (RDS never originates outbound traffic)."
+  description = "RDS Postgres; ingress on 5432 from ECS tasks and the setup task only, no egress (RDS never originates outbound traffic)."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-db", Component = "database" }
 
@@ -355,7 +354,7 @@ resource "aws_security_group" "db" {
   }
 
   ingress {
-    description     = "Postgres from the temporary bootstrap host (ops.tf)"
+    description     = "Postgres from the one-off setup task (setup.tf)"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
@@ -394,7 +393,7 @@ resource "aws_security_group" "redis" {
 
 resource "aws_security_group" "efs" {
   name_prefix = "${var.name_prefix}-efs-"
-  description = "EFS config volume mount targets; ingress on 2049 (NFS) from ECS tasks and the bootstrap host only, no egress."
+  description = "EFS config volume mount targets; ingress on 2049 (NFS) from ECS tasks and the setup task only, no egress."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-efs", Component = "storage" }
 
@@ -407,7 +406,7 @@ resource "aws_security_group" "efs" {
   }
 
   ingress {
-    description     = "NFS from the temporary bootstrap host (ops.tf)"
+    description     = "NFS from the one-off setup task (setup.tf)"
     from_port       = 2049
     to_port         = 2049
     protocol        = "tcp"

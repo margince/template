@@ -17,7 +17,8 @@ mock_provider "random" {}
 
 variables {
   public_base_url          = "https://crm.example.com"
-  release_version          = "v0.1.0"
+  image_repo               = "ghcr.io/acme/margince-default"
+  release_version          = "v1.4.0"
   admin_bootstrap_password = "test-only-password-not-real"
   acm_certificate_arn      = "arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
   license_token            = "test-licence"
@@ -49,7 +50,7 @@ run "fixes_hold" {
     condition = anytrue([
       for r in aws_security_group.db.ingress : contains(r.security_groups, aws_security_group.ops.id)
     ])
-    error_message = "The bootstrap host must be able to reach RDS."
+    error_message = "The setup task must be able to reach RDS."
   }
 }
 
@@ -278,10 +279,10 @@ run "naming_sg_split_and_cache_version" {
       aws_vpc_security_group_ingress_rule.web_from_alb.from_port == 8080 &&
       aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.referenced_security_group_id == aws_security_group.vpc_endpoints.id &&
       aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.from_port == 443 &&
-      aws_vpc_security_group_egress_rule.web_to_s3.from_port == 443 &&
+      aws_vpc_security_group_egress_rule.web_to_internet.cidr_ipv4 == "0.0.0.0/0" &&
       length(aws_security_group.web.ingress) == 0
     )
-    error_message = "web SG: 8080 from the ALB only; egress 443 to the endpoints SG and the S3 prefix list."
+    error_message = "web SG: 8080 from the ALB only; egress 443 to the endpoints SG and the internet (image pull)."
   }
 
   assert {
@@ -363,7 +364,7 @@ run "block_mode_and_alert_email" {
   }
 }
 
-run "images_follow_the_release_naming" {
+run "images_follow_the_instance_release" {
   command = plan
 
   override_resource {
@@ -372,55 +373,103 @@ run "images_follow_the_release_naming" {
     values          = { id = "sg-0ops0000000000000" }
   }
 
+  assert {
+    condition = local.images == {
+      api    = "ghcr.io/acme/margince-default/api:v1.4.0"
+      worker = "ghcr.io/acme/margince-default/worker:v1.4.0"
+      web    = "ghcr.io/acme/margince-default/web:v1.4.0"
+    } && output.images == local.images && output.release_version == "v1.4.0"
+    error_message = "AWS runs api, worker and web at one release, by tag: <image_repo>/<role>:<release_version>."
+  }
+
+  assert {
+    condition     = var.cpu_architecture == "X86_64" && aws_ecs_task_definition.api.runtime_platform[0].cpu_architecture == "X86_64"
+    error_message = "The default architecture is X86_64; the selected instance release must include linux/amd64."
+  }
+
+  assert {
+    condition     = output.image_platform == "linux/amd64"
+    error_message = "image_platform must name the linux/amd64 image for the default X86_64 architecture."
+  }
+}
+
+run "arm64_needs_the_arm64_image" {
+  command = plan
+  variables {
+    cpu_architecture = "ARM64"
+  }
+
   override_resource {
-    target          = aws_ecr_repository.api
+    target          = aws_security_group.ops
     override_during = plan
-    values = {
-      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/api"
-      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/api"
-    }
+    values          = { id = "sg-0ops0000000000000" }
   }
+
+  assert {
+    condition     = aws_ecs_task_definition.api.runtime_platform[0].cpu_architecture == "ARM64" && output.image_platform == "linux/arm64"
+    error_message = "ARM64 tasks need the linux/arm64 image, and image_platform must say so."
+  }
+}
+
+run "api_trusts_only_the_alb" {
+  command = plan
 
   override_resource {
-    target          = aws_ecr_repository.worker
+    target          = aws_security_group.ops
     override_during = plan
-    values = {
-      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/worker"
-      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/worker"
-    }
+    values          = { id = "sg-0ops0000000000000" }
   }
+
+  assert {
+    condition = (
+      one([for e in local.api_env : e.value if e.name == "MARGINCE_TRUSTED_PROXIES"]) == join(",", aws_subnet.public[*].cidr_block) &&
+      length([for e in local.shared_env : e if e.name == "MARGINCE_TRUSTED_PROXIES"]) == 0
+    )
+    error_message = "The api trusts X-Forwarded-For from the ALB's public subnets only, so core keys its per-IP limits on the client; the worker gets no proxy setting."
+  }
+}
+
+run "setup_task_replaces_the_bootstrap_host" {
+  command = plan
 
   override_resource {
-    target          = aws_ecr_repository.web
+    target          = aws_security_group.ops
     override_during = plan
-    values = {
-      arn            = "arn:aws:ecr:eu-central-1:123456789012:repository/margince-default/web"
-      repository_url = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/web"
-    }
+    values          = { id = "sg-0ops0000000000000" }
   }
 
   assert {
-    condition     = aws_ecr_repository.api.name == "margince-default/api" && aws_ecr_repository.worker.name == "margince-default/worker" && aws_ecr_repository.web.name == "margince-default/web"
-    error_message = "ECR repositories are named <instance_name>/<role>, as make release names the images."
+    condition = (
+      local.setup_containers[0].name == "prepare" && local.setup_containers[0].image == local.images.api &&
+      local.setup_containers[0].essential == false && local.setup_containers[0].mountPoints[0].readOnly == false &&
+      local.setup_containers[1].name == "database" && local.setup_containers[1].image == local.setup_postgres_image &&
+      local.setup_containers[1].dependsOn == [{ containerName = "prepare", condition = "SUCCESS" }] &&
+      local.setup_containers[1].mountPoints[0].readOnly == true
+    )
+    error_message = "prepare (the api image) writes the config volume first; database (the pinned Postgres image) reads it and runs only after prepare succeeded."
   }
 
   assert {
-    condition = alltrue([
-      for r in [aws_ecr_repository.api, aws_ecr_repository.worker, aws_ecr_repository.web] : r.image_tag_mutability == "IMMUTABLE"
-    ])
-    error_message = "Released tags are immutable."
+    condition = (
+      one([for e in local.setup_containers[0].environment : e.value if e.name == "MARGINCE_CONFIG_B64"]) == filebase64("${path.module}/../../config/margince.yaml") &&
+      one([for e in local.setup_containers[1].environment : e.value if e.name == "BOOTSTRAP_SQL_B64"]) == filebase64("${path.module}/../../../../core/scripts/deploy/db-bootstrap.sql")
+    )
+    error_message = "The setup task writes the instance's deploy/production/config/margince.yaml and runs core's db-bootstrap.sql."
   }
 
   assert {
-    condition = alltrue([
-      for role, ref in local.images : ref == "123456789012.dkr.ecr.eu-central-1.amazonaws.com/margince-default/${role}:v0.1.0"
-    ]) && length(local.images) == 3
-    error_message = "Images are <registry>/<instance_name>/<role>:<release_version>."
+    condition = (
+      one([for e in local.setup_containers[1].environment : e.value if e.name == "BOOTSTRAP_SCRIPT_B64"]) == filebase64("${path.module}/scripts/bootstrap-db.sh") &&
+      file("${path.module}/scripts/bootstrap-db.sh") == file("${path.module}/../../azure/standard/scripts/bootstrap-db.sh") &&
+      one([for e in local.setup_containers[1].environment : e.value if e.name == "BOOTSTRAP_PG_ADMIN_USER"]) == "dbadmin" &&
+      !can(regex("(?m)^\\s*db_name\\s*=", file("${path.module}/rds.tf")))
+    )
+    error_message = "RDS bootstraps through the same scripts/bootstrap-db.sh as Azure, as dbadmin, and creates no database itself (the script creates margince owned by margince_owner)."
   }
 
   assert {
-    condition     = var.cpu_architecture == "X86_64"
-    error_message = "The default architecture matches the linux/amd64 images make release builds by default."
+    condition     = toset(keys(local.setup_ssm_parameters)) == toset(["MARGINCE_OWNER_DSN", "MARGINCE_DSN", "RDS_MASTER_PASSWORD"])
+    error_message = "The setup task reads the two DSNs and the RDS master password, nothing else."
   }
 }
 
@@ -430,6 +479,29 @@ run "release_version_must_be_a_release" {
     release_version = "latest"
   }
   expect_failures = [var.release_version]
+}
+
+run "image_repo_must_name_a_registry" {
+  command = plan
+  variables {
+    image_repo = "margince-default/api:v1.4.0"
+  }
+  expect_failures = [var.image_repo]
+}
+
+run "images_are_pulled_anonymously" {
+  command = plan
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
+  }
+
+  assert {
+    condition     = !strcontains(file("${path.module}/ecs.tf"), "repositoryCredentials") && !strcontains(file("${path.module}/iam.tf"), "secretsmanager:")
+    error_message = "The registry is public: no task definition may carry pull credentials, and no role may read Secrets Manager."
+  }
 }
 
 run "missing_licence_is_refused" {
@@ -457,7 +529,7 @@ run "security_group_and_iam_descriptions_are_ascii" {
     condition = alltrue([
       for d in concat(
         [for sg in [aws_security_group.alb, aws_security_group.ecs_tasks, aws_security_group.web, aws_security_group.db, aws_security_group.redis, aws_security_group.efs, aws_security_group.ops, aws_security_group.vpc_endpoints] : sg.description],
-        [aws_vpc_security_group_ingress_rule.web_from_alb.description, aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.description, aws_vpc_security_group_egress_rule.web_to_s3.description],
+        [aws_vpc_security_group_ingress_rule.web_from_alb.description, aws_vpc_security_group_egress_rule.web_to_vpc_endpoints.description, aws_vpc_security_group_egress_rule.web_to_internet.description],
       ) : can(regex("^[a-zA-Z0-9. _:/()#,@\\[\\]+=&;{}!$*-]*$", d))
     ])
     error_message = "A security group or rule description uses a character EC2 refuses."
@@ -465,7 +537,7 @@ run "security_group_and_iam_descriptions_are_ascii" {
 
   assert {
     condition = alltrue([
-      for d in [aws_iam_role.execution.description, aws_iam_role.execution_web.description, aws_iam_role.task_api.description, aws_iam_role.task_worker.description, aws_iam_role.task_web.description, aws_iam_role.vpc_flow_logs.description, aws_iam_role.ops.description] :
+      for d in [aws_iam_role.execution.description, aws_iam_role.execution_web.description, aws_iam_role.task_api.description, aws_iam_role.task_worker.description, aws_iam_role.task_web.description, aws_iam_role.vpc_flow_logs.description, aws_iam_role.setup_execution.description, aws_iam_role.setup_task.description] :
       can(regex("^[ -~]*$", d))
     ])
     error_message = "An IAM role description uses a non-ASCII character."

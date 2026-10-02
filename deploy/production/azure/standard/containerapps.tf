@@ -104,11 +104,13 @@ locals {
     # The edge in the same replica serves the MCP App views; no hairpin
     # through the public internet.
     { name = "MARGINCE_MCP_APPS_BASE_URL", value = "http://127.0.0.1:${local.edge_port}" },
-    # No trusted-proxy setting: core keys its per-address limits on the direct
-    # peer and reads no forwarded header, so behind the edge they see
-    # 127.0.0.1 and act as one shared cap. The per-client limits that hold
-    # are the edge's limit_req on the sign-in paths and the gateway's WAF
-    # rate rules (appgw.tf).
+    # The edge in the same replica is the api's only proxy: it resolves the
+    # client from the gateway and the environment (real_ip) and passes it in
+    # X-Forwarded-For. Trusting 127.0.0.1 makes core key every per-IP limit
+    # (sign-in, password reset, OIDC, /oauth/token, MCP, public pages) on
+    # that client; unset, every client shares the edge's one bucket
+    # (core docs/reference/configuration.md, MARGINCE_TRUSTED_PROXIES).
+    { name = "MARGINCE_TRUSTED_PROXIES", value = "127.0.0.1/32" },
   ])
 
   worker_env = concat(local.common_env, [
@@ -134,14 +136,12 @@ locals {
   })
 }
 
-# Role assignments take up to a minute to reach Key Vault and the registry;
-# a revision created sooner fails its secret fetch or image pull.
+# Role assignments take up to a minute to reach Key Vault; a revision
+# created sooner fails its secret fetch.
 resource "time_sleep" "rbac_propagation" {
   depends_on = [
     azurerm_role_assignment.api_secret,
     azurerm_role_assignment.worker_secret,
-    azurerm_role_assignment.api_acr_pull,
-    azurerm_role_assignment.worker_acr_pull,
     azurerm_role_assignment.redis_secret,
   ]
   create_duration = "60s"
@@ -161,11 +161,6 @@ resource "azurerm_container_app" "api" {
       azurerm_user_assigned_identity.api.id,
       azurerm_user_assigned_identity.dataverse.id,
     ]
-  }
-
-  registry {
-    server   = azurerm_container_registry.this.login_server
-    identity = azurerm_user_assigned_identity.api.id
   }
 
   dynamic "secret" {
@@ -315,18 +310,18 @@ resource "azurerm_container_app" "api" {
 
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-api", Component = "compute-api" })
 
-  # Everything a revision needs before it can pull its image and read its
-  # secrets over the private endpoints.
+  # Everything a revision needs before it can read its secrets over the
+  # private endpoints.
   depends_on = [
     time_sleep.rbac_propagation,
     azurerm_private_endpoint.key_vault,
-    azurerm_private_endpoint.acr,
     azurerm_private_endpoint.storage,
     azurerm_container_app.redis,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
-    azurerm_private_dns_zone_virtual_network_link.acr,
     azurerm_private_dns_zone_virtual_network_link.storage_file,
     azurerm_postgresql_flexible_server_configuration.azure_extensions,
+    # The database exists and margince.yaml is in place (setup.tf).
+    terraform_data.setup,
   ]
 }
 
@@ -344,11 +339,6 @@ resource "azurerm_container_app" "worker" {
       azurerm_user_assigned_identity.worker.id,
       azurerm_user_assigned_identity.dataverse.id,
     ]
-  }
-
-  registry {
-    server   = azurerm_container_registry.this.login_server
-    identity = azurerm_user_assigned_identity.worker.id
   }
 
   dynamic "secret" {
@@ -449,17 +439,17 @@ resource "azurerm_container_app" "worker" {
 
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-worker", Component = "compute-worker" })
 
-  # Everything a revision needs before it can pull its image and read its
-  # secrets over the private endpoints.
+  # Everything a revision needs before it can read its secrets over the
+  # private endpoints.
   depends_on = [
     time_sleep.rbac_propagation,
     azurerm_private_endpoint.key_vault,
-    azurerm_private_endpoint.acr,
     azurerm_private_endpoint.storage,
     azurerm_container_app.redis,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
-    azurerm_private_dns_zone_virtual_network_link.acr,
     azurerm_private_dns_zone_virtual_network_link.storage_file,
     azurerm_postgresql_flexible_server_configuration.azure_extensions,
+    # The database exists and margince.yaml is in place (setup.tf).
+    terraform_data.setup,
   ]
 }

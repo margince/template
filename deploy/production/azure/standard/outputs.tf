@@ -49,14 +49,18 @@ output "container_app_environment_name" {
   value = azurerm_container_app_environment.this.name
 }
 
-output "registry" {
-  description = "The REGISTRY value for `make release` and `make package` (docs/release.md, Section 5): this stack's registry login server."
-  value       = azurerm_container_registry.this.login_server
+output "images" {
+  description = "The api, worker and web images this stack runs: <image_repo>/<role>:<release_version>."
+  value       = local.images
 }
 
-output "image_refs" {
-  description = "The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>. ACR creates the repositories on the first push."
-  value       = local.images
+output "release_version" {
+  description = "The release this stack runs; make deploy's rollback goes back to it."
+  value       = var.release_version
+}
+
+output "public_base_url" {
+  value = var.public_base_url
 }
 
 output "postgres_fqdn" {
@@ -82,10 +86,6 @@ output "log_analytics_workspace_id" {
 
 output "resource_group_name" {
   value = azurerm_resource_group.this.name
-}
-
-output "acr_name" {
-  value = azurerm_container_registry.this.name
 }
 
 output "jumpbox_name" {

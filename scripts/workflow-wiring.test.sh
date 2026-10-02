@@ -417,11 +417,11 @@ if [ -e "$RELEASE_WF" ]; then
       started { if ($0 ~ /[^[:space:]]/) { match($0, /^[ ]*/); if (RLENGTH <= ind) exit } print }')"
     if printf '%s\n' "$upload" | grep -qE 'actions/upload-artifact@[0-9a-f]{40}' \
        && printf '%s\n' "$upload" | grep -qF 'name: margince-images-${{ needs.version.outputs.version }}' \
-       && printf '%s\n' "$upload" | grep -qF 'image-list/images.txt' \
+       && printf '%s\n' "$upload" | grep -qE 'path:.*image-list/?$' \
        && printf '%s\n' "$upload" | grep -qE 'if-no-files-found:[[:space:]]*error'; then
-      ok "images uploads image-list/images.txt as margince-images-<version> (pinned, if-no-files-found: error)"
+      ok "images uploads image-list/ (images.txt, and mirror.txt when mirrored) as margince-images-<version> (pinned, if-no-files-found: error)"
     else
-      fail "images does not upload image-list/images.txt with a SHA-pinned upload-artifact, name margince-images-\${{ needs.version.outputs.version }}, if-no-files-found: error"
+      fail "images does not upload image-list/ with a SHA-pinned upload-artifact, name margince-images-\${{ needs.version.outputs.version }}, if-no-files-found: error"
     fi
     if printf '%s\n' "$images_job" | grep -B6 'GITHUB_STEP_SUMMARY' | grep -qF 'image-list/images.txt'; then
       ok "images writes the image list to the job summary"
@@ -444,6 +444,29 @@ if [ -e "$RELEASE_WF" ]; then
       ok "without REGISTRY, images writes the not-pushed note to image-list/images.txt"
     else
       fail "no step under if: vars.REGISTRY == '' writes 'images were not pushed: REGISTRY is not set' to image-list/images.txt"
+    fi
+
+    # The public mirror (docs/release.md, Section 5): only with both REGISTRY
+    # and MIRROR_REGISTRY, copied with imagetools (every platform, the same
+    # digests), logged out on every exit, listed in image-list/mirror.txt.
+    mirror_step="$(printf '%s\n' "$images_job" | awk '
+      /^[[:space:]]*- / { if (buf ~ /name: Mirror the images/) print buf; buf = "" }
+      { buf = buf $0 "\n" }
+      END { if (buf ~ /name: Mirror the images/) print buf }')"
+    if printf '%s\n' "$mirror_step" | grep -qF "if: vars.REGISTRY != '' && vars.MIRROR_REGISTRY != ''" \
+       && printf '%s\n' "$mirror_step" | grep -qF 'docker buildx imagetools create --tag' \
+       && printf '%s\n' "$mirror_step" | grep -qF 'secrets.MIRROR_REGISTRY_PASSWORD' \
+       && printf '%s\n' "$mirror_step" | grep -qF -- '--password-stdin' \
+       && printf '%s\n' "$mirror_step" | grep -qF 'image-list/mirror.txt' \
+       && [ "$(printf '%s\n' "$mirror_step" | grep -n 'trap ' | head -1 | cut -d: -f1)" -lt "$(printf '%s\n' "$mirror_step" | grep -n 'docker login' | head -1 | cut -d: -f1)" ]; then
+      ok "the mirror step copies the pushed images to MIRROR_REGISTRY with imagetools, logs out on every exit, and lists them in mirror.txt"
+    else
+      fail "the mirror step is missing, unguarded, not imagetools-based, logs in before its trap, or writes no mirror.txt"
+    fi
+    if printf '%s\n' "$images_job" | grep -qE '^[[:space:]]+packages:[[:space:]]*write'; then
+      ok "images may push to GitHub Container Registry with the workflow token (packages: write)"
+    else
+      fail "images lacks packages: write for GitHub Container Registry"
     fi
 
     # The all-in-one image (docs/superpowers/specs/2026-09-30-all-in-one-image-design.md,
