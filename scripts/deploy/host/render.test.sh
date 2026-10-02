@@ -348,6 +348,25 @@ else
   fail "the vault key decodes to 32 bytes"
 fi
 if [ ! -s "$TMP/out" ]; then ok "gen-env.sh prints nothing"; else fail "gen-env.sh prints nothing: $(sed 's/=.*//' "$TMP/out")"; fi
+
+# With SIGPIPE ignored (some CI runners), a stage that writes to a closed pipe
+# gets a write error instead of a quiet death: tr reported one on Linux and
+# never ended on macOS. A watchdog keeps a hang from stalling this test.
+kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done; kill "$1" 2>/dev/null || true; }
+( trap '' PIPE; exec sh "$GEN" instance "$G/nopipe.env" ) > "$TMP/out" 2>&1 &
+pid=$!; i=0
+while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$pid" 2>/dev/null; then
+  kill_tree "$pid"; wait "$pid" 2>/dev/null || true
+  fail "gen-env.sh with SIGPIPE ignored ends within 10 seconds"
+else
+  rc=0; wait "$pid" || rc=$?
+  if [ "$rc" = 0 ] && [ ! -s "$TMP/out" ] && grep -Eq '^MARGINCE_ADMIN_PASSWORD=[A-Za-z0-9]{24}$' "$G/nopipe.env"; then
+    ok "gen-env.sh with SIGPIPE ignored prints nothing and writes a 24-character admin password"
+  else
+    fail "gen-env.sh with SIGPIPE ignored prints nothing and writes a 24-character admin password (rc=$rc): $(sed 's/=.*//' "$TMP/out")"
+  fi
+fi
 sum="$(cksum < "$G/instance.env" 2>/dev/null || true)"
 rc="$(gen instance "$G/instance.env")"
 if [ "$rc" = 0 ] && [ -n "$sum" ] && [ "$(cksum < "$G/instance.env")" = "$sum" ]; then ok "gen-env.sh keeps an existing instance.env byte for byte"; else fail "gen-env.sh keeps an existing instance.env (rc=$rc)"; fi
@@ -370,7 +389,7 @@ else
 fi
 # Without openssl: dd and base64.
 mkdir -p "$TMP/noossl"
-for t in od tr head dd base64 chmod rm ln wc; do ln -s "$(command -v "$t")" "$TMP/noossl/$t"; done
+for t in od tr cut dd base64 chmod rm ln wc; do ln -s "$(command -v "$t")" "$TMP/noossl/$t"; done
 rc=0; PATH="$TMP/noossl" "$(command -v sh)" "$GEN" instance "$G/noossl.env" > "$TMP/out" 2>&1 || rc=$?
 if [ "$rc" = 0 ] && grep -Eq '^MARGINCE_KEYVAULT_ROOT_KEY=[A-Za-z0-9+/]{43}=$' "$G/noossl.env" && grep -Eq '^MARGINCE_WEBHOOK_KEY=[A-Za-z0-9+/]{43}=$' "$G/noossl.env"; then
   ok "gen-env.sh writes the base64 keys without openssl"

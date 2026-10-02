@@ -93,7 +93,7 @@ trial() {
 }
 
 ran_desktop() { [ -f "$1/desktop.log" ]; }
-file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || true; }
+file_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || true; }
 
 # --- no license: fails before the build ---
 inst="$(fresh_instance)"

@@ -16,9 +16,9 @@ instance. Contributors to the template itself also read [AGENTS.md](AGENTS.md).
 | Tool | Version | Needed for | Checked by |
 |---|---|---|---|
 | git | any | everything | `make preflight` |
-| Go | the `go` line of `core/backend/go.mod` (1.26.6 at core `v0.0.2`) | the backend, the gates, `scripts/cli` | `make preflight` (installed only) |
+| Go | the `go` line of `core/backend/go.mod` (1.27.1 at core `v0.0.3`) | the backend, the gates, `scripts/cli` | `make preflight` (installed only) |
 | Node.js | 24, the version CI uses | the frontend lanes | `make preflight` (installed only) |
-| pnpm | the major version of `packageManager` in `core/package.json` (11) | the frontend lanes | `make toolcheck` (major version) |
+| pnpm | the major version of `packageManager` in `core/package.json` (12) | the frontend lanes | `make toolcheck` (major version) |
 | Docker, with a running daemon and `docker buildx` | current | the database, `make package`, `make smoke`, `make local-up` | `make preflight`; `make package` checks buildx |
 | GitHub CLI (`gh`) | any | `make new-instance PUSH=1`, `make core-pr` | optional |
 | fswatch | any | `make watch` | optional |
