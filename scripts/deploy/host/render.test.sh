@@ -575,6 +575,14 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   dc -f "$OUT/compose.yaml" --env-file "$OUT/compose.env" config --format json > "$TMP/config.json" 2>/dev/null || true
   if grep -q '"replicas": 3' "$TMP/config.json"; then ok "WORKER_REPLICAS reaches deploy.replicas"; else fail "WORKER_REPLICAS reaches deploy.replicas"; fi
   if grep -q '"image": "registry.example.test/acme/api:v1.0.0"' "$TMP/config.json"; then ok "IMAGE_API names the api image"; else fail "IMAGE_API names the api image"; fi
+  # Core keys its per-IP limits on X-Forwarded-For only from the proxies named
+  # here; the api's only proxy is nginx on the compose network.
+  if sed -n '/^    "api": {/,/^    }/p' "$TMP/config.json" | grep -qF '"MARGINCE_TRUSTED_PROXIES": "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"' \
+      && ! sed -n '/^    "worker": {/,/^    }/p' "$TMP/config.json" | grep -q MARGINCE_TRUSTED_PROXIES; then
+    ok "the api trusts X-Forwarded-For from the compose network only; the worker gets no proxy setting"
+  else
+    fail "the api trusts X-Forwarded-For from the compose network only"
+  fi
   if grep -qF 'fedcba9876543210fedcba9876543210' "$TMP/config.json"; then ok "the app reaches the local database with data.env's password"; else fail "the app reaches the local database with data.env's password"; fi
   # The config output is itself a compose file, so it doubles each $ and
   # JSON-escapes each ".

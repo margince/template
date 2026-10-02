@@ -114,6 +114,13 @@ services:
     environment:
       MARGINCE_CONFIG: /app/config/margince.yaml
       POSTGRES_PASSWORD: ""
+      # nginx is the api's only proxy: it passes the client caddy saw in
+      # X-Forwarded-For. These are the private ranges Docker gives the
+      # compose network, the same ones nginx trusts from caddy; the api
+      # publishes no port, so only the network's own containers reach it.
+      # Core then keys every per-IP limit on the client; unset, every client
+      # shares nginx's one bucket (core docs/reference/configuration.md).
+      MARGINCE_TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
     healthcheck:
       # /readyz: 200 once Postgres and Redis answer and the schema is current.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]

@@ -317,6 +317,18 @@ run "waf_block_mode" {
   }
 }
 
+run "api_trusts_only_the_edge" {
+  command = plan
+
+  assert {
+    condition = (
+      one([for e in local.api_env : e.value if e.name == "MARGINCE_TRUSTED_PROXIES"]) == "127.0.0.1/32" &&
+      length([for e in local.worker_env : e if e.name == "MARGINCE_TRUSTED_PROXIES"]) == 0
+    )
+    error_message = "The api trusts X-Forwarded-For from the edge in its replica (127.0.0.1) only, so core keys its per-IP limits on the client."
+  }
+}
+
 run "release_version_must_be_a_release" {
   command = plan
   variables {

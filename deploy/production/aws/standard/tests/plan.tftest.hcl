@@ -411,6 +411,24 @@ run "arm64_needs_the_arm64_image" {
   }
 }
 
+run "api_trusts_only_the_alb" {
+  command = plan
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
+  }
+
+  assert {
+    condition = (
+      one([for e in local.api_env : e.value if e.name == "MARGINCE_TRUSTED_PROXIES"]) == join(",", aws_subnet.public[*].cidr_block) &&
+      length([for e in local.shared_env : e if e.name == "MARGINCE_TRUSTED_PROXIES"]) == 0
+    )
+    error_message = "The api trusts X-Forwarded-For from the ALB's public subnets only, so core keys its per-IP limits on the client; the worker gets no proxy setting."
+  }
+}
+
 run "release_version_must_be_a_release" {
   command = plan
   variables {

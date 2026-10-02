@@ -415,10 +415,12 @@ Caddy terminates HTTPS and passes every request to `nginx`, except
 `https://<HOST_DOMAIN>` unless `secrets` lists it.
 
 Core keys its own per-address limits (login, password reset, Microsoft
-sign-in) on the direct TCP peer and never reads `X-Forwarded-For`. Behind a
-proxy every client has the proxy's address, so those limits act as one bucket
-shared by all users. nginx therefore limits the credential endpoints per
-client address itself: `/v1/auth/login`, `/v1/auth/forgot-password`,
+sign-in) on `X-Forwarded-For` only from the proxies in
+`MARGINCE_TRUSTED_PROXIES`; unset, they key on the direct peer, and behind a
+proxy every client would share one bucket. The host adapter's `compose.yaml`
+sets it on the api to the private ranges of the compose network, so the
+limits key on the client address nginx passes on. nginx also limits the
+credential endpoints per client address itself: `/v1/auth/login`, `/v1/auth/forgot-password`,
 `/v1/auth/reset-password`, `/oauth/token`, and `/oauth/register`, at
 `AUTH_RATE_LIMIT_PER_MINUTE` requests per minute with a burst of the same
 size, answering 429 above it. These are the same paths the standard stacks'

@@ -357,13 +357,12 @@ Microsoft recommends General Purpose for production Postgres:
   endpoint once `operator_ip_allowlist` is empty.
 - **Sign-in**: password login is open from any address (see "Sign-in"); the
   client address comes from the rightmost `X-Forwarded-For` entry, which the
-  gateway and Container Apps append, so clients cannot spoof it. Core keys its
-  own per-address limits (login, password reset, single sign-on) on the
-  direct peer and reads no forwarded header; behind the edge every request
-  comes from `127.0.0.1`, so those limits act as one cap shared by all users.
-  The per-client limits are the edge's `limit_req` on the sign-in paths and
-  the gateway's WAF rate rules. The edge passes the client address as
-  `X-Real-IP` for the api's logs only.
+  gateway and Container Apps append, so clients cannot spoof it. The edge
+  passes that address to the api in `X-Forwarded-For`, and the api trusts it
+  from the edge only (`MARGINCE_TRUSTED_PROXIES=127.0.0.1/32`), so core's own
+  per-address limits (login, password reset, single sign-on) key on the
+  client. The edge's `limit_req` on the sign-in paths and the gateway's WAF
+  rate rules limit per client in front of it.
 - **Secrets**: each app identity may read only the Key Vault secrets its
   process uses. The api app's identities are also available to its edge
   container; keep the web image current.

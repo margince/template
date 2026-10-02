@@ -63,6 +63,15 @@ locals {
     { name = "MARGINCE_LOG_FORMAT", value = "json" },
   ]
 
+  # The ALB, in the public subnets, is the api's only proxy and appends the
+  # client to X-Forwarded-For. Trusting its subnets makes core key every
+  # per-IP limit (sign-in, password reset, OIDC, /oauth/token, MCP, public
+  # pages) on that client; unset, every client shares the ALB's buckets
+  # (core docs/reference/configuration.md, MARGINCE_TRUSTED_PROXIES).
+  api_env = concat(local.shared_env, [
+    { name = "MARGINCE_TRUSTED_PROXIES", value = join(",", aws_subnet.public[*].cidr_block) },
+  ])
+
   config_volume_name = "margince-config"
 }
 
@@ -112,7 +121,7 @@ resource "aws_ecs_task_definition" "api" {
       # worth more than the default to let in-flight requests actually drain
       # rather than being cut off mid-response.
       stopTimeout = 60
-      environment = local.shared_env
+      environment = local.api_env
       secrets     = local.shared_secrets
       mountPoints = [{
         sourceVolume  = local.config_volume_name
