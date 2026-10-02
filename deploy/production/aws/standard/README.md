@@ -14,7 +14,7 @@ on ECS Fargate.
 | Data | RDS PostgreSQL 16 (Multi-AZ, gp3 with storage autoscaling, 7-day backups, deletion protection, Performance Insights), ElastiCache Valkey 7.2 (two nodes, automatic failover, TLS required, AUTH token), S3 attachment bucket (versioned, SSE-KMS enforced), EFS for `margince.yaml` |
 | Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
 | Secrets | SSM Parameter Store SecureStrings under `/<name_prefix>/`, one customer-managed KMS key (rotation on) for everything stored at rest |
-| Delivery | The api, web and worker images of one instance release, pulled by release tag pulled over the NAT gateways; a bootstrap host security group and instance profile |
+| Delivery | The api, web and worker images of one instance release, pulled by release tag over the NAT gateways; a one-off setup task (`setup.tf`) for `margince.yaml` and the database bootstrap |
 | Protection | CloudWatch alarms to a CMK-encrypted SNS topic, `prevent_destroy` on the stateful resources, EFS backup, CloudWatch log groups (30 days) |
 
 ```mermaid
@@ -30,7 +30,7 @@ flowchart LR
     efs[("EFS<br/>margince.yaml")]
     ssm["SSM Parameter Store<br/>secrets, KMS"]
     nat["NAT gateways"]
-    ops["Bootstrap host<br/>SSM, temporary"]
+    ops["Setup task<br/>one-off, per apply"]
   end
   alb -->|"/"| web
   alb -->|"/v1, /oauth, /mcp, /webhooks"| api
@@ -47,6 +47,7 @@ flowchart LR
   nat --> ext(["Graph, LLM, SMTP"])
   nat -.->|"pull by release tag"| reg(["Instance release images<br/>api, web, worker"])
   ops -.->|"bootstrap"| pg
+  ops -.->|"margince.yaml"| efs
   alarms["CloudWatch alarms, SNS"] -.-> mail(["alert_email"])
 ```
 
@@ -57,89 +58,30 @@ flowchart LR
   KMS, IAM, WAF, ALB, SSM and CloudWatch resources in the target account.
 - **TLS certificate**: an ACM certificate in `aws_region` for the host in
   `public_base_url`, validated in your DNS zone.
-- **Tools**: Terraform 1.10 or newer, AWS CLI with the Session Manager
-  plugin, `jq`, `psql`.
+- **Tools**: Terraform 1.10 or newer, AWS CLI (the apply runs the one-off
+  setup task with it), `jq`.
 - **Margince**: a licence token and one release of this instance, pushed to a
   public registry
-  ([release.md](../../../../docs/release.md)). The bootstrap SQL and
-  `margince.example.yaml` come from the pinned `core/` submodule.
+  ([release.md](../../../../docs/release.md)). The bootstrap SQL comes from
+  the pinned `core/` submodule.
 - **Remote state**: state holds every generated password. Create a protected
   state bucket first (`backend.hcl.example`) and never keep state on a laptop.
 
-## 1. Provision (services off)
+## 1. Write `margince.yaml`
+
+The stack reads the instance's `deploy/production/config/margince.yaml`, the
+same file the light stacks use. Copy core's example once and edit it:
 
 ```bash
-cd deploy/production/aws/standard
-cp backend.hcl.example backend.hcl            # fill in
-cp terraform.tfvars.example terraform.tfvars  # fill in
-terraform init -backend-config=backend.hcl
-
-# Everything the database bootstrap needs, but not the
-# ECS services: they would start pointed at a tag the registry does not have yet.
-terraform apply \
-  -target=aws_db_instance.this -target=aws_elasticache_replication_group.this \
-  -target=aws_s3_bucket.blobstore -target=aws_efs_file_system.config \
-  -target=aws_efs_mount_target.config -target=aws_efs_access_point.config \
-  -target=aws_ssm_parameter.owner_dsn -target=aws_ssm_parameter.app_dsn -target=aws_ssm_parameter.rds_master_password \
-  -target=aws_security_group.ops -target=aws_iam_instance_profile.ops \
-  -target=aws_iam_role_policy.ops_efs -target=aws_iam_role_policy_attachment.ops_ssm
+cp core/config/margince.example.yaml deploy/production/config/margince.yaml
+# edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
+# seeds.ai_routing for your LLM provider
 ```
 
-`terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
-`image_repo`, `release_version`, `license_token` and `admin_bootstrap_password`, and usually
-`alert_email`. See "Variables".
+Commit it with the instance. `margince_config_path` points elsewhere if you
+keep it in another place.
 
-## 2. Bootstrap the database (once)
-
-RDS's master user is `dbadmin` (`rds.tf`). RDS has no public IP, and its
-security group admits only the api and worker tasks and the bootstrap host
-(`ops.tf`). Launch that host once, for steps 2 and 4, and terminate it
-afterwards:
-
-```bash
-OPS_ID="$(aws ec2 run-instances \
-  --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
-  --instance-type t3.micro \
-  --subnet-id "$(terraform output -json private_subnet_ids | jq -r '.[0]')" \
-  --security-group-ids "$(terraform output -raw ops_security_group_id)" \
-  --iam-instance-profile Name="$(terraform output -raw ops_instance_profile_name)" \
-  --metadata-options HttpTokens=required \
-  --query 'Instances[0].InstanceId' --output text)"
-aws ec2 wait instance-status-ok --instance-ids "$OPS_ID"
-```
-
-Forward local port 5432 to RDS through the host (Session Manager, no SSH),
-and leave this running in a second terminal:
-
-```bash
-aws ssm start-session --target "$OPS_ID" \
-  --document-name AWS-StartPortForwardingSessionToRemoteHost \
-  --parameters "host=$(terraform output -raw rds_endpoint),portNumber=5432,localPortNumber=5432"
-```
-
-Then run core's bootstrap SQL. The passwords come from SSM Parameter Store,
-so your identity needs `ssm:GetParameter` on `/<name_prefix>/*` and
-`kms:Decrypt` on `terraform output -raw kms_key_arn`. `hostaddr=127.0.0.1`
-sends the connection through the tunnel while `sslmode=verify-full` still
-checks the certificate against the RDS host name:
-
-```bash
-curl -o /tmp/rds-ca-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-
-ssm_get() { aws ssm get-parameter --with-decryption --name "$(terraform output -json ssm_parameter_names | jq -r ".$1")" --query Parameter.Value --output text; }
-OWNER_PW="$(ssm_get owner_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
-APP_PW="$(ssm_get app_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
-MASTER_PW="$(ssm_get rds_master_password)"
-
-psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432/margince?hostaddr=127.0.0.1&sslmode=verify-full&sslrootcert=/tmp/rds-ca-bundle.pem" \
-  -v owner_pw="$OWNER_PW" -v app_pw="$APP_PW" \
-  -f ../../../../core/scripts/deploy/db-bootstrap.sql   # core's SQL, at the pinned core version
-```
-
-The master password exists only as the `/<name_prefix>/rds-master-password`
-parameter, for this step; no ECS task or execution role can read it.
-
-## 3. Select the instance release
+## 2. Select the instance release
 
 The instance's release builds the api, web and worker images with core's
 `Dockerfile` and `docker-bake.hcl`, from core at the core pin plus the
@@ -165,51 +107,47 @@ Container Registry is the safer choice.
    this stack's `cpu_architecture` (`terraform output -raw image_platform`).
 2. Set `image_repo` (`<REGISTRY>/<instance name>`, the `REGISTRY` the release
    used) and `release_version` (the release, for example `v1.4.0`) in
-   `terraform.tfvars`. They serve the first apply (step 5); every later release
-   ships with `make deploy` (Section 7).
-3. Run `terraform apply` (step 5 the first time). The task definitions run
-   the three images of that release.
+   `terraform.tfvars`. They serve the first apply (Section 3); every later
+   release ships with `make deploy` (Section 5).
 
-## 4. Upload `margince.yaml` (once)
-
-On the bootstrap host (`aws ssm start-session --target "$OPS_ID"`). The file
-system policy allows only IAM-authorised TLS mounts; the host's instance
-profile grants mount and write. Copy `margince.yaml` (from
-`core/config/margince.example.yaml`) and the RDS CA bundle to the host first,
-then:
+## 3. Apply
 
 ```bash
-sudo dnf install -y amazon-efs-utils
-sudo mkdir -p /mnt/margince-config
-sudo mount -t efs -o tls,iam,accesspoint=<efs_config_access_point_id> \
-  <efs_file_system_id>:/ /mnt/margince-config
-# the ids: terraform output -raw efs_config_access_point_id / efs_file_system_id
-sudo cp ./margince.yaml /mnt/margince-config/margince.yaml
-# edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
-# seeds.ai_routing for your LLM provider
-sudo cp ./rds-ca-bundle.pem /mnt/margince-config/rds-ca-bundle.pem   # the DSNs verify RDS against it
-sudo umount /mnt/margince-config
-```
-
-Terminate the bootstrap host when steps 2 and 4 are done:
-
-```bash
-aws ec2 terminate-instances --instance-ids "$OPS_ID"
-```
-
-## 5. Start the services
-
-```bash
+cd deploy/production/aws/standard
+cp backend.hcl.example backend.hcl            # fill in
+cp terraform.tfvars.example terraform.tfvars  # fill in
+terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-This creates everything else: the ALB with its web ACL, the three ECS
-services, the remaining parameters and the alarms. Point `public_base_url`'s
-host at `terraform output -raw alb_dns_name` (CNAME or ALIAS record). The api
-applies migrations on start and bootstraps the organization from
-`MARGINCE_ADMIN_PASSWORD`.
+`terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
+`image_repo`, `release_version`, `license_token` and `admin_bootstrap_password`,
+and usually `alert_email`. See "Variables".
 
-Check the entry point:
+One apply creates everything, in this order:
+
+1. The network, RDS, ElastiCache, S3, EFS, the SSM parameters and the KMS key.
+2. The one-off setup task (`setup.tf`), which the apply runs with the AWS CLI
+   and waits for (`scripts/run-setup.sh`). In the private subnets it:
+   - writes `margince.yaml` and the RDS CA bundle onto the EFS config volume
+     (core's api image);
+   - runs core's `db-bootstrap.sql` as `dbadmin` through
+     `scripts/bootstrap-db.sh`, the same script as the Azure stack's, because
+     RDS's admin is not a superuser (the template's Postgres image). It creates
+     the `margince` database owned by `margince_owner`, the two roles and the
+     extensions.
+
+   The apply fails if either step fails; the log is in the CloudWatch group
+   `/ecs/<name_prefix>/setup`. Only this task can read the RDS master password.
+3. The ALB with its web ACL, the three ECS services and the alarms. The api
+   applies migrations on start and bootstraps the organization from
+   `MARGINCE_ADMIN_PASSWORD`.
+
+The setup task runs again on any apply that changes its inputs (a new
+`margince.yaml`, core's SQL, a release image); the SQL is idempotent.
+
+Point `public_base_url`'s host at `terraform output -raw alb_dns_name` (CNAME
+or ALIAS record), then check the entry point:
 
 ```bash
 curl -s https://crm.example.com/readyz                                                  # 200 when dependencies are healthy
@@ -217,11 +155,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://crm.example.com/metrics        
 curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                        # 301 to HTTPS
 ```
 
-## 6. First login
+## 4. First login
 
 1. Sign in with the bootstrap admin and set the permanent password.
-2. Remove `bootstrap_admin` from `margince.yaml` and overwrite the admin
-   password parameter with an inert value (`secrets.tf` ignores later changes
+2. Remove `bootstrap_admin` from `deploy/production/config/margince.yaml`
+   (the next apply or `make deploy` writes it to the config volume) and
+   overwrite the admin password parameter with an inert value (`secrets.tf` ignores later changes
    to it, so an apply does not put the bootstrap password back):
 
    ```bash
@@ -234,7 +173,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 3. Confirm the `alert_email` subscription (AWS sends a confirmation mail), or
    subscribe your own endpoint to `terraform output -raw alerts_topic_arn`.
 
-## 7. Releases
+## 5. Releases
 
 Ship every release after the first with `make deploy`, as on the light
 stacks. The template's `hook` adapter runs this directory's `hooks/`
@@ -336,6 +275,7 @@ uses it.
 | `db_instance_class`, `db_multi_az` | `db.t4g.medium`, `true` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `2`, `4` | api scale bounds |
 | `waf_mode` | `count` | `count` then `block` |
+| `margince_config_path`, `bootstrap_sql_path` | the instance's `deploy/production/config/margince.yaml`, core's `db-bootstrap.sql` | Inputs of the setup task |
 
 ## Redis
 

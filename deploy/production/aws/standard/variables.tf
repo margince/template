@@ -63,6 +63,18 @@ variable "release_version" {
   }
 }
 
+variable "margince_config_path" {
+  description = "margince.yaml for the config volume. Default: the instance's deploy/production/config/margince.yaml, the file the light stacks use. The setup task writes it on every apply that changes it."
+  type        = string
+  default     = null
+}
+
+variable "bootstrap_sql_path" {
+  description = "Core's db-bootstrap.sql. Default: core/scripts/deploy/db-bootstrap.sql at the pinned core version."
+  type        = string
+  default     = null
+}
+
 variable "cpu_architecture" {
   description = "Fargate CPU architecture for all three tasks: X86_64 or ARM64. The selected instance release must include the matching linux/amd64 or linux/arm64 image variant."
   type        = string

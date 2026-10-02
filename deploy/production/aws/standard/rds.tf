@@ -149,7 +149,9 @@ resource "aws_db_instance" "this" {
   storage_encrypted     = true
   kms_key_id            = aws_kms_key.data.arn
 
-  db_name  = "margince"
+  # No db_name: scripts/bootstrap-db.sh creates the margince database owned by
+  # margince_owner, as core's db-bootstrap.sql requires; a database RDS
+  # created would be owned by dbadmin.
   username = "dbadmin"
   password = random_password.rds_master.result
   port     = 5432

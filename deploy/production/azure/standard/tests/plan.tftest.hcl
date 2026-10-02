@@ -329,6 +329,41 @@ run "api_trusts_only_the_edge" {
   }
 }
 
+run "setup_job_replaces_the_jumpbox_steps" {
+  command = plan
+
+  assert {
+    condition = (
+      azurerm_container_app_job.setup.template[0].init_container[0].name == "prepare" &&
+      azurerm_container_app_job.setup.template[0].init_container[0].image == local.images.api &&
+      azurerm_container_app_job.setup.template[0].container[0].name == "database" &&
+      azurerm_container_app_job.setup.template[0].container[0].image == local.setup_postgres_image &&
+      azurerm_container_app_job.setup.replica_retry_limit == 0
+    )
+    error_message = "prepare (the api image) runs first; database (the pinned Postgres image) runs the bootstrap once, without retries."
+  }
+
+  assert {
+    condition = (
+      local.setup_env.MARGINCE_CONFIG_B64 == filebase64("${path.module}/../../config/margince.yaml") &&
+      local.setup_env.BOOTSTRAP_SQL_B64 == filebase64("${path.module}/../../../../core/scripts/deploy/db-bootstrap.sql") &&
+      local.setup_env.BOOTSTRAP_SCRIPT_B64 == filebase64("${path.module}/scripts/bootstrap-db.sh") &&
+      file("${path.module}/scripts/bootstrap-db.sh") == file("${path.module}/../../aws/standard/scripts/bootstrap-db.sh") &&
+      local.setup_env.BOOTSTRAP_PG_ADMIN_USER == "pgadmin"
+    )
+    error_message = "The setup job writes the instance's margince.yaml and runs core's SQL through the same bootstrap-db.sh as AWS, as pgadmin."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app_environment_storage.config_setup.access_mode == "ReadWrite" &&
+      azurerm_container_app_environment_storage.config.access_mode == "ReadOnly" &&
+      toset([for s in azurerm_container_app_job.setup.secret : s.name]) == toset(["pg-admin-password", "owner-password", "app-password"])
+    )
+    error_message = "Only the setup job writes the config share and holds the Postgres admin password; the apps mount the share read-only."
+  }
+}
+
 run "release_version_must_be_a_release" {
   command = plan
   variables {

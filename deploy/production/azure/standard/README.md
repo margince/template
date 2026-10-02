@@ -14,7 +14,7 @@ on Azure Container Apps.
 | Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
 | Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
 | Identity | Managed identities for api, worker, Dataverse and customer-managed keys |
-| Delivery | The api, web and worker images of one instance release, pulled by release tag pulled over the NAT gateway; jumpbox VM with Azure Bastion Developer for operator tasks |
+| Delivery | The api, web and worker images of one instance release, pulled by release tag over the NAT gateway; a one-off setup job (`setup.tf`) for `margince.yaml` and the database bootstrap; jumpbox VM with Azure Bastion Developer for operator tasks |
 | Protection | Share soft delete and daily Azure Backup (attachments, redis), delete locks on the stateful resources, diagnostic settings on every resource that has them, metric alerts, Log Analytics (90 days) |
 
 ```mermaid
@@ -32,6 +32,7 @@ flowchart LR
     files[("Storage: config, attachments, redis<br/>CMK, private endpoint")]
     kv["Key Vault<br/>secrets, CMK, certificate"]
     jump["Jumpbox<br/>Bastion Developer, operator tasks"]
+    setup["Setup job<br/>one-off, per apply"]
     nat["NAT Gateway<br/>fixed egress IP"]
   end
   agw -->|"HTTPS"| edge
@@ -46,7 +47,8 @@ flowchart LR
   nat --> ext(["Graph, LLM, SMTP"])
   source["Instance release.yml<br/>build, smoke-test, push"] --> reg(["Instance release images<br/>api, web, worker at one release"])
   env -.->|"pull over NAT"| reg
-  jump -.->|"bootstrap"| pg
+  setup -.->|"bootstrap"| pg
+  setup -.->|"margince.yaml"| files
   logs["Log Analytics, alerts"] -.-> mail(["alert_email"])
 ```
 
@@ -69,70 +71,33 @@ unsubscribe), which the app protects with tokens.
   Network Watcher in the region (`NetworkWatcher_<region>` in
   `NetworkWatcherRG`), which Azure creates with the first VNet unless the
   subscription opted out.
-- **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`.
+- **Tools**: Terraform 1.10 or newer, Azure CLI with the `containerapp`
+  extension (`az extension add --name containerapp`; the apply runs the one-off
+  setup job with it), `jq`.
 - **Margince**: a licence token and one release of this instance, pushed to a
   public registry
-  ([release.md](../../../../docs/release.md)). The bootstrap SQL and
-  `margince.example.yaml` come from the pinned `core/` submodule.
+  ([release.md](../../../../docs/release.md)). The bootstrap SQL comes from
+  the pinned `core/` submodule.
 - **TLS certificate** for the host in `public_base_url`, as a PFX file, to
-  import into Key Vault in step 5.
+  import into Key Vault in Section 4.
 - **Remote state**: state holds every generated password and key. Create a state storage account first (`backend.hcl.example`)
   and never keep state on a laptop.
 
-## 1. Provision (apps off)
+## 1. Write `margince.yaml`
+
+The stack reads the instance's `deploy/production/config/margince.yaml`, the
+same file the light stacks use. Copy core's example once and edit it:
 
 ```bash
-cd deploy/production/azure/standard
-cp backend.hcl.example backend.hcl            # fill in
-cp terraform.tfvars.example terraform.tfvars  # fill in
-terraform init -backend-config=backend.hcl
-terraform apply                               # deploy_apps = false
+cp core/config/margince.example.yaml deploy/production/config/margince.yaml
+# edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
+# seeds.ai_routing for your LLM provider
 ```
 
-`terraform.tfvars` needs `image_repo`, `release_version`, `public_base_url`,
-`admin_bootstrap_password`, `license_token` and `jumpbox_ssh_public_key`
-(`ssh-keygen -t ed25519`; RSA also works), and usually
-`operator_ip_allowlist` (your public IP, from
-`curl -s https://api.ipify.org`). See "Variables".
+Commit it with the instance. `margince_config_path` points elsewhere if you
+keep it in another place.
 
-This creates everything except the Container Apps: network, Key Vault and its
-secrets, Postgres, the redis app, storage and shares, private
-endpoints and the jumpbox. `operator_ip_allowlist` lets Terraform write
-Key Vault secrets and file shares from your machine; it is closed in step 6.
-
-## 2. Bootstrap the database (jumpbox, once)
-
-Postgres is reachable only inside the VNet. Open the jumpbox from the Azure
-portal (VM `<name_prefix>-jumpbox` → Connect → Bastion → SSH with your private
-key), then:
-
-```bash
-az login
-gh auth login                                 # or read-only deploy keys
-git clone --recurse-submodules <instance repository URL> /opt/margince-instance
-cd /opt/margince-instance/deploy/production/azure/standard
-cp backend.hcl.example backend.hcl            # same values as on your machine
-terraform init -backend-config=backend.hcl
-
-scripts/bootstrap-db.sh                       # default SQL: core/scripts/deploy/db-bootstrap.sql
-```
-
-`scripts/bootstrap-db.sh` runs core's `scripts/deploy/db-bootstrap.sql` (the
-instance repository's `core/` submodule, at the pinned core version) as
-`pgadmin` over verified TLS, with the
-role passwords passed on stdin rather than the command line. Running the SQL
-directly with `psql` fails on Flexible Server: `pgadmin` is not a superuser,
-so PostgreSQL refuses `ALTER ROLE ... NOSUPERUSER NOBYPASSRLS`, and on
-Postgres 16 `CREATE DATABASE ... OWNER margince_owner` fails with "must be
-able to SET ROLE". The wrapper replaces those statements with checks that
-only alter a role that actually has the attribute, and grants `pgadmin`
-membership in `margince_owner` for the duration of the script. It is safe to
-rerun. It creates the `margince` database and the `margince_owner` and
-`margince_app` roles. The extensions it needs (`vector`, `unaccent`,
-`pg_trgm`, `btree_gist`) are already allow-listed by Terraform. Migrations run
-later, from the api's entrypoint, with the owner role.
-
-## 3. Select the instance release
+## 2. Select the instance release
 
 The instance's release builds the api, web and worker images with core's
 `Dockerfile` and `docker-bake.hcl`, from core at the core pin plus the
@@ -158,26 +123,56 @@ Container Registry is the safer choice.
    `linux/amd64`, the default. Container Apps requires that image.
 2. Set `image_repo` (`<REGISTRY>/<instance name>`, the `REGISTRY` the release
    used) and `release_version` (the release, for example `v1.4.0`) in
-   `terraform.tfvars`. They serve the first apply (step 5); every later release
-   ships with `make deploy` (Section 7).
-3. Run `terraform apply -var deploy_apps=true` (step 5 the first time). The
-   Container Apps run the three images of that release; api, worker and web
-   move together.
+   `terraform.tfvars`. They serve the first applies (Sections 3 and 4); every
+   later release ships with `make deploy` (Section 6).
 
-## 4. Upload `margince.yaml` (once)
+## 3. Provision (apps off)
 
 ```bash
-ACCOUNT="$(terraform output -raw storage_account_name)"
-KEY="$(az storage account keys list --account-name "$ACCOUNT" --query '[0].value' -o tsv)"
-cp ../../../../core/config/margince.example.yaml margince.yaml
-# edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
-# seeds.ai_routing for your LLM provider
-az storage file upload --account-name "$ACCOUNT" --account-key "$KEY" \
-  --share-name "<name_prefix>-config" --source margince.yaml --path margince.yaml
-rm margince.yaml
+cd deploy/production/azure/standard
+cp backend.hcl.example backend.hcl            # fill in
+cp terraform.tfvars.example terraform.tfvars  # fill in
+terraform init -backend-config=backend.hcl
+terraform apply                               # deploy_apps = false
 ```
 
-## 5. Start the apps and the gateway
+`terraform.tfvars` needs `image_repo`, `release_version`, `public_base_url`,
+`admin_bootstrap_password`, `license_token` and `jumpbox_ssh_public_key`
+(`ssh-keygen -t ed25519`; RSA also works), and usually
+`operator_ip_allowlist` (your public IP, from
+`curl -s https://api.ipify.org`). See "Variables".
+
+This creates everything except the Container Apps and the gateway: network,
+Key Vault and its secrets, Postgres, the redis app, storage and shares,
+private endpoints and the jumpbox. `operator_ip_allowlist` lets Terraform
+write Key Vault secrets and file shares from your machine; it is closed in
+Section 5.
+
+The same apply then runs the one-off setup job (`setup.tf`) with the Azure CLI
+and waits for it (`scripts/run-setup.sh`). Inside the environment it:
+
+- writes `margince.yaml` onto the config share (core's api image), which the
+  apps mount read-only;
+- runs core's `db-bootstrap.sql` as `pgadmin` over verified TLS through
+  `scripts/bootstrap-db.sh`, the same script as the AWS stack's (the template's
+  Postgres image). Running the SQL directly with `psql` fails on Flexible
+  Server: `pgadmin` is not a superuser, so PostgreSQL refuses `ALTER ROLE ...
+  NOSUPERUSER NOBYPASSRLS`, and on Postgres 16 `CREATE DATABASE ... OWNER
+  margince_owner` fails with "must be able to SET ROLE". The script replaces
+  those statements with checks that only alter a role that actually has the
+  attribute, and grants `pgadmin` membership in `margince_owner` for the
+  duration of the script. It creates the `margince` database and the
+  `margince_owner` and `margince_app` roles. The extensions it needs
+  (`vector`, `unaccent`, `pg_trgm`, `btree_gist`) are already allow-listed by
+  Terraform. Migrations run later, from the api's entrypoint, with the owner
+  role.
+
+The apply fails if the job fails; its executions are listed under the job
+`<name_prefix>-setup`. Only the job holds the Postgres admin password. It runs
+again on any apply that changes its inputs (a new `margince.yaml`, core's SQL,
+a release image); the SQL is idempotent.
+
+## 4. Start the apps and the gateway
 
 ```bash
 # DNS, in your zone: an A record for the host in public_base_url
@@ -205,18 +200,29 @@ curl -s -o /dev/null -w '%{http_code}\n' https://crm.example.com/metrics        
 curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                          # 301 to HTTPS
 ```
 
-## 6. First login, then close setup access
+## 5. First login, then close setup access
 
 1. Sign in with the bootstrap admin and set the permanent password.
 2. Invite staff (see "Sign-in").
-3. Remove `bootstrap_admin` from `margince.yaml`, set
+3. Remove `bootstrap_admin` from `deploy/production/config/margince.yaml`
+   (the next apply or `make deploy` writes it to the config share), set
    `include_bootstrap_admin = false`, add the LLM provider key in
    Settings → AI.
-4. Set `operator_ip_allowlist = []` and apply. From now on, run Terraform
-   from the jumpbox (`/opt/margince-instance/deploy/production/azure/standard`, backend as in step 2),
-   or add your IP back for a single apply.
+4. Set `operator_ip_allowlist = []` and apply. From now on, run Terraform and
+   `make deploy` from the jumpbox, or add your IP back for a single apply.
+   Open the jumpbox from the Azure portal (VM `<name_prefix>-jumpbox` →
+   Connect → Bastion → SSH with your private key), then once:
 
-## 7. Releases
+   ```bash
+   az login
+   gh auth login                                 # or read-only deploy keys
+   git clone --recurse-submodules <instance repository URL> /opt/margince-instance
+   cd /opt/margince-instance/deploy/production/azure/standard
+   cp backend.hcl.example backend.hcl            # same values as on your machine
+   terraform init -backend-config=backend.hcl
+   ```
+
+## 6. Releases
 
 Ship every release after the first with `make deploy`, as on the light
 stacks. The template's `hook` adapter runs this directory's `hooks/`
@@ -296,11 +302,12 @@ uses it.
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `jumpbox_ssh_public_key` | required | SSH key for the jumpbox |
-| `deploy_apps` | `false` | Two-phase apply: `true` once prerequisites exist (step 5) |
+| `deploy_apps` | `false` | Two-phase apply: `true` once the certificate is imported (Section 4) |
 | `operator_ip_allowlist` | `[]` | Setup IPs through the Key Vault and Storage firewalls |
 | `key_vault_admin_principal_ids` | `[]` (the applying identity) | Key Vault Administrators |
 | `alert_email` | `""` | Alert receiver |
-| `include_bootstrap_admin` | `true` | `false` after the first admin login (step 6) |
+| `include_bootstrap_admin` | `true` | `false` after the first admin login (Section 5) |
+| `margince_config_path`, `bootstrap_sql_path` | the instance's `deploy/production/config/margince.yaml`, core's `db-bootstrap.sql` | Inputs of the setup job |
 | `azure_region`, `name_prefix` | `westeurope`, `margince` | Placement and names (`name_prefix` is also the resource group) |
 | `db_sku_name`, `db_zone_redundant_ha` | `B_Standard_B2s`, `false` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `3`, `6` | api scale bounds |

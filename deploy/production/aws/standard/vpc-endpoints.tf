@@ -52,7 +52,7 @@ resource "aws_vpc_endpoint" "s3" {
 
 resource "aws_security_group" "vpc_endpoints" {
   name_prefix = "${var.name_prefix}-vpce-"
-  description = "Interface VPC endpoints (SSM, KMS, CloudWatch Logs); HTTPS ingress from ECS tasks (api/worker and web) and the bootstrap host only, no egress."
+  description = "Interface VPC endpoints (SSM, KMS, CloudWatch Logs); HTTPS ingress from ECS tasks (api/worker and web) and the setup task only, no egress."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-vpce", Component = "network" }
 
@@ -73,13 +73,11 @@ resource "aws_security_group" "vpc_endpoints" {
     security_groups = [aws_security_group.web.id]
   }
 
-  # private_dns_enabled on the ssm endpoint makes ssm.<region>.amazonaws.com
-  # resolve to these ENIs for EVERYTHING in the VPC, the bootstrap host's SSM
-  # agent included (ops.tf). Without this rule the agent cannot register and
-  # Session Manager never reaches the host. ssmmessages/ec2messages have no
-  # endpoint here and still leave through the NAT gateway.
+  # private_dns_enabled makes ssm, kms and logs resolve to these ENIs for
+  # EVERYTHING in the VPC, the one-off setup task included (setup.tf): ECS
+  # resolves its parameters and ships its log through them.
   ingress {
-    description     = "HTTPS from the temporary bootstrap host (ops.tf)"
+    description     = "HTTPS from the one-off setup task (setup.tf)"
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"

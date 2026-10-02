@@ -280,7 +280,8 @@ resource "aws_ecs_service" "api" {
 
   tags = { Name = "${var.name_prefix}-api", Component = "compute-api" }
 
-  depends_on = [aws_lb_listener.https]
+  # The database exists and margince.yaml is in place before any task starts.
+  depends_on = [aws_lb_listener.https, terraform_data.setup]
 
   # desired_count is the FLOOR the appautoscaling_target below scales from,
   # not the steady-state value — without this, every apply would fight the
@@ -316,6 +317,9 @@ resource "aws_ecs_service" "worker" {
   lifecycle {
     ignore_changes = [desired_count]
   }
+
+  # The database exists and margince.yaml is in place before any task starts.
+  depends_on = [terraform_data.setup]
 }
 
 # ---- Application Auto Scaling -------------------------------------------------
@@ -407,5 +411,6 @@ resource "aws_ecs_service" "web" {
 
   tags = { Name = "${var.name_prefix}-web", Component = "compute-web" }
 
-  depends_on = [aws_lb_listener.https]
+  # The database exists and margince.yaml is in place before any task starts.
+  depends_on = [aws_lb_listener.https, terraform_data.setup]
 }

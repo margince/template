@@ -23,7 +23,7 @@ TF_DIR="${TERRAFORM_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PLAN="$DEPLOY_STATE_DIR/release.tfplan"
 PREVIOUS="$DEPLOY_STATE_DIR/previous-release"
 # Inputs every release apply sets besides the release itself: the apps and
-# the gateway exist (README, Section 5); a release never removes them.
+# the gateway exist (README, Section 4); a release never removes them.
 EXTRA_VARS=(-var "deploy_apps=true")
 
 die() { echo "deploy: $*" >&2; exit 1; }

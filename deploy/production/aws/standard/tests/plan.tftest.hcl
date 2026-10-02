@@ -50,7 +50,7 @@ run "fixes_hold" {
     condition = anytrue([
       for r in aws_security_group.db.ingress : contains(r.security_groups, aws_security_group.ops.id)
     ])
-    error_message = "The bootstrap host must be able to reach RDS."
+    error_message = "The setup task must be able to reach RDS."
   }
 }
 
@@ -429,6 +429,50 @@ run "api_trusts_only_the_alb" {
   }
 }
 
+run "setup_task_replaces_the_bootstrap_host" {
+  command = plan
+
+  override_resource {
+    target          = aws_security_group.ops
+    override_during = plan
+    values          = { id = "sg-0ops0000000000000" }
+  }
+
+  assert {
+    condition = (
+      local.setup_containers[0].name == "prepare" && local.setup_containers[0].image == local.images.api &&
+      local.setup_containers[0].essential == false && local.setup_containers[0].mountPoints[0].readOnly == false &&
+      local.setup_containers[1].name == "database" && local.setup_containers[1].image == local.setup_postgres_image &&
+      local.setup_containers[1].dependsOn == [{ containerName = "prepare", condition = "SUCCESS" }] &&
+      local.setup_containers[1].mountPoints[0].readOnly == true
+    )
+    error_message = "prepare (the api image) writes the config volume first; database (the pinned Postgres image) reads it and runs only after prepare succeeded."
+  }
+
+  assert {
+    condition = (
+      one([for e in local.setup_containers[0].environment : e.value if e.name == "MARGINCE_CONFIG_B64"]) == filebase64("${path.module}/../../config/margince.yaml") &&
+      one([for e in local.setup_containers[1].environment : e.value if e.name == "BOOTSTRAP_SQL_B64"]) == filebase64("${path.module}/../../../../core/scripts/deploy/db-bootstrap.sql")
+    )
+    error_message = "The setup task writes the instance's deploy/production/config/margince.yaml and runs core's db-bootstrap.sql."
+  }
+
+  assert {
+    condition = (
+      one([for e in local.setup_containers[1].environment : e.value if e.name == "BOOTSTRAP_SCRIPT_B64"]) == filebase64("${path.module}/scripts/bootstrap-db.sh") &&
+      file("${path.module}/scripts/bootstrap-db.sh") == file("${path.module}/../../azure/standard/scripts/bootstrap-db.sh") &&
+      one([for e in local.setup_containers[1].environment : e.value if e.name == "BOOTSTRAP_PG_ADMIN_USER"]) == "dbadmin" &&
+      !can(regex("(?m)^\\s*db_name\\s*=", file("${path.module}/rds.tf")))
+    )
+    error_message = "RDS bootstraps through the same scripts/bootstrap-db.sh as Azure, as dbadmin, and creates no database itself (the script creates margince owned by margince_owner)."
+  }
+
+  assert {
+    condition     = toset(keys(local.setup_ssm_parameters)) == toset(["MARGINCE_OWNER_DSN", "MARGINCE_DSN", "RDS_MASTER_PASSWORD"])
+    error_message = "The setup task reads the two DSNs and the RDS master password, nothing else."
+  }
+}
+
 run "release_version_must_be_a_release" {
   command = plan
   variables {
@@ -493,7 +537,7 @@ run "security_group_and_iam_descriptions_are_ascii" {
 
   assert {
     condition = alltrue([
-      for d in [aws_iam_role.execution.description, aws_iam_role.execution_web.description, aws_iam_role.task_api.description, aws_iam_role.task_worker.description, aws_iam_role.task_web.description, aws_iam_role.vpc_flow_logs.description, aws_iam_role.ops.description] :
+      for d in [aws_iam_role.execution.description, aws_iam_role.execution_web.description, aws_iam_role.task_api.description, aws_iam_role.task_worker.description, aws_iam_role.task_web.description, aws_iam_role.vpc_flow_logs.description, aws_iam_role.setup_execution.description, aws_iam_role.setup_task.description] :
       can(regex("^[ -~]*$", d))
     ])
     error_message = "An IAM role description uses a non-ASCII character."

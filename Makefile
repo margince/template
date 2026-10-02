@@ -472,6 +472,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/deploy/host/render.test.sh
 	@bash scripts/deploy/host.test.sh
 	@bash scripts/deploy/standard-hooks.test.sh
+	@bash scripts/deploy/standard-setup.test.sh
 	@bash scripts/deploy/host/bootstrap.test.sh
 	@$(MAKE) test-cli
 

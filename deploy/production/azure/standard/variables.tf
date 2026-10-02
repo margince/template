@@ -45,6 +45,18 @@ variable "release_version" {
   }
 }
 
+variable "margince_config_path" {
+  description = "margince.yaml for the config share. Default: the instance's deploy/production/config/margince.yaml, the file the light stacks use. The setup job writes it on every apply that changes it."
+  type        = string
+  default     = null
+}
+
+variable "bootstrap_sql_path" {
+  description = "Core's db-bootstrap.sql. Default: core/scripts/deploy/db-bootstrap.sql at the pinned core version."
+  type        = string
+  default     = null
+}
+
 variable "deploy_apps" {
   description = "false on the first apply: everything except the Container Apps and the Application Gateway. Set true once the images are pushed, the database bootstrapped, margince.yaml uploaded and the public certificate imported (README.md)."
   type        = bool

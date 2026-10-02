@@ -20,7 +20,7 @@ release_version = "v1.0.0"
 license_token = "<licence token>"
 
 # MARGINCE_ADMIN_PASSWORD for the first boot. Overwrite the SSM parameter
-# with an inert value after the first boot (README.md, step 5).
+# with an inert value after the first boot (README.md, Section 4).
 admin_bootstrap_password = "change-me-before-first-boot"
 
 # ---- Usually set ---------------------------------------------------------------

@@ -341,7 +341,7 @@ resource "aws_vpc_security_group_egress_rule" "web_to_internet" {
 
 resource "aws_security_group" "db" {
   name_prefix = "${var.name_prefix}-db-"
-  description = "RDS Postgres; ingress on 5432 from ECS tasks and the bootstrap host only, no egress (RDS never originates outbound traffic)."
+  description = "RDS Postgres; ingress on 5432 from ECS tasks and the setup task only, no egress (RDS never originates outbound traffic)."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-db", Component = "database" }
 
@@ -354,7 +354,7 @@ resource "aws_security_group" "db" {
   }
 
   ingress {
-    description     = "Postgres from the temporary bootstrap host (ops.tf)"
+    description     = "Postgres from the one-off setup task (setup.tf)"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
@@ -393,7 +393,7 @@ resource "aws_security_group" "redis" {
 
 resource "aws_security_group" "efs" {
   name_prefix = "${var.name_prefix}-efs-"
-  description = "EFS config volume mount targets; ingress on 2049 (NFS) from ECS tasks and the bootstrap host only, no egress."
+  description = "EFS config volume mount targets; ingress on 2049 (NFS) from ECS tasks and the setup task only, no egress."
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name_prefix}-efs", Component = "storage" }
 
@@ -406,7 +406,7 @@ resource "aws_security_group" "efs" {
   }
 
   ingress {
-    description     = "NFS from the temporary bootstrap host (ops.tf)"
+    description     = "NFS from the one-off setup task (setup.tf)"
     from_port       = 2049
     to_port         = 2049
     protocol        = "tcp"
