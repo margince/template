@@ -14,11 +14,12 @@ locals {
   }
 }
 
-# The instance release publishes these three digest-pinned images to a
-# public registry. AWS pulls them anonymously and runs them unchanged; the
-# instance's release.yml builds them.
+# The three role images of one instance release, by tag, pulled anonymously
+# from the public registry; the instance's release.yml builds them.
 locals {
-  images = var.image_refs
+  images = {
+    for role in ["api", "worker", "web"] : role => "${var.image_repo}/${role}:${var.release_version}"
+  }
 }
 
 resource "aws_ecs_cluster" "this" {

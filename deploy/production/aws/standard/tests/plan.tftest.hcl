@@ -16,12 +16,9 @@ mock_provider "aws" {
 mock_provider "random" {}
 
 variables {
-  public_base_url = "https://crm.example.com"
-  image_refs = {
-    api    = "source.example/margince/api:1970.42@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  }
+  public_base_url          = "https://crm.example.com"
+  image_repo               = "ghcr.io/acme/margince-default"
+  release_version          = "v1.4.0"
   admin_bootstrap_password = "test-only-password-not-real"
   acm_certificate_arn      = "arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
   license_token            = "test-licence"
@@ -377,8 +374,12 @@ run "images_follow_the_instance_release" {
   }
 
   assert {
-    condition     = local.images == var.image_refs && output.image_refs == var.image_refs
-    error_message = "AWS must deploy the three digest-pinned references supplied by the instance release unchanged."
+    condition = local.images == {
+      api    = "ghcr.io/acme/margince-default/api:v1.4.0"
+      worker = "ghcr.io/acme/margince-default/worker:v1.4.0"
+      web    = "ghcr.io/acme/margince-default/web:v1.4.0"
+    } && output.images == local.images && output.release_version == "v1.4.0"
+    error_message = "AWS runs api, worker and web at one release, by tag: <image_repo>/<role>:<release_version>."
   }
 
   assert {
@@ -410,16 +411,20 @@ run "arm64_needs_the_arm64_image" {
   }
 }
 
-run "image_refs_must_be_digest_pinned" {
+run "release_version_must_be_a_release" {
   command = plan
   variables {
-    image_refs = {
-      api    = "source.example/margince/api:latest"
-      worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    }
+    release_version = "latest"
   }
-  expect_failures = [var.image_refs]
+  expect_failures = [var.release_version]
+}
+
+run "image_repo_must_name_a_registry" {
+  command = plan
+  variables {
+    image_repo = "margince-default/api:v1.4.0"
+  }
+  expect_failures = [var.image_repo]
 }
 
 run "images_are_pulled_anonymously" {

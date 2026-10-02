@@ -6,9 +6,18 @@ output "ecs_cluster_name" {
   value = aws_ecs_cluster.this.name
 }
 
-output "image_refs" {
-  description = "The digest-pinned instance release images this stack deploys unchanged."
+output "images" {
+  description = "The api, worker and web images this stack runs: <image_repo>/<role>:<release_version>."
   value       = local.images
+}
+
+output "release_version" {
+  description = "The release this stack runs; make deploy's rollback goes back to it."
+  value       = var.release_version
+}
+
+output "public_base_url" {
+  value = var.public_base_url
 }
 
 output "image_platform" {

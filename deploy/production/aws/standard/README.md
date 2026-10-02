@@ -2,7 +2,7 @@
 
 Terraform root module that deploys Margince into your own AWS account, sized
 for a small team (about 40 users). The instance's release builds and publishes
-the images; this module runs the digest-pinned images of one instance release
+the images; this module runs the images of one instance release
 on ECS Fargate.
 
 ## What it creates
@@ -14,7 +14,7 @@ on ECS Fargate.
 | Data | RDS PostgreSQL 16 (Multi-AZ, gp3 with storage autoscaling, 7-day backups, deletion protection, Performance Insights), ElastiCache Valkey 7.2 (two nodes, automatic failover, TLS required, AUTH token), S3 attachment bucket (versioned, SSE-KMS enforced), EFS for `margince.yaml` |
 | Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
 | Secrets | SSM Parameter Store SecureStrings under `/<name_prefix>/`, one customer-managed KMS key (rotation on) for everything stored at rest |
-| Delivery | Digest-pinned api, web and worker images from one instance release, pulled over the NAT gateways; a bootstrap host security group and instance profile |
+| Delivery | The api, web and worker images of one instance release, pulled by release tag pulled over the NAT gateways; a bootstrap host security group and instance profile |
 | Protection | CloudWatch alarms to a CMK-encrypted SNS topic, `prevent_destroy` on the stateful resources, EFS backup, CloudWatch log groups (30 days) |
 
 ```mermaid
@@ -45,7 +45,7 @@ flowchart LR
   api --> nat
   worker --> nat
   nat --> ext(["Graph, LLM, SMTP"])
-  nat -.->|"pull digest-pinned artifacts"| reg(["Instance release images<br/>api, web, worker"])
+  nat -.->|"pull by release tag"| reg(["Instance release images<br/>api, web, worker"])
   ops -.->|"bootstrap"| pg
   alarms["CloudWatch alarms, SNS"] -.-> mail(["alert_email"])
 ```
@@ -59,8 +59,8 @@ flowchart LR
   `public_base_url`, validated in your DNS zone.
 - **Tools**: Terraform 1.10 or newer, AWS CLI with the Session Manager
   plugin, `jq`, `psql`.
-- **Margince**: a licence token and the three digest-pinned image references
-  published together by one release of this instance
+- **Margince**: a licence token and one release of this instance, pushed to a
+  public registry
   ([release.md](../../../../docs/release.md)). The bootstrap SQL and
   `margince.example.yaml` come from the pinned `core/` submodule.
 - **Remote state**: state holds every generated password. Create a protected
@@ -86,7 +86,7 @@ terraform apply \
 ```
 
 `terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
-`image_refs`, `license_token` and `admin_bootstrap_password`, and usually
+`image_repo`, `release_version`, `license_token` and `admin_bootstrap_password`, and usually
 `alert_email`. See "Variables".
 
 ## 2. Bootstrap the database (once)
@@ -146,10 +146,14 @@ The instance's release builds the api, web and worker images with core's
 instance's units. With the repository variable `REGISTRY` set, it pushes
 them to `<REGISTRY>/<name>/<role>:<v>`
 ([release.md](../../../../docs/release.md)). The instance commit and the core
-version identify the complete images. The release notes and the build artifact
-`margince-images-<v>` list each pushed image with its digest. This AWS module
+version identify the complete images. This AWS module
 neither rebuilds nor republishes them. Do not use the images that core
 publishes: they contain core only, without the instance's units.
+
+The stack runs `<image_repo>/<role>:<release_version>` for all three roles,
+pulled by tag: the references `make deploy` exports
+([deploy.md](../../../../docs/deploy.md)). Core's release guard refuses a set
+whose roles come from different releases (core/docs/deployment.md, "Deploy all three roles at ONE release").
 
 The registry must be public: the stack pulls anonymously and holds no
 registry credentials. Use GitHub Container Registry (`ghcr.io/<org>`) or
@@ -159,10 +163,12 @@ Container Registry is the safer choice.
 
 1. Select one instance release whose pushed platforms (`PLATFORMS`) include
    this stack's `cpu_architecture` (`terraform output -raw image_platform`).
-2. Copy its three digest-pinned references into `image_refs` in
-   `terraform.tfvars`. Do not combine roles from different releases.
-3. Run `terraform apply` (step 5 the first time). The task definitions retain
-   the supplied `@sha256:` references unchanged.
+2. Set `image_repo` (`<REGISTRY>/<instance name>`, the `REGISTRY` the release
+   used) and `release_version` (the release, for example `v1.4.0`) in
+   `terraform.tfvars`. They serve the first apply (step 5); every later release
+   ships with `make deploy` (Section 7).
+3. Run `terraform apply` (step 5 the first time). The task definitions run
+   the three images of that release.
 
 ## 4. Upload `margince.yaml` (once)
 
@@ -230,10 +236,29 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 
 ## 7. Releases
 
-Follow Section 3 for each new version: cut an instance release, copy its three
-digest-pinned references into `image_refs`, then run `terraform apply`.
-All three services get a new task definition in the same apply; api, worker
-and web move together.
+Ship every release after the first with `make deploy`, as on the light
+stacks. The template's `hook` adapter runs this directory's `hooks/`
+([deploy.md](../../../../docs/deploy.md)):
+
+| Step | Hook |
+|---|---|
+| `preflight` | Records the running release, plans `image_repo` and the new `release_version`; changes nothing |
+| `apply` | Applies exactly that plan; all three roles move in one apply |
+| `verify` | Waits until `/readyz` answers 200 and `/v1/auth/capabilities` reports the new release (`VERIFY_TIMEOUT`, default 900 seconds) |
+| `rollback` | After a failed `apply` or `verify`: plans and applies the recorded release |
+
+1. In `instance.yaml`, set the environment's adapter to `hook`, for example
+   `production: { adapter: hook }`.
+2. Copy `hooks/` to `deploy/<env>/hooks/` in the instance, and export
+   `TERRAFORM_DIR` as the path of this directory (the default is the
+   directory that holds `hooks/`).
+3. On the machine where `terraform init` has run here, cut the release and
+   deploy it:
+
+   ```sh
+   make release VERSION=<v>                   # wait until release.yml has pushed the images
+   make deploy ENV=production VERSION=<v>
+   ```
 
 ## Sign-in
 
@@ -300,7 +325,8 @@ uses it.
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the ALB serves |
 | `acm_certificate_arn` | required | ACM certificate for that host |
-| `image_refs` | required | Digest-pinned api, worker and web references from one instance release, in a public registry |
+| `image_repo` | required | `<REGISTRY>/<instance name>` of the instance release, in a public registry |
+| `release_version` | required | The release to run for api, worker and web; `make deploy` sets it |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `alert_email` | `""` | Alert subscription |
@@ -366,11 +392,10 @@ Fargate line than the `X86_64` default.
   password parameter is readable by no task.
 - **Image source**: the instance's `release.yml` builds, smoke-tests and
   publishes all three roles, core plus the instance's units. This stack only
-  consumes their digest-pinned references, pulled anonymously from a public
-  registry; no task or execution role holds registry credentials.
+  runs them by release tag, pulled anonymously from a public registry; no task or execution role holds registry credentials.
 - **Containers**: all Linux capabilities dropped, explicit
   `runtime_platform`, `stopTimeout = 60` for api and worker.
-- **Images**: every task definition uses the supplied `@sha256:` reference;
+- **Images**: every task definition runs `<image_repo>/<role>:<release_version>`;
   tasks pull over the NAT gateways at task start.
 - **Sign-in**: the WAF's auth-path rate rule is the one fleet-wide login
   limit; the api's own login limiters are per task.

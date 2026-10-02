@@ -20,29 +20,28 @@ variable "name_prefix" {
 }
 
 # ---- Release ------------------------------------------------------------------------
-# The instance release (docs/release.md) publishes one digest-pinned reference
-# per role: core plus the instance's units, built with core's Dockerfile and
-# bake definition. This stack consumes those images unchanged; it does not
-# build or publish application images.
+# One release of this instance (docs/release.md): release.yml builds api, web
+# and worker with core's Dockerfile and bake definition and pushes them as
+# <image_repo>/<role>:<release_version>, the references `make deploy` exports
+# as IMAGE_API, IMAGE_WEB and IMAGE_WORKER. All three roles run at one release
+# and are pulled by tag; core's release guard refuses a mixed set
+# (core/docs/deployment.md, "Deploy all three roles at ONE release").
 
-variable "image_refs" {
-  description = "Digest-pinned api, worker and web image references from one release of this instance (release.yml lists them with their digests), in a public registry that allows anonymous pulls, such as ghcr.io or docker.io. Copy the three references from that release; all must end in @sha256:<64 hex characters>."
-  type = object({
-    api    = string
-    worker = string
-    web    = string
-  })
+variable "image_repo" {
+  description = "The image repository of the instance release: <REGISTRY>/<instance name>, the IMAGE_REPO of `make deploy`, for example ghcr.io/acme/margince-default. A public registry: the images are pulled anonymously."
+  type        = string
   validation {
-    condition = alltrue([
-      for ref in values(var.image_refs) : can(regex("@sha256:[0-9a-f]{64}$", ref))
-    ])
-    error_message = "Every image_refs value must be the digest-pinned reference published by the instance release, ending in @sha256:<64 lowercase hex characters>."
+    condition     = can(regex("^[a-z0-9-]+(\\.[a-z0-9-]+)+(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+$", var.image_repo))
+    error_message = "image_repo must be <registry host>/<path> with no tag or digest, for example ghcr.io/acme/margince-default."
   }
+}
+
+variable "release_version" {
+  description = "The release to run for api, worker and web: the VERSION of `make release`, which is the image tag. `make deploy` sets it."
+  type        = string
   validation {
-    condition = length(toset([
-      for ref in values(var.image_refs) : split("/", ref)[0]
-    ])) == 1
-    error_message = "Every image_refs value must use the same registry host."
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
+    error_message = "release_version must be a release version such as v0.3.0 or v1.3.0-rc.1 (docs/release.md, Section 2)."
   }
 }
 

@@ -13,8 +13,9 @@ locals {
   flat_prefix   = replace(var.name_prefix, "-", "")
   global_prefix = "${var.name_prefix}-${local.suffix}"
 
-  # The instance release publishes these three digest-pinned images to a
-  # public registry. Azure pulls them anonymously and runs them unchanged;
-  # the instance's release.yml builds them.
-  images = var.image_refs
+  # The three role images of one instance release, by tag, pulled anonymously
+  # from the public registry; the instance's release.yml builds them.
+  images = {
+    for role in ["api", "worker", "web"] : role => "${var.image_repo}/${role}:${var.release_version}"
+  }
 }

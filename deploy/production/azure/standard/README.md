@@ -2,7 +2,7 @@
 
 Terraform root module that deploys Margince into your own Azure subscription,
 sized for a small team (about 40 users). The instance's release builds and publishes
-the images; this module runs the digest-pinned images of one instance release
+the images; this module runs the images of one instance release
 on Azure Container Apps.
 
 ## What it creates
@@ -14,7 +14,7 @@ on Azure Container Apps.
 | Data | Postgres Flexible Server 16 (VNet-integrated, customer-managed key, auto-grow, Entra and password auth; single-zone Burstable B2s by default, zone-redundant HA with `db_sku_name` General Purpose and `db_zone_redundant_ha = true`), Storage account with `config`, `attachments` and `redis` file shares, Key Vault premium (RBAC, purge protection) |
 | Network | VNet with apps, Postgres, private-endpoint and ops subnets; deny-by-default NSGs; private endpoints and DNS zones for Key Vault, blob and file; NAT Gateway with one fixed egress IP; VNet flow logs with traffic analytics |
 | Identity | Managed identities for api, worker, Dataverse and customer-managed keys |
-| Delivery | Digest-pinned api, web and worker images from one instance release, pulled over the NAT gateway; jumpbox VM with Azure Bastion Developer for operator tasks |
+| Delivery | The api, web and worker images of one instance release, pulled by release tag pulled over the NAT gateway; jumpbox VM with Azure Bastion Developer for operator tasks |
 | Protection | Share soft delete and daily Azure Backup (attachments, redis), delete locks on the stateful resources, diagnostic settings on every resource that has them, metric alerts, Log Analytics (90 days) |
 
 ```mermaid
@@ -44,7 +44,7 @@ flowchart LR
   worker --> nat
   api --> nat
   nat --> ext(["Graph, LLM, SMTP"])
-  source["Instance release.yml<br/>build, smoke-test, push"] --> reg(["Instance release images<br/>api, web, worker, @sha256"])
+  source["Instance release.yml<br/>build, smoke-test, push"] --> reg(["Instance release images<br/>api, web, worker at one release"])
   env -.->|"pull over NAT"| reg
   jump -.->|"bootstrap"| pg
   logs["Log Analytics, alerts"] -.-> mail(["alert_email"])
@@ -70,8 +70,8 @@ unsubscribe), which the app protects with tokens.
   `NetworkWatcherRG`), which Azure creates with the first VNet unless the
   subscription opted out.
 - **Tools**: Terraform 1.10 or newer, Azure CLI, `jq`.
-- **Margince**: a licence token and the three digest-pinned image references
-  published together by one release of this instance
+- **Margince**: a licence token and one release of this instance, pushed to a
+  public registry
   ([release.md](../../../../docs/release.md)). The bootstrap SQL and
   `margince.example.yaml` come from the pinned `core/` submodule.
 - **TLS certificate** for the host in `public_base_url`, as a PFX file, to
@@ -89,7 +89,7 @@ terraform init -backend-config=backend.hcl
 terraform apply                               # deploy_apps = false
 ```
 
-`terraform.tfvars` needs `image_refs`, `public_base_url`,
+`terraform.tfvars` needs `image_repo`, `release_version`, `public_base_url`,
 `admin_bootstrap_password`, `license_token` and `jumpbox_ssh_public_key`
 (`ssh-keygen -t ed25519`; RSA also works), and usually
 `operator_ip_allowlist` (your public IP, from
@@ -139,10 +139,14 @@ The instance's release builds the api, web and worker images with core's
 instance's units. With the repository variable `REGISTRY` set, it pushes
 them to `<REGISTRY>/<name>/<role>:<v>`
 ([release.md](../../../../docs/release.md)). The instance commit and the core
-version identify the complete images. The release notes and the build artifact
-`margince-images-<v>` list each pushed image with its digest. This Azure module
+version identify the complete images. This Azure module
 neither rebuilds nor republishes them. Do not use the images that core
 publishes: they contain core only, without the instance's units.
+
+The stack runs `<image_repo>/<role>:<release_version>` for all three roles,
+pulled by tag: the references `make deploy` exports
+([deploy.md](../../../../docs/deploy.md)). Core's release guard refuses a set
+whose roles come from different releases (core/docs/deployment.md, "Deploy all three roles at ONE release").
 
 The registry must be public: the stack pulls anonymously and holds no
 registry credentials. Use GitHub Container Registry (`ghcr.io/<org>`) or
@@ -152,11 +156,13 @@ Container Registry is the safer choice.
 
 1. Select one instance release whose pushed platforms (`PLATFORMS`) include
    `linux/amd64`, the default. Container Apps requires that image.
-2. Copy its three digest-pinned references into `image_refs` in
-   `terraform.tfvars`. Do not combine roles from different releases.
+2. Set `image_repo` (`<REGISTRY>/<instance name>`, the `REGISTRY` the release
+   used) and `release_version` (the release, for example `v1.4.0`) in
+   `terraform.tfvars`. They serve the first apply (step 5); every later release
+   ships with `make deploy` (Section 7).
 3. Run `terraform apply -var deploy_apps=true` (step 5 the first time). The
-   Container Apps retain the supplied `@sha256:` references unchanged; api,
-   worker and web move together.
+   Container Apps run the three images of that release; api, worker and web
+   move together.
 
 ## 4. Upload `margince.yaml` (once)
 
@@ -212,9 +218,29 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 
 ## 7. Releases
 
-Follow Section 3 for each new version: cut an instance release, copy its three
-digest-pinned references into `image_refs`, then run `terraform apply`
-from the jumpbox or an allowlisted machine.
+Ship every release after the first with `make deploy`, as on the light
+stacks. The template's `hook` adapter runs this directory's `hooks/`
+([deploy.md](../../../../docs/deploy.md)):
+
+| Step | Hook |
+|---|---|
+| `preflight` | Records the running release, plans `image_repo` and the new `release_version` with `deploy_apps=true`; changes nothing |
+| `apply` | Applies exactly that plan; all three roles move in one apply |
+| `verify` | Waits until `/readyz` answers 200 and `/v1/auth/capabilities` reports the new release (`VERIFY_TIMEOUT`, default 900 seconds) |
+| `rollback` | After a failed `apply` or `verify`: plans and applies the recorded release |
+
+1. In `instance.yaml`, set the environment's adapter to `hook`, for example
+   `production: { adapter: hook }`.
+2. Copy `hooks/` to `deploy/<env>/hooks/` in the instance, and export
+   `TERRAFORM_DIR` as the path of this directory (the default is the
+   directory that holds `hooks/`).
+3. On the jumpbox or an allowlisted machine where `terraform init` has run here, cut the release and
+   deploy it:
+
+   ```sh
+   make release VERSION=<v>                   # wait until release.yml has pushed the images
+   make deploy ENV=production VERSION=<v>
+   ```
 
 ## Sign-in
 
@@ -265,7 +291,8 @@ uses it.
 | Variable | Default | Purpose |
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the gateway serves |
-| `image_refs` | required | Digest-pinned api, worker and web references from one instance release, in a public registry |
+| `image_repo` | required | `<REGISTRY>/<instance name>` of the instance release, in a public registry |
+| `release_version` | required | The release to run for api, worker and web; `make deploy` sets it |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `jumpbox_ssh_public_key` | required | SSH key for the jumpbox |
@@ -359,9 +386,8 @@ Microsoft recommends General Purpose for production Postgres:
   to `false` and apply before `terraform destroy`.
 - **Image source**: the instance's `release.yml` builds, smoke-tests and
   publishes all three roles, core plus the instance's units. This stack only
-  consumes their digest-pinned references, pulled anonymously from a public
-  registry; no Container App holds registry credentials.
-- **Images**: every Container App uses the supplied `@sha256:` reference;
+  runs them by release tag, pulled anonymously from a public registry; no Container App holds registry credentials.
+- **Images**: every Container App runs `<image_repo>/<role>:<release_version>`;
   tasks pull over the NAT gateway at revision start.
 - **Storage key**: Azure Files SMB mounts need the account key, which is in
   state and in the environment's storage configuration. Rotate it with the

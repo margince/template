@@ -12,11 +12,8 @@ mock_provider "random" {}
 mock_provider "time" {}
 
 variables {
-  image_refs = {
-    api    = "source.example/margince/api:1970.42@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  }
+  image_repo               = "ghcr.io/acme/margince-default"
+  release_version          = "v1.4.0"
   public_base_url          = "https://crm.example.com"
   admin_bootstrap_password = "change-me-before-first-boot"
   license_token            = "test-licence"
@@ -197,12 +194,12 @@ run "full_apply_with_apps_and_gateway" {
   }
   assert {
     condition = (
-      local.images == var.image_refs &&
-      azurerm_container_app.api[0].template[0].container[0].image == var.image_refs.api &&
-      azurerm_container_app.api[0].template[0].container[1].image == var.image_refs.web &&
-      azurerm_container_app.worker[0].template[0].container[0].image == var.image_refs.worker
+      azurerm_container_app.api[0].template[0].container[0].image == "ghcr.io/acme/margince-default/api:v1.4.0" &&
+      azurerm_container_app.api[0].template[0].container[1].image == "ghcr.io/acme/margince-default/web:v1.4.0" &&
+      azurerm_container_app.worker[0].template[0].container[0].image == "ghcr.io/acme/margince-default/worker:v1.4.0" &&
+      output.release_version == "v1.4.0"
     )
-    error_message = "Azure must deploy the three digest-pinned references supplied by the instance release unchanged."
+    error_message = "Azure runs api, worker and web at one release, by tag: <image_repo>/<role>:<release_version>."
   }
   assert {
     condition     = contains(keys(azurerm_monitor_metric_alert.this), "waf-blocked-requests") && contains(keys(local.diagnostic_settings), "appgw")
@@ -320,16 +317,20 @@ run "waf_block_mode" {
   }
 }
 
-run "image_refs_must_be_digest_pinned" {
+run "release_version_must_be_a_release" {
   command = plan
   variables {
-    image_refs = {
-      api    = "source.example/margince/api:latest"
-      worker = "source.example/margince/worker:1970.42@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      web    = "source.example/margince/web:1970.42@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    }
+    release_version = "latest"
   }
-  expect_failures = [var.image_refs]
+  expect_failures = [var.release_version]
+}
+
+run "image_repo_must_name_a_registry" {
+  command = plan
+  variables {
+    image_repo = "margince-default/api:v1.4.0"
+  }
+  expect_failures = [var.image_repo]
 }
 
 run "images_are_pulled_anonymously" {

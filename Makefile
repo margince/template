@@ -471,6 +471,7 @@ test-scripts: ## The staging scripts' own tests
 	  else echo "aio-install.test.ps1: skipped (pwsh is not installed; CI runs it)"; fi
 	@bash scripts/deploy/host/render.test.sh
 	@bash scripts/deploy/host.test.sh
+	@bash scripts/deploy/standard-hooks.test.sh
 	@bash scripts/deploy/host/bootstrap.test.sh
 	@$(MAKE) test-cli
 

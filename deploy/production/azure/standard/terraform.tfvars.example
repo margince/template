@@ -5,15 +5,12 @@
 # MARGINCE_PUBLIC_BASE_URL: the canonical external scheme and host.
 public_base_url = "https://crm.example.com"
 
-# Copy the digest-pinned image references from one release of this instance:
-# the release notes list them (docs/release.md). The registry is public
-# (for example ghcr.io/<org> or docker.io/<org>); the stack pulls anonymously.
-# Keep all three on the same release; Terraform does not build images.
-image_refs = {
-  api    = "<registry>/<instance-name>/api:<version>@sha256:<digest>"
-  worker = "<registry>/<instance-name>/worker:<version>@sha256:<digest>"
-  web    = "<registry>/<instance-name>/web:<version>@sha256:<digest>"
-}
+# One release of this instance (docs/release.md): the stack runs
+# <image_repo>/<role>:<release_version> for api, worker and web. The registry
+# is public (for example ghcr.io/<org> or docker.io/<org>); the stack pulls
+# anonymously. For the first apply only: `make deploy` sets both afterwards.
+image_repo      = "ghcr.io/<org>/<instance-name>"
+release_version = "v1.0.0"
 
 # Licence token issued for this installation.
 license_token = "<licence token>"
