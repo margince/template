@@ -114,10 +114,12 @@ pulled by tag: the references `make deploy` exports
 whose roles come from different releases (core/docs/deployment.md, "Deploy all three roles at ONE release").
 
 The registry must be public: the stack pulls anonymously and holds no
-registry credentials. Use GitHub Container Registry (`ghcr.io/<org>`) or
-Docker Hub (`docker.io/<org>`). Docker Hub limits anonymous pulls per IP
-address, and the NAT gateway's addresses count for every task, so GitHub
-Container Registry is the safer choice.
+registry credentials. Use GitHub Container Registry (`REGISTRY=ghcr.io/<org>`):
+anonymous pulls carry no per-address limit, and the images keep the
+template's `<name>/<role>` names. Docker Hub is the public mirror only
+(`MIRROR_REGISTRY`, [release.md](../../../../docs/release.md#5-repository-settings)):
+it allows one path level under a namespace, and it limits anonymous pulls per
+IP address, which every task behind the NAT gateway shares.
 
 1. Select one instance release whose pushed platforms (`PLATFORMS`) include
    `linux/amd64`, the default. Container Apps requires that image.

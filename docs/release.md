@@ -110,9 +110,11 @@ without demo data. Someone with admin rights on the repository can set:
 
 | Setting | Kind | Default | Effect |
 |---|---|---|---|
-| `REGISTRY` | variable | unset | The image name prefix, for example `docker.io/acme` or `registry.example.com/acme`. It must start with the registry host. Unset: the images are not pushed. |
+| `REGISTRY` | variable | unset | The image name prefix, for example `ghcr.io/acme` or `registry.example.com/acme`. It must start with the registry host. Unset: the images are not pushed. The cloud stacks pull from it, so use a public GitHub Container Registry (`ghcr.io/<org>`). |
 | `REGISTRY_USERNAME` | secret | none | The user name for the registry login. |
-| `REGISTRY_PASSWORD` | secret | none | The password or token for the registry login. Never printed. |
+| `REGISTRY_PASSWORD` | secret | none | The password or token for the registry login. Never printed. For `ghcr.io`, leave both registry secrets unset: the workflow logs in with its own token (`packages: write`). |
+| `MIRROR_REGISTRY` | variable | unset | A public mirror, for example `docker.io/acme`: after the push, every image is copied there (all platforms, the same digests) as `<MIRROR_REGISTRY>/<name>-<role>:<v>`, because Docker Hub allows one path level under a namespace. The release notes list the mirrored images. Unset: no mirror. |
+| `MIRROR_REGISTRY_USERNAME`, `MIRROR_REGISTRY_PASSWORD` | secret | none | The mirror login; for Docker Hub, the user name and an access token with write access. Never printed. |
 | `PLATFORMS` | variable | `linux/amd64` | Comma-separated platforms of the pushed images, for example `linux/amd64,linux/arm64`. |
 | `DATASET_REPOSITORY` | variable | unset | The demo dataset repository that the desktop workflows check out and seed. |
 | `DATASET_DEPLOY_KEY` | secret | unset | An SSH key with read access to `DATASET_REPOSITORY`. Without it or the variable, the bundles ship without demo data. |
@@ -129,6 +131,11 @@ The image repository is the instance's `name` from `instance.yaml`, with
 |---|---|
 | unset | `<name>/api`, `<name>/web`, `<name>/worker` |
 | `registry.example.com/acme` | `registry.example.com/acme/<name>/api`, `/web`, `/worker` |
+| `ghcr.io/acme`, with `MIRROR_REGISTRY=docker.io/acme` | `ghcr.io/acme/<name>/api`, `/web`, `/worker`, `/all-in-one`; mirrored as `docker.io/acme/<name>-api`, `-web`, `-worker`, `-all-in-one` |
+
+A package that GitHub Container Registry creates on the first push is
+private. Make each one public once (the package's settings, Change
+visibility), so the cloud stacks can pull anonymously.
 
 `REGISTRY` is read from the environment of `make package`, `make smoke`,
 `make local-up`, and `make deploy`; it is not stored in `instance.yaml`.

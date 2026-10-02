@@ -11,7 +11,7 @@ acm_certificate_arn = "arn:aws:acm:eu-central-1:123456789012:certificate/0000000
 
 # One release of this instance (docs/release.md): the stack runs
 # <image_repo>/<role>:<release_version> for api, worker and web. The registry
-# is public (for example ghcr.io/<org> or docker.io/<org>); the stack pulls
+# is public GitHub Container Registry (ghcr.io/<org>); the stack pulls
 # anonymously. For the first apply only: `make deploy` sets both afterwards.
 image_repo      = "ghcr.io/<org>/<instance-name>"
 release_version = "v1.0.0"
