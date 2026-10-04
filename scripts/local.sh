@@ -54,7 +54,7 @@ say() { printf 'local: %s\n' "$*"; }
 
 # The variables render.sh and compose would read from this shell instead of
 # the files local.sh writes.
-unset MARGINCE_DSN MARGINCE_REDIS MARGINCE_OWNER_DSN HOST_DOMAIN API_REPLICAS WORKER_REPLICAS AUTH_RATE_LIMIT_PER_MINUTE COMPOSE_PROFILES
+unset MARGINCE_DSN MARGINCE_REDIS MARGINCE_OWNER_DSN HOST_DOMAIN API_REPLICAS WORKER_REPLICAS AUTH_RATE_LIMIT_PER_MINUTE COMPOSE_PROFILES CONFIG_SHA256
 unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES
 
 name="$(instance_get name)" || die "local: cannot read name from instance.yaml"

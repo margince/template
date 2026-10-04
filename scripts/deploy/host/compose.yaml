@@ -92,6 +92,10 @@ x-logging: &logging
 x-app: &app
   restart: unless-stopped
   logging: *logging
+  # The SHA-256 of config/margince.yaml: a changed configuration changes the
+  # label, and compose recreates the service, which reads the file at start.
+  labels:
+    com.margince.config-sha256: ${CONFIG_SHA256:?CONFIG_SHA256 is not set}
   env_file:
     - path: ../../shared/data.env
       format: raw

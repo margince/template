@@ -146,6 +146,19 @@ else
   fail "compose.yaml, Caddyfile, db-init.sh and gen-env.sh are copied unchanged"
 fi
 if cmp -s "$OUT/config/margince.yaml" "$INST/deploy/prod/config/margince.yaml"; then ok "config/margince.yaml comes from DEPLOY_DIR"; else fail "config/margince.yaml comes from DEPLOY_DIR"; fi
+
+# CONFIG_SHA256 labels the api and worker, so a configuration-only change
+# recreates them: they read config/margince.yaml at start.
+sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+CONFIG_SHA="$(sha_of "$INST/deploy/prod/config/margince.yaml")"
+if grep -qxF "CONFIG_SHA256=$CONFIG_SHA" "$OUT/compose.env"; then ok "compose.env has CONFIG_SHA256, the SHA-256 of config/margince.yaml"; else fail "compose.env has CONFIG_SHA256, the SHA-256 of config/margince.yaml: $(grep '^CONFIG_SHA256=' "$OUT/compose.env" || true)"; fi
+cp "$INST/deploy/prod/config/margince.yaml" "$TMP/margince.yaml.orig"
+printf 'mcp:\n  connector_enabled: true\n' >> "$INST/deploy/prod/config/margince.yaml"
+OUT_CFG="$SRV/releases/config-changed"
+rc="$(render "$OUT_CFG")"
+cp "$TMP/margince.yaml.orig" "$INST/deploy/prod/config/margince.yaml"
+changed="$(sed -n 's/^CONFIG_SHA256=//p' "$OUT_CFG/compose.env" 2>/dev/null || true)"
+if [ "$rc" = 0 ] && [ -n "$changed" ] && [ "$changed" != "$CONFIG_SHA" ]; then ok "a changed config/margince.yaml changes CONFIG_SHA256"; else fail "a changed config/margince.yaml changes CONFIG_SHA256 (rc=$rc)"; fi
 if cmp -s "$R1/shared/db-bootstrap.sql" "$INST/core/scripts/deploy/db-bootstrap.sql"; then ok "db-bootstrap.sql comes from core"; else fail "db-bootstrap.sql comes from core"; fi
 no_secret_printed "a successful render"
 
@@ -545,6 +558,11 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   else
     fail "docker compose config -q passes with compose.env when a secret starts with a quote: $(cat "$TMP/out")"
   fi
+  labelled="$(dc -f "$OUT/compose.yaml" --env-file "$OUT/compose.env" config --format json 2>/dev/null | CONFIG_SHA="$CONFIG_SHA" python3 -c '
+import json, os, sys
+svcs = json.load(sys.stdin)["services"]
+print(" ".join(sorted(n for n, s in svcs.items() if (s.get("labels") or {}).get("com.margince.config-sha256") == os.environ["CONFIG_SHA"])))' || true)"
+  if [ "$labelled" = "api worker" ]; then ok "the api and worker, and no other service, carry the config-sha256 label"; else fail "the api and worker, and no other service, carry the config-sha256 label: '$labelled'"; fi
   services="$(dc -f "$OUT/compose.yaml" --env-file "$OUT/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"
   if [ "$services" = "api blobs-init caddy nginx postgres redis web worker " ]; then ok "a local-data release runs postgres and redis"; else fail "a local-data release runs postgres and redis: $services"; fi
   services="$(dc -f "$OUT3/compose.yaml" --env-file "$OUT3/compose.env" config --services 2>/dev/null | sort | tr '\n' ' ' || true)"

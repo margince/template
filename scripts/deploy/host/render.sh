@@ -35,8 +35,13 @@
 #   - MARGINCE_BLOBSTORE_PATH=/app/data/blobs (the default file store), unless
 #     secrets lists it or MARGINCE_BLOBSTORE_ENDPOINT;
 #   - INSTANCE_NAME, IMAGE_API, IMAGE_WEB, IMAGE_WORKER, HOST_DOMAIN,
-#     API_REPLICAS, WORKER_REPLICAS, AUTH_RATE_LIMIT_PER_MINUTE, COMPOSE_PROFILES.
+#     API_REPLICAS, WORKER_REPLICAS, AUTH_RATE_LIMIT_PER_MINUTE, COMPOSE_PROFILES,
+#     CONFIG_SHA256.
 # compose.env holds the last group only.
+#
+# CONFIG_SHA256 is the SHA-256 of config/margince.yaml. compose.yaml labels the
+# api and worker with it, so a deployment that changes only the configuration
+# recreates both: they read the file at start.
 #
 # release/compose.yaml is the template unchanged, except when secrets lists
 # MARGINCE_BLOBSTORE_ENDPOINT (S3 or compatible): then the blocks between the
@@ -66,7 +71,7 @@ BOOTSTRAP_SQL="$CORE/scripts/deploy/db-bootstrap.sql"
 
 # The names render.sh writes itself. A secret of the same name would be
 # written twice, and the later line would silently win.
-GENERATED="INSTANCE_NAME IMAGE_API IMAGE_WEB IMAGE_WORKER HOST_DOMAIN API_REPLICAS WORKER_REPLICAS AUTH_RATE_LIMIT_PER_MINUTE COMPOSE_PROFILES"
+GENERATED="INSTANCE_NAME IMAGE_API IMAGE_WEB IMAGE_WORKER HOST_DOMAIN API_REPLICAS WORKER_REPLICAS AUTH_RATE_LIMIT_PER_MINUTE COMPOSE_PROFILES CONFIG_SHA256"
 
 out="${1:-}"
 [ -n "$out" ] || die "render: pass the output directory: bash scripts/deploy/host/render.sh <out-dir>"
@@ -161,6 +166,13 @@ shr="$out/shared"
 mkdir -p "$rel/config" "$rel/nginx" "$shr/caddy"
 chmod 755 "$out" "$rel" "$rel/config" "$rel/nginx" "$shr" "$shr/caddy"
 
+# sha256_of <file> — the file's SHA-256, lowercase hexadecimal.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+}
+config_sha="$(sha256_of "$DEPLOY_DIR/config/margince.yaml")"
+[ -n "$config_sha" ] || die "render: cannot compute the SHA-256 of $DEPLOY_DIR/config/margince.yaml"
+
 # generated_lines — the variables render.sh sets itself, NAME=value.
 generated_lines() {
   printf '%s=%s\n' \
@@ -172,7 +184,8 @@ generated_lines() {
     API_REPLICAS "$api_replicas" \
     WORKER_REPLICAS "$worker_replicas" \
     AUTH_RATE_LIMIT_PER_MINUTE "$auth_rate" \
-    COMPOSE_PROFILES "$profiles"
+    COMPOSE_PROFILES "$profiles" \
+    CONFIG_SHA256 "$config_sha"
 }
 
 (

@@ -246,7 +246,7 @@ checked-out `core/`, it skips that comparison. To bump the images:
 |---|---|
 | `host.env` | `KEY=VALUE` lines, read as text and never executed. Blank lines and `#` comments are skipped, one pair of surrounding quotes is removed, and the last line of a key wins. |
 | `secrets` | The names of the environment variables written into the release `.env`, one per line. `make deploy` reads each value from its own environment. Never write a value in this file. |
-| `config/margince.yaml` | The installation configuration, mounted read-only into `api` and `worker`. It is read once, at the first start against an empty database; the application's Settings change it afterwards. See `core/config/margince.example.yaml`. |
+| `config/margince.yaml` | The installation configuration, mounted read-only into `api` and `worker`. Its SHA-256 (`CONFIG_SHA256` in `compose.env`) labels both services, so a deployment that changes only this file recreates them. It is read once, at the first start against an empty database; the application's Settings change it afterwards. See `core/config/margince.example.yaml`. |
 
 | `host.env` key | Required | Rule |
 |---|---|---|
@@ -259,7 +259,8 @@ checked-out `core/`, it skips that comparison. To bump the images:
 A name in `secrets` must match `^[A-Z_][A-Z0-9_]*$` and have a value without a
 line break. It must not be one the adapter sets itself: `INSTANCE_NAME`,
 `IMAGE_API`, `IMAGE_WEB`, `IMAGE_WORKER`, `HOST_DOMAIN`, `API_REPLICAS`,
-`WORKER_REPLICAS`, `AUTH_RATE_LIMIT_PER_MINUTE`, `COMPOSE_PROFILES`.
+`WORKER_REPLICAS`, `AUTH_RATE_LIMIT_PER_MINUTE`, `COMPOSE_PROFILES`,
+`CONFIG_SHA256`.
 
 ### 5.3 Credentials
 
