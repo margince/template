@@ -12,7 +12,8 @@ mock_provider "random" {}
 mock_provider "time" {}
 
 variables {
-  release_version          = "v0.3.0"
+  image_repo               = "ghcr.io/acme/margince-default"
+  release_version          = "v1.4.0"
   public_base_url          = "https://crm.example.com"
   admin_bootstrap_password = "change-me-before-first-boot"
   license_token            = "test-licence"
@@ -46,8 +47,8 @@ run "first_apply_without_apps" {
     error_message = "Postgres has auto-grow and Entra authentication on."
   }
   assert {
-    condition     = length(azurerm_management_lock.this) == 5
-    error_message = "Postgres, storage, Key Vault, ACR and the Recovery Services vault are locked."
+    condition     = length(azurerm_management_lock.this) == 4
+    error_message = "Postgres, storage, Key Vault and the Recovery Services vault are locked."
   }
   assert {
     condition = (
@@ -77,12 +78,10 @@ run "first_apply_without_apps" {
   }
   assert {
     condition = (
-      !azurerm_container_registry.this.public_network_access_enabled &&
-      one(azurerm_container_registry.this.network_rule_set).default_action == "Deny" &&
       length(azurerm_storage_account.this.customer_managed_key) == 1 &&
       length(azurerm_postgresql_flexible_server.this.customer_managed_key) == 1
     )
-    error_message = "The registry has no public endpoint without operator_ip_allowlist; storage and Postgres use the customer-managed key."
+    error_message = "Storage and Postgres use the customer-managed key."
   }
 }
 
@@ -115,14 +114,6 @@ run "full_apply_with_apps_and_gateway" {
     override_during = plan
     values = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/margince/providers/Microsoft.Network/applicationGatewayWebApplicationFirewallPolicies/margince-waf"
-    }
-  }
-  override_resource {
-    target          = azurerm_container_registry.this
-    override_during = plan
-    values = {
-      id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/margince/providers/Microsoft.ContainerRegistry/registries/marginceabcdeacr"
-      login_server = "marginceabcdeacr.azurecr.io"
     }
   }
   override_resource {
@@ -202,11 +193,13 @@ run "full_apply_with_apps_and_gateway" {
     error_message = "The apps get no Entra app settings; sign-in apps are configured in Margince under Settings."
   }
   assert {
-    condition = alltrue([
-      for role in ["api", "worker", "web"] :
-      local.images[role] == "marginceabcdeacr.azurecr.io/margince-default/${role}:v0.3.0"
-    ]) && azurerm_container_app.api[0].template[0].container[0].image == local.images.api && azurerm_container_app.api[0].template[0].container[1].image == local.images.web && azurerm_container_app.worker[0].template[0].container[0].image == local.images.worker
-    error_message = "Images are <registry>/<instance_name>/<role>:<release_version>."
+    condition = (
+      azurerm_container_app.api[0].template[0].container[0].image == "ghcr.io/acme/margince-default/api:v1.4.0" &&
+      azurerm_container_app.api[0].template[0].container[1].image == "ghcr.io/acme/margince-default/web:v1.4.0" &&
+      azurerm_container_app.worker[0].template[0].container[0].image == "ghcr.io/acme/margince-default/worker:v1.4.0" &&
+      output.release_version == "v1.4.0"
+    )
+    error_message = "Azure runs api, worker and web at one release, by tag: <image_repo>/<role>:<release_version>."
   }
   assert {
     condition     = contains(keys(azurerm_monitor_metric_alert.this), "waf-blocked-requests") && contains(keys(local.diagnostic_settings), "appgw")
@@ -324,10 +317,106 @@ run "waf_block_mode" {
   }
 }
 
+run "api_trusts_only_the_edge" {
+  command = plan
+
+  assert {
+    condition = (
+      one([for e in local.api_env : e.value if e.name == "MARGINCE_TRUSTED_PROXIES"]) == "127.0.0.1/32" &&
+      length([for e in local.worker_env : e if e.name == "MARGINCE_TRUSTED_PROXIES"]) == 0
+    )
+    error_message = "The api trusts X-Forwarded-For from the edge in its replica (127.0.0.1) only, so core keys its per-IP limits on the client."
+  }
+}
+
+run "setup_job_replaces_the_jumpbox_steps" {
+  command = plan
+
+  assert {
+    condition = (
+      azurerm_container_app_job.setup.template[0].init_container[0].name == "prepare" &&
+      azurerm_container_app_job.setup.template[0].init_container[0].image == local.images.api &&
+      azurerm_container_app_job.setup.template[0].container[0].name == "database" &&
+      azurerm_container_app_job.setup.template[0].container[0].image == local.setup_postgres_image &&
+      azurerm_container_app_job.setup.replica_retry_limit == 0
+    )
+    error_message = "prepare (the api image) runs first; database (the pinned Postgres image) runs the bootstrap once, without retries."
+  }
+
+  assert {
+    condition = (
+      local.setup_env.MARGINCE_CONFIG_B64 == filebase64("${path.module}/../../config/margince.yaml") &&
+      local.setup_env.BOOTSTRAP_SQL_B64 == filebase64("${path.module}/../../../../core/scripts/deploy/db-bootstrap.sql") &&
+      local.setup_env.BOOTSTRAP_SCRIPT_B64 == filebase64("${path.module}/scripts/bootstrap-db.sh") &&
+      file("${path.module}/scripts/bootstrap-db.sh") == file("${path.module}/../../aws/standard/scripts/bootstrap-db.sh") &&
+      local.setup_env.BOOTSTRAP_PG_ADMIN_USER == "pgadmin"
+    )
+    error_message = "The setup job writes the instance's margince.yaml and runs core's SQL through the same bootstrap-db.sh as AWS, as pgadmin."
+  }
+
+  assert {
+    condition = (
+      azurerm_container_app_environment_storage.config_setup.access_mode == "ReadWrite" &&
+      azurerm_container_app_environment_storage.config.access_mode == "ReadOnly" &&
+      toset([for s in azurerm_container_app_job.setup.secret : s.name]) == toset(["pg-admin-password", "owner-password", "app-password"])
+    )
+    error_message = "Only the setup job writes the config share and holds the Postgres admin password; the apps mount the share read-only."
+  }
+}
+
 run "release_version_must_be_a_release" {
   command = plan
   variables {
     release_version = "latest"
   }
   expect_failures = [var.release_version]
+}
+
+run "image_repo_must_name_a_registry" {
+  command = plan
+  variables {
+    image_repo = "margince-default/api:v1.4.0"
+  }
+  expect_failures = [var.image_repo]
+}
+
+run "images_are_pulled_anonymously" {
+  command = plan
+  variables {
+    deploy_apps = true
+  }
+  override_resource {
+    target          = azurerm_container_app_environment.this
+    override_during = plan
+    values = {
+      id                = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/margince/providers/Microsoft.App/managedEnvironments/margince-env"
+      default_domain    = "example-1234.westeurope.azurecontainerapps.io"
+      static_ip_address = "10.20.2.10"
+    }
+  }
+  assert {
+    condition     = length(azurerm_container_app.api[0].registry) == 0 && length(azurerm_container_app.worker[0].registry) == 0
+    error_message = "The registry is public: no Container App may carry registry credentials."
+  }
+}
+
+run "jumpbox_is_operator_only" {
+  command = plan
+  assert {
+    condition = (
+      azurerm_linux_virtual_machine.jumpbox.size == "Standard_B2ms" &&
+      alltrue([for c in azurerm_network_interface.jumpbox.ip_configuration : c.public_ip_address_id == null]) &&
+      !anytrue([for r in azurerm_network_security_group.ops.security_rule : r.direction == "Inbound" && r.access == "Allow" && r.source_address_prefix != "168.63.129.16"])
+    )
+    error_message = "The jumpbox has no public IP and no inbound beyond Bastion Developer SSH."
+  }
+  assert {
+    condition = (
+      strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "postgresql-client") &&
+      strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "cifs-utils") &&
+      !strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "actions-runner") &&
+      !strcontains(base64decode(azurerm_linux_virtual_machine.jumpbox.custom_data), "acr login")
+    )
+    error_message = "cloud-init installs the operator toolchain only: no release runner and no registry login."
+  }
 }

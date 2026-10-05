@@ -133,6 +133,11 @@ jobs:
   images:
     needs: [version, full-check]
     runs-on: ubuntu-latest
+    ## packages: write lets the workflow's own token push to GitHub Container
+    ## Registry when REGISTRY is ghcr.io and no REGISTRY_PASSWORD is set.
+    permissions:
+      contents: read
+      packages: write
     outputs:
       core: ${{ steps.core.outputs.core }}
     env:
@@ -226,6 +231,7 @@ jobs:
           PLATFORMS: ${{ vars.PLATFORMS || 'linux/amd64' }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AIO_DATASET: ${{ steps.dataset.outputs.available == 'true' && '.dataset' || '' }}
         run: |
           set -euo pipefail
@@ -234,6 +240,12 @@ jobs:
           ## exit of this step, the failed push included.
           host="${REGISTRY%%/*}"
           trap 'docker logout "$host" >/dev/null 2>&1 || true' EXIT
+          ## GitHub Container Registry without a stored secret: the workflow's
+          ## own short-lived token (packages: write above).
+          if [ "$host" = ghcr.io ] && [ -z "$REGISTRY_PASSWORD" ]; then
+            REGISTRY_USERNAME="$GITHUB_ACTOR"
+            REGISTRY_PASSWORD="$GHCR_TOKEN"
+          fi
           printf '%s' "$REGISTRY_PASSWORD" \
             | docker login "$host" -u "$REGISTRY_USERNAME" --password-stdin
           metadata="$RUNNER_TEMP/bake-metadata.json"
@@ -251,6 +263,44 @@ jobs:
           DATASET="$AIO_DATASET" make aio VERSION="$VERSION" PUSH=1 METADATA_FILE="$aio_metadata"
           digest="$(jq -er '."containerimage.digest"' "$aio_metadata")"
           echo "${repo}/all-in-one:${VERSION}@${digest}" >> "$list"
+
+      ## The public mirror (docs/release.md, Section 5): the pushed images
+      ## copied, every platform and the same digests, to MIRROR_REGISTRY. Docker
+      ## Hub allows one path level under a namespace, so a mirrored image is
+      ## <MIRROR_REGISTRY>/<name>-<role>:<v>. The stacks pull from REGISTRY;
+      ## the mirror is for discovery.
+      - name: Mirror the images
+        if: vars.REGISTRY != '' && vars.MIRROR_REGISTRY != ''
+        shell: bash
+        env:
+          MIRROR_REGISTRY: ${{ vars.MIRROR_REGISTRY }}
+          MIRROR_REGISTRY_USERNAME: ${{ secrets.MIRROR_REGISTRY_USERNAME }}
+          MIRROR_REGISTRY_PASSWORD: ${{ secrets.MIRROR_REGISTRY_PASSWORD }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          src_host="${REGISTRY%%/*}"
+          mirror_host="${MIRROR_REGISTRY%%/*}"
+          trap 'docker logout "$src_host" >/dev/null 2>&1 || true; docker logout "$mirror_host" >/dev/null 2>&1 || true' EXIT
+          if [ "$src_host" = ghcr.io ] && [ -z "$REGISTRY_PASSWORD" ]; then
+            REGISTRY_USERNAME="$GITHUB_ACTOR"
+            REGISTRY_PASSWORD="$GHCR_TOKEN"
+          fi
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$src_host" -u "$REGISTRY_USERNAME" --password-stdin
+          printf '%s' "$MIRROR_REGISTRY_PASSWORD" | docker login "$mirror_host" -u "$MIRROR_REGISTRY_USERNAME" --password-stdin
+          source scripts/lib.sh
+          name="$(instance_get name)"
+          mirror="$RUNNER_TEMP/image-list/mirror.txt"
+          : > "$mirror"
+          while IFS= read -r ref; do
+            image="${ref%@*}"; image="${image%:*}"; role="${image##*/}"
+            digest="${ref##*@}"
+            target="${MIRROR_REGISTRY%/}/${name}-${role}:${VERSION}"
+            docker buildx imagetools create --tag "$target" "$ref"
+            echo "${target}@${digest}" >> "$mirror"
+          done < "$RUNNER_TEMP/image-list/images.txt"
 
       - name: No registry
         if: vars.REGISTRY == ''
@@ -271,7 +321,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: margince-images-${{ needs.version.outputs.version }}
-          path: ${{ runner.temp }}/image-list/images.txt
+          path: ${{ runner.temp }}/image-list/
           if-no-files-found: error
 
       - name: Install scripts for testers
@@ -399,6 +449,12 @@ jobs:
             echo "## Images"
             echo
             sed '/^$/d; s/^/- /' image-list/images.txt
+            if [ -s image-list/mirror.txt ]; then
+              echo
+              echo "Docker Hub mirror (the same images):"
+              echo
+              sed '/^$/d; s/^/- /' image-list/mirror.txt
+            fi
             ## The install scripts pull the pushed all-in-one image. Without a
             ## push, their image name has no registry and a tester's pull would
             ## go to the default public registry, so they are not offered.

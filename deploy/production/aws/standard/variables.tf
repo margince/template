@@ -38,22 +38,24 @@ variable "az_count" {
 }
 
 # ---- Release ------------------------------------------------------------------------
-# Images are <registry>/<instance_name>/<role>:<release_version>, as
-# `make release` or `make package` names them (docs/release.md, Section 6).
-# The ECR repositories are IMMUTABLE (ecs.tf): a released tag never changes.
+# One release of this instance (docs/release.md): release.yml builds api, web
+# and worker with core's Dockerfile and bake definition and pushes them as
+# <image_repo>/<role>:<release_version>, the references `make deploy` exports
+# as IMAGE_API, IMAGE_WEB and IMAGE_WORKER. All three roles run at one release
+# and are pulled by tag; core's release guard refuses a mixed set
+# (core/docs/deployment.md, "Deploy all three roles at ONE release").
 
-variable "instance_name" {
-  description = "The instance's name from instance.yaml (`name`): the image namespace and the ECR repository prefix."
+variable "image_repo" {
+  description = "The image repository of the instance release: <REGISTRY>/<instance name>, the IMAGE_REPO of `make deploy`, for example ghcr.io/acme/margince-default. A public registry: the images are pulled anonymously."
   type        = string
-  default     = "margince-default"
   validation {
-    condition     = can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.instance_name))
-    error_message = "instance_name must match instance.yaml's name format: lowercase letters and digits, separated by single hyphens."
+    condition     = can(regex("^[a-z0-9-]+(\\.[a-z0-9-]+)+(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+$", var.image_repo))
+    error_message = "image_repo must be <registry host>/<path> with no tag or digest, for example ghcr.io/acme/margince-default."
   }
 }
 
 variable "release_version" {
-  description = "The release to deploy for api, worker and web: the VERSION of `make release`, which is also the image tag. Push it before the apply that references it."
+  description = "The release to run for api, worker and web: the VERSION of `make release`, which is the image tag. `make deploy` sets it."
   type        = string
   validation {
     condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
@@ -61,8 +63,20 @@ variable "release_version" {
   }
 }
 
+variable "margince_config_path" {
+  description = "margince.yaml for the config volume. Default: the instance's deploy/production/config/margince.yaml, the file the light stacks use. The setup task writes it on every apply that changes it."
+  type        = string
+  default     = null
+}
+
+variable "bootstrap_sql_path" {
+  description = "Core's db-bootstrap.sql. Default: core/scripts/deploy/db-bootstrap.sql at the pinned core version."
+  type        = string
+  default     = null
+}
+
 variable "cpu_architecture" {
-  description = "Fargate CPU architecture for all three tasks: X86_64 (the linux/amd64 images release.yml builds by default) or ARM64 (set PLATFORMS = \"linux/amd64,linux/arm64\" for the release first)."
+  description = "Fargate CPU architecture for all three tasks: X86_64 or ARM64. The selected instance release must include the matching linux/amd64 or linux/arm64 image variant."
   type        = string
   default     = "X86_64"
   validation {

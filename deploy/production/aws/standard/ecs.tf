@@ -14,134 +14,11 @@ locals {
   }
 }
 
-# Named <instance_name>/<role>, so the images `make release` pushes with
-# REGISTRY set to this account's ECR registry land here unchanged
-# (docs/release.md, Section 6). IMMUTABLE: a released tag can never be
-# silently overwritten; the only way to ship a new image is a new
-# release_version. The Azure standard stack locks its ACR tags the same way. Each repo's own KMS encryption_configuration is what makes each
-# execution role's own UseDataKey grant (iam.tf) meaningful — api/worker
-# under the shared execution role's grant, web under execution_web's own.
-resource "aws_ecr_repository" "api" {
-  name                 = "${var.instance_name}/api"
-  image_tag_mutability = "IMMUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.data.arn
-  }
-  tags = { Name = "${var.name_prefix}-api", Component = "container-registry" }
-}
-
-resource "aws_ecr_repository" "worker" {
-  name                 = "${var.instance_name}/worker"
-  image_tag_mutability = "IMMUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.data.arn
-  }
-  tags = { Name = "${var.name_prefix}-worker", Component = "container-registry" }
-}
-
-resource "aws_ecr_repository" "web" {
-  name                 = "${var.instance_name}/web"
-  image_tag_mutability = "IMMUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.data.arn
-  }
-  tags = { Name = "${var.name_prefix}-web", Component = "container-registry" }
-}
-
-# IMMUTABLE tags mean every push accumulates rather than overwrites — an
-# untagged image (the previous digest, once a tag moves) is dead weight and
-# attack surface (an unpatched image nobody references) with no reason to
-# keep it. `sinceImagePulled` cannot pair with `expire` (it only drives
-# `transition`, per ECR's own lifecycle semantics), so this is the direct
-# `expire untagged after N days` rule rather than a pull-activity-based one.
-#
-# Untagged cleanup alone still leaves every TAGGED (released) image growing
-# forever — IMMUTABLE means a tag is never reused, so nothing ever naturally
-# frees one, unlike a mutable "latest"-style repo where a new push already
-# reclaims the old digest's tag. Rule 2 is the tagged-image half of the same
-# cleanup: keep the most recent 30 releases
-# (rollback material), expire the rest. tagPatternList = ["*"] matches every
-# tag rather than naming release-version tags one at a time, since this
-# stack's release_version tags all follow one format, and every tag in these
-# repositories is a release.
-locals {
-  untagged_expiry_policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Expire untagged images after 14 days"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 14
-        }
-        action = { type = "expire" }
-      },
-      {
-        rulePriority = 2
-        description  = "Keep only the most recent 30 tagged (released) images"
-        selection = {
-          tagStatus      = "tagged"
-          tagPatternList = ["*"]
-          countType      = "imageCountMoreThan"
-          countNumber    = 30
-        }
-        action = { type = "expire" }
-      },
-    ]
-  })
-}
-
-resource "aws_ecr_lifecycle_policy" "api" {
-  repository = aws_ecr_repository.api.name
-  policy     = local.untagged_expiry_policy
-}
-
-resource "aws_ecr_lifecycle_policy" "worker" {
-  repository = aws_ecr_repository.worker.name
-  policy     = local.untagged_expiry_policy
-}
-
-resource "aws_ecr_lifecycle_policy" "web" {
-  repository = aws_ecr_repository.web.name
-  policy     = local.untagged_expiry_policy
-}
-
-# Registry-level, not repository-level, and scoped to only THIS stack's
-# repos: aws_ecr_registry_scanning_configuration is a singleton per
-# account+region — applying an unscoped rule here would silently start
-# billing and scanning every OTHER repo in the account too, not just the
-# three this stack owns. Enhanced scanning (continuous, Inspector-backed)
-# supersedes each repo's own scan_on_push for any repo the filter below
-# matches — it re-scans on every new CVE disclosure, not only at push time,
-# which scan_on_push alone never catches for an image already sitting in the
-# repo. This is a metered feature (Inspector charges per image scanned) on
-# top of the basic scanning this stack shipped with — see README.md.
-resource "aws_ecr_registry_scanning_configuration" "this" {
-  scan_type = "ENHANCED"
-
-  rule {
-    scan_frequency = "CONTINUOUS_SCAN"
-    repository_filter {
-      filter      = "${var.instance_name}/*"
-      filter_type = "WILDCARD"
-    }
-  }
-}
-
-# The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>.
+# The three role images of one instance release, by tag, pulled anonymously
+# from the public registry; the instance's release.yml builds them.
 locals {
   images = {
-    api    = "${aws_ecr_repository.api.repository_url}:${var.release_version}"
-    worker = "${aws_ecr_repository.worker.repository_url}:${var.release_version}"
-    web    = "${aws_ecr_repository.web.repository_url}:${var.release_version}"
+    for role in ["api", "worker", "web"] : role => "${var.image_repo}/${role}:${var.release_version}"
   }
 }
 
@@ -185,6 +62,15 @@ locals {
     { name = "MARGINCE_BLOBSTORE_KMS_KEY_ID", value = aws_kms_key.data.arn },
     { name = "MARGINCE_LOG_FORMAT", value = "json" },
   ]
+
+  # The ALB, in the public subnets, is the api's only proxy and appends the
+  # client to X-Forwarded-For. Trusting its subnets makes core key every
+  # per-IP limit (sign-in, password reset, OIDC, /oauth/token, MCP, public
+  # pages) on that client; unset, every client shares the ALB's buckets
+  # (core docs/reference/configuration.md, MARGINCE_TRUSTED_PROXIES).
+  api_env = concat(local.shared_env, [
+    { name = "MARGINCE_TRUSTED_PROXIES", value = join(",", aws_subnet.public[*].cidr_block) },
+  ])
 
   config_volume_name = "margince-config"
 }
@@ -235,7 +121,7 @@ resource "aws_ecs_task_definition" "api" {
       # worth more than the default to let in-flight requests actually drain
       # rather than being cut off mid-response.
       stopTimeout = 60
-      environment = local.shared_env
+      environment = local.api_env
       secrets     = local.shared_secrets
       mountPoints = [{
         sourceVolume  = local.config_volume_name
@@ -394,7 +280,8 @@ resource "aws_ecs_service" "api" {
 
   tags = { Name = "${var.name_prefix}-api", Component = "compute-api" }
 
-  depends_on = [aws_lb_listener.https]
+  # The database exists and margince.yaml is in place before any task starts.
+  depends_on = [aws_lb_listener.https, terraform_data.setup]
 
   # desired_count is the FLOOR the appautoscaling_target below scales from,
   # not the steady-state value — without this, every apply would fight the
@@ -430,6 +317,9 @@ resource "aws_ecs_service" "worker" {
   lifecycle {
     ignore_changes = [desired_count]
   }
+
+  # The database exists and margince.yaml is in place before any task starts.
+  depends_on = [terraform_data.setup]
 }
 
 # ---- Application Auto Scaling -------------------------------------------------
@@ -521,5 +411,6 @@ resource "aws_ecs_service" "web" {
 
   tags = { Name = "${var.name_prefix}-web", Component = "compute-web" }
 
-  depends_on = [aws_lb_listener.https]
+  # The database exists and margince.yaml is in place before any task starts.
+  depends_on = [aws_lb_listener.https, terraform_data.setup]
 }

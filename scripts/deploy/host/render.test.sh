@@ -503,6 +503,39 @@ rc=0
 ( unset MARGINCE_DSN; MARGINCE_OWNER_DSN=x sh "$SRV/shared/db-init.sh" ) > "$TMP/out" 2>&1 || rc=$?
 if [ "$rc" = 1 ]; then ok "db-init.sh fails without the DSNs"; else fail "db-init.sh fails without the DSNs (rc=$rc)"; fi
 
+# created_with <src> <dest> <docker create args...> — create a container, copy
+# <src> (a directory's contents, or one file) to <dest> in it, and print its id.
+# A copy, not a bind mount: the files live under mktemp's directory, which a
+# Docker engine in a VM (Colima shares only $HOME) or on another host never
+# sees, so a bind mount would show the container an empty directory.
+created_with() {
+  local src="$1" dest="$2" id
+  shift 2
+  id="$(docker create "$@")" || return 1
+  if [ -d "$src" ]; then src="$src/."; fi
+  if ! docker cp "$src" "$id:$dest" >/dev/null; then
+    docker rm -f "$id" >/dev/null 2>&1 || true
+    return 1
+  fi
+  printf '%s' "$id"
+}
+
+# run_with <src> <dest> <docker create args...> — created_with, then run the
+# container in the foreground and return its exit status; the output goes to
+# standard output.
+run_with() {
+  local id rc=0
+  id="$(created_with "$@")" || return 1
+  docker start -a "$id" || rc=$?
+  docker rm -f "$id" >/dev/null 2>&1 || true
+  return "$rc"
+}
+
+# The nginx image reads templates from /etc/nginx/templates, which it does not
+# create; copy a directory that holds it.
+NGINX_TEMPLATES="$TMP/nginx-etc"
+mkdir -p "$NGINX_TEMPLATES/templates"
+
 # route_check — run caddy and nginx on a private Docker network (no internet)
 # with two stand-in upstreams named api and web, both `caddy respond` from the
 # local $CADDY_IMAGE image, and check which one answers each path, the 404 for
@@ -516,11 +549,13 @@ route_check() {
       caddy respond --listen :8080 --body "$c" >/dev/null && started="$started $net-$c"
   done
   # A limit of 2 per minute with a burst of 2: the third request in a row is refused.
-  docker run -d --rm --name "$net-nginx" --network "$net" --network-alias nginx -e AUTH_RATE_LIMIT_PER_MINUTE=2 \
-    -v "$OUT/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro" "$NGINX_IMAGE" >/dev/null \
-    && started="$started $net-nginx"
-  docker run -d --rm --name "$net-front" --network "$net" --network-alias front -e HOST_DOMAIN=http://front \
-    -v "$SRV/shared/caddy:/etc/caddy:ro" "$CADDY_IMAGE" >/dev/null && started="$started $net-front"
+  cp "$OUT/nginx/default.conf.template" "$NGINX_TEMPLATES/templates/default.conf.template"
+  created_with "$NGINX_TEMPLATES" /etc/nginx --name "$net-nginx" --network "$net" --network-alias nginx \
+    -e AUTH_RATE_LIMIT_PER_MINUTE=2 "$NGINX_IMAGE" >/dev/null \
+    && docker start "$net-nginx" >/dev/null && started="$started $net-nginx"
+  created_with "$SRV/shared/caddy" /etc/caddy --name "$net-front" --network "$net" --network-alias front \
+    -e HOST_DOMAIN=http://front "$CADDY_IMAGE" >/dev/null \
+    && docker start "$net-front" >/dev/null && started="$started $net-front"
   # route <path> — the body that answers <path>, or the status for a 404 or 429.
   route() {
     docker run --rm --network "$net" "$CADDY_IMAGE" sh -c \
@@ -577,6 +612,14 @@ print(" ".join(sorted(n for n, s in svcs.items() if (s.get("labels") or {}).get(
   dc -f "$OUT/compose.yaml" --env-file "$OUT/compose.env" config --format json > "$TMP/config.json" 2>/dev/null || true
   if grep -q '"replicas": 3' "$TMP/config.json"; then ok "WORKER_REPLICAS reaches deploy.replicas"; else fail "WORKER_REPLICAS reaches deploy.replicas"; fi
   if grep -q '"image": "registry.example.test/acme/api:v1.0.0"' "$TMP/config.json"; then ok "IMAGE_API names the api image"; else fail "IMAGE_API names the api image"; fi
+  # Core keys its per-IP limits on X-Forwarded-For only from the proxies named
+  # here; the api's only proxy is nginx on the compose network.
+  if sed -n '/^    "api": {/,/^    }/p' "$TMP/config.json" | grep -qF '"MARGINCE_TRUSTED_PROXIES": "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"' \
+      && ! sed -n '/^    "worker": {/,/^    }/p' "$TMP/config.json" | grep -q MARGINCE_TRUSTED_PROXIES; then
+    ok "the api trusts X-Forwarded-For from the compose network only; the worker gets no proxy setting"
+  else
+    fail "the api trusts X-Forwarded-For from the compose network only"
+  fi
   if grep -qF 'fedcba9876543210fedcba9876543210' "$TMP/config.json"; then ok "the app reaches the local database with data.env's password"; else fail "the app reaches the local database with data.env's password"; fi
   # The config output is itself a compose file, so it doubles each $ and
   # JSON-escapes each ".
@@ -699,7 +742,7 @@ print(" ".join(sorted(n for n, s in svcs.items() if (s.get("labels") or {}).get(
   fi
 
   if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
-    if docker run --rm --network none -e HOST_DOMAIN=crm.example.test -v "$SRV/shared/caddy:/etc/caddy:ro" \
+    if run_with "$SRV/shared/caddy" /etc/caddy --network none -e HOST_DOMAIN=crm.example.test \
         "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile > "$TMP/out" 2>&1; then
       ok "caddy validate accepts the Caddyfile"
     else
@@ -709,8 +752,8 @@ print(" ".join(sorted(n for n, s in svcs.items() if (s.get("labels") or {}).get(
     echo "notice: $CADDY_IMAGE is not in the local image store; the Caddyfile validation is skipped"
   fi
   if docker image inspect "$NGINX_IMAGE" >/dev/null 2>&1; then
-    if docker run --rm --network none -e AUTH_RATE_LIMIT_PER_MINUTE=30 \
-        -v "$OUT/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+    cp "$OUT/nginx/default.conf.template" "$NGINX_TEMPLATES/templates/default.conf.template"
+    if run_with "$NGINX_TEMPLATES" /etc/nginx --network none -e AUTH_RATE_LIMIT_PER_MINUTE=30 \
         "$NGINX_IMAGE" nginx -t > "$TMP/out" 2>&1; then
       ok "nginx -t accepts the rendered template"
     else

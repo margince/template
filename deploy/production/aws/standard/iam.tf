@@ -53,7 +53,7 @@ data "aws_iam_policy_document" "ecs_assume" {
 
 resource "aws_iam_role" "execution" {
   name               = "${var.name_prefix}-ecs-execution"
-  description        = "ECS execution role for api and worker; pulls their ECR images, reads their SSM SecureString parameters, writes their CloudWatch Logs."
+  description        = "ECS execution role for api and worker; reads their SSM SecureString parameters, writes their CloudWatch Logs."
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
   tags               = { Name = "${var.name_prefix}-ecs-execution", Component = "security" }
 }
@@ -63,9 +63,8 @@ resource "aws_iam_role" "execution" {
 # logs:CreateLogStream/PutLogEvents with Resource="*" — attaching it
 # alongside the scoped statements below would not narrow anything, since IAM
 # is additive-allow: the broadest grant for an action wins regardless of how
-# tightly a sibling statement names its resources. Every action the managed
-# policy would have granted is granted here instead, scoped to exactly this
-# stack's own repos and log groups.
+# tightly a sibling statement names its resources. Images come from a
+# public registry, so this role needs no ECR or Secrets Manager actions.
 data "aws_iam_policy_document" "execution_extra" {
   # ssm:GetParameters (plural) is the action ECS calls to resolve a task
   # definition's "secrets" entries from Parameter Store. Scoped to exactly the
@@ -75,24 +74,6 @@ data "aws_iam_policy_document" "execution_extra" {
     sid       = "ReadOwnParameters"
     actions   = ["ssm:GetParameters"]
     resources = sort(values(local.task_ssm_parameters))
-  }
-
-  statement {
-    sid     = "PullOwnImages"
-    actions = ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:BatchCheckLayerAvailability"]
-    resources = [
-      aws_ecr_repository.api.arn,
-      aws_ecr_repository.worker.arn,
-    ]
-  }
-
-  # ecr:GetAuthorizationToken cannot be scoped to a repository ARN — ECR
-  # requires Resource="*" for this one action, unlike every pull action
-  # above it (aws-iam skill, ecr.md: "it cannot be scoped to a repository").
-  statement {
-    sid       = "EcrAuth"
-    actions   = ["ecr:GetAuthorizationToken"]
-    resources = ["*"]
   }
 
   # Scoped to exactly the two log groups this role's task definitions write
@@ -107,12 +88,12 @@ data "aws_iam_policy_document" "execution_extra" {
     ]
   }
 
-  # Every SecureString parameter this role reads and every image it pulls is
-  # sealed under the stack's CMK (kms.tf) rather than an AWS-managed key.
+  # Every SecureString parameter this role reads is sealed under the stack's
+  # CMK (kms.tf) rather than an AWS-managed key.
   # SSM decrypts a SecureString with the CALLER's KMS permissions (it calls
   # kms:Decrypt on the execution role's behalf), so without this grant
   # GetParameters fails with an AccessDenied that names the key, not the
-  # parameter. DescribeKey is what ECR calls to validate the key.
+  # parameter.
   statement {
     sid       = "UseDataKey"
     actions   = ["kms:Decrypt", "kms:DescribeKey"]
@@ -138,35 +119,17 @@ resource "aws_iam_role_policy" "execution_extra" {
 # reason aws_iam_role.execution's own comment gives: that managed policy's
 # ECR/logs actions carry Resource="*", which would hand this role pull access
 # to every ECR repo and write access to every log group in the account —
-# strictly broader than the two things web's own task definition actually
-# does (pull its own image, write its own log stream). Scoped statements
-# below grant exactly that instead.
+# strictly broader than the one thing web's own task definition actually does
+# (write its own log stream).
 
 resource "aws_iam_role" "execution_web" {
   name               = "${var.name_prefix}-ecs-execution-web"
-  description        = "ECS execution role for web; pulls its ECR image and writes its CloudWatch Logs only, no SSM parameter access."
+  description        = "ECS execution role for web; writes its CloudWatch Logs only, no SSM parameter access."
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
   tags               = { Name = "${var.name_prefix}-ecs-execution-web", Component = "security" }
 }
 
 data "aws_iam_policy_document" "execution_web_extra" {
-  statement {
-    sid     = "PullOwnImage"
-    actions = ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:BatchCheckLayerAvailability"]
-    resources = [
-      aws_ecr_repository.web.arn,
-    ]
-  }
-
-  # Same reasoning as execution_extra's own EcrAuth statement: this action
-  # cannot be scoped to a repository ARN, full stop, regardless of which
-  # role requests it.
-  statement {
-    sid       = "EcrAuth"
-    actions   = ["ecr:GetAuthorizationToken"]
-    resources = ["*"]
-  }
-
   statement {
     sid     = "WriteOwnLogs"
     actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -175,14 +138,6 @@ data "aws_iam_policy_document" "execution_web_extra" {
     ]
   }
 
-  # web's ECR repo is KMS-encrypted too (ecs.tf) — this is the narrow grant
-  # that lets THIS role decrypt only that image, not the secrets the other
-  # execution role can read.
-  statement {
-    sid       = "UseDataKeyForOwnImage"
-    actions   = ["kms:Decrypt", "kms:DescribeKey"]
-    resources = [aws_kms_key.data.arn]
-  }
 }
 
 resource "aws_iam_role_policy" "execution_web_extra" {
