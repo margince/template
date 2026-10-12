@@ -28,6 +28,12 @@ jobs:
   check:
     name: the full gate
     runs-on: ubuntu-latest
+    ## Node sizes its default heap from the machine's memory: about 2 GB on
+    ## this runner, 4 GB on a 16 GB laptop. Core's frontend `tsc -b` needs
+    ## about 2 GB with the units staged, which exceeds the runner default.
+    ## 4 GB fits the runner's 7 GB and matches a 16 GB laptop.
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
