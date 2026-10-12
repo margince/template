@@ -10,6 +10,15 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AWS_RUN="$ROOT/deploy/production/aws/standard/scripts/run-setup.sh"
 AZ_RUN="$ROOT/deploy/production/azure/standard/scripts/run-setup.sh"
 
+# deploy/ is instance-owned: an instance that replaced the default production
+# environment has no standard stacks, and there is nothing here to test.
+for run in "$AWS_RUN" "$AZ_RUN"; do
+  if [ ! -f "$run" ]; then
+    echo "notice: ${run#"$ROOT"/} is not in this instance; standard-setup.test.sh is skipped"
+    exit 0
+  fi
+done
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FAILURES=0
