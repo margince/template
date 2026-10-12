@@ -1,8 +1,9 @@
 # Margince on AWS
 
 Terraform root module that deploys Margince into your own AWS account, sized
-for a small team (about 40 users). It deploys the images that the template's
-`make release` builds (Section 3), the same flow as the Azure standard stack.
+for a small team (about 40 users). The instance's release builds and publishes
+the images; this module runs the images of one instance release
+on ECS Fargate.
 
 ## What it creates
 
@@ -11,19 +12,45 @@ for a small team (about 40 users). It deploys the images that the template's
 | Edge | Application Load Balancer: the only public entry. TLS 1.2/1.3 with the ACM certificate `acm_certificate_arn`, HTTP to HTTPS redirect, deletion protection, access logs. AWS WAF web ACL (six AWS managed rule groups, two per-IP rate limits), `waf_mode` count or block. See "WAF rollout". |
 | Compute | ECS Fargate cluster: **api** (2 to 4 tasks, CPU autoscaling), **worker** (1 to 3 tasks), **web** (nginx + SPA, 2 tasks). Each has its own security group, task role and least-privilege execution role. |
 | Data | RDS PostgreSQL 16 (Multi-AZ, gp3 with storage autoscaling, 7-day backups, deletion protection, Performance Insights), ElastiCache Valkey 7.2 (two nodes, automatic failover, TLS required, AUTH token), S3 attachment bucket (versioned, SSE-KMS enforced), EFS for `margince.yaml` |
-| Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; ECR, SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
+| Network | VPC with public and private subnets across `az_count` zones, one NAT gateway per zone, VPC endpoints (S3 gateway; SSM, KMS and CloudWatch Logs interface endpoints) restricted to this account, VPC flow logs |
 | Secrets | SSM Parameter Store SecureStrings under `/<name_prefix>/`, one customer-managed KMS key (rotation on) for everything stored at rest |
-| Delivery | ECR repositories `<instance_name>/api|web|worker` (IMMUTABLE tags, enhanced scanning, lifecycle policy), a bootstrap host security group and instance profile |
+| Delivery | The api, web and worker images of one instance release, pulled by release tag over the NAT gateways; a one-off setup task (`setup.tf`) for `margince.yaml` and the database bootstrap |
 | Protection | CloudWatch alarms to a CMK-encrypted SNS topic, `prevent_destroy` on the stateful resources, EFS backup, CloudWatch log groups (30 days) |
 
+```mermaid
+flowchart LR
+  users(["Users, any network"]) -->|"HTTPS"| alb["ALB + AWS WAF<br/>ACM TLS, WAF web ACL"]
+  subgraph vpc["VPC: private subnets, and VPC endpoints for S3, SSM, KMS, Logs"]
+    web["web<br/>nginx, SPA"]
+    api["api"]
+    worker["worker"]
+    pg[("RDS PostgreSQL 16<br/>Multi-AZ, KMS")]
+    cache[("ElastiCache Valkey 7.2<br/>TLS, AUTH")]
+    s3[("S3 attachments<br/>SSE-KMS")]
+    efs[("EFS<br/>margince.yaml")]
+    ssm["SSM Parameter Store<br/>secrets, KMS"]
+    nat["NAT gateways"]
+    ops["Setup task<br/>one-off, per apply"]
+  end
+  alb -->|"/"| web
+  alb -->|"/v1, /oauth, /mcp, /webhooks"| api
+  api --> pg
+  api --> cache
+  worker --> pg
+  worker --> cache
+  api --> s3
+  api --> efs
+  api -.->|"secrets"| ssm
+  worker -.->|"secrets"| ssm
+  api --> nat
+  worker --> nat
+  nat --> ext(["Graph, LLM, SMTP"])
+  nat -.->|"pull by release tag"| reg(["Instance release images<br/>api, web, worker"])
+  ops -.->|"bootstrap"| pg
+  ops -.->|"margince.yaml"| efs
+  alarms["CloudWatch alarms, SNS"] -.-> mail(["alert_email"])
 ```
-Internet ──HTTPS──> ALB + AWS WAF ──HTTP (private subnets)──> web (nginx :8080, SPA)
-                         │
-                         └── /v1*, /oauth/*, /mcp*, /webhooks/*, /healthz ──> api (:8080) ──> RDS PostgreSQL (TLS, verify-full)
-                                                                                 │          ElastiCache Valkey (TLS)
-worker (no ingress) ─────────────────────────────────────────────────────────────┤          S3 (SSE-KMS), EFS config
-                                                                                 └─> NAT ─> Graph, LLM, SMTP
-```
+
 
 ## Before you start
 
@@ -31,184 +58,98 @@ worker (no ingress) ────────────────────
   KMS, IAM, WAF, ALB, SSM and CloudWatch resources in the target account.
 - **TLS certificate**: an ACM certificate in `aws_region` for the host in
   `public_base_url`, validated in your DNS zone.
-- **Tools**: Terraform 1.10 or newer, AWS CLI with the Session Manager
-  plugin, `jq`, `psql`; Docker with buildx for a manual image push
-  (Section 3).
-- **Margince**: a licence token, and this instance repository with its `core/`
-  submodule checked out (`git submodule update --init`). The images come from
-  `make release`; the bootstrap SQL and `margince.example.yaml` come from
-  `core/`.
+- **Tools**: Terraform 1.10 or newer, AWS CLI (the apply runs the one-off
+  setup task with it), `jq`.
+- **Margince**: a licence token and one release of this instance, pushed to a
+  public registry
+  ([release.md](../../../../docs/release.md)). The bootstrap SQL comes from
+  the pinned `core/` submodule.
 - **Remote state**: state holds every generated password. Create a protected
   state bucket first (`backend.hcl.example`) and never keep state on a laptop.
 
-## 1. Provision (services off)
+## 1. Write `margince.yaml`
+
+The stack reads the instance's `deploy/production/config/margince.yaml`, the
+same file the light stacks use. Copy core's example once and edit it:
+
+```bash
+cp core/config/margince.example.yaml deploy/production/config/margince.yaml
+# edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
+# seeds.ai_routing for your LLM provider
+```
+
+Commit it with the instance. `margince_config_path` points elsewhere if you
+keep it in another place.
+
+## 2. Select the instance release
+
+The instance's release builds the api, web and worker images with core's
+`Dockerfile` and `docker-bake.hcl`, from core at the core pin plus the
+instance's units. With the repository variable `REGISTRY` set, it pushes
+them to `<REGISTRY>/<name>/<role>:<v>`
+([release.md](../../../../docs/release.md)). The instance commit and the core
+version identify the complete images. This AWS module
+neither rebuilds nor republishes them. Do not use the images that core
+publishes: they contain core only, without the instance's units.
+
+The stack runs `<image_repo>/<role>:<release_version>` for all three roles,
+pulled by tag: the references `make deploy` exports
+([deploy.md](../../../../docs/deploy.md)). Core's release guard refuses a set
+whose roles come from different releases (core/docs/deployment.md, "Deploy all three roles at ONE release").
+
+The registry must be public: the stack pulls anonymously and holds no
+registry credentials. Use GitHub Container Registry (`REGISTRY=ghcr.io/<org>`):
+anonymous pulls carry no per-address limit, and the images keep the
+template's `<name>/<role>` names. Docker Hub is the public mirror only
+(`MIRROR_REGISTRY`, [release.md](../../../../docs/release.md#5-repository-settings)):
+it allows one path level under a namespace, and it limits anonymous pulls per
+IP address, which every task behind the NAT gateway shares.
+
+1. Select one instance release whose pushed platforms (`PLATFORMS`) include
+   this stack's `cpu_architecture` (`terraform output -raw image_platform`).
+2. Set `image_repo` (`<REGISTRY>/<instance name>`, the `REGISTRY` the release
+   used) and `release_version` (the release, for example `v1.4.0`) in
+   `terraform.tfvars`. They serve the first apply (Section 3); every later
+   release ships with `make deploy` (Section 5).
+
+## 3. Apply
 
 ```bash
 cd deploy/production/aws/standard
 cp backend.hcl.example backend.hcl            # fill in
 cp terraform.tfvars.example terraform.tfvars  # fill in
 terraform init -backend-config=backend.hcl
-
-# Everything the database bootstrap and the image push need, but not the ECS
-# services: they would start pointed at a tag ECR does not have yet.
-terraform apply \
-  -target=aws_ecr_repository.api -target=aws_ecr_repository.worker -target=aws_ecr_repository.web \
-  -target=aws_db_instance.this -target=aws_elasticache_replication_group.this \
-  -target=aws_s3_bucket.blobstore -target=aws_efs_file_system.config \
-  -target=aws_efs_mount_target.config -target=aws_efs_access_point.config \
-  -target=aws_ssm_parameter.owner_dsn -target=aws_ssm_parameter.app_dsn -target=aws_ssm_parameter.rds_master_password \
-  -target=aws_security_group.ops -target=aws_iam_instance_profile.ops \
-  -target=aws_iam_role_policy.ops_efs -target=aws_iam_role_policy_attachment.ops_ssm
-```
-
-`terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
-`release_version`, `license_token` and `admin_bootstrap_password`, and
-usually `alert_email`. See "Variables".
-
-## 2. Bootstrap the database (once)
-
-RDS's master user is `dbadmin` (`rds.tf`). RDS has no public IP, and its
-security group admits only the api and worker tasks and the bootstrap host
-(`ops.tf`). Launch that host once, for steps 2 and 4, and terminate it
-afterwards:
-
-```bash
-OPS_ID="$(aws ec2 run-instances \
-  --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
-  --instance-type t3.micro \
-  --subnet-id "$(terraform output -json private_subnet_ids | jq -r '.[0]')" \
-  --security-group-ids "$(terraform output -raw ops_security_group_id)" \
-  --iam-instance-profile Name="$(terraform output -raw ops_instance_profile_name)" \
-  --metadata-options HttpTokens=required \
-  --query 'Instances[0].InstanceId' --output text)"
-aws ec2 wait instance-status-ok --instance-ids "$OPS_ID"
-```
-
-Forward local port 5432 to RDS through the host (Session Manager, no SSH),
-and leave this running in a second terminal:
-
-```bash
-aws ssm start-session --target "$OPS_ID" \
-  --document-name AWS-StartPortForwardingSessionToRemoteHost \
-  --parameters "host=$(terraform output -raw rds_endpoint),portNumber=5432,localPortNumber=5432"
-```
-
-Then run core's bootstrap SQL. The passwords come from SSM Parameter Store,
-so your identity needs `ssm:GetParameter` on `/<name_prefix>/*` and
-`kms:Decrypt` on `terraform output -raw kms_key_arn`. `hostaddr=127.0.0.1`
-sends the connection through the tunnel while `sslmode=verify-full` still
-checks the certificate against the RDS host name:
-
-```bash
-curl -o /tmp/rds-ca-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-
-ssm_get() { aws ssm get-parameter --with-decryption --name "$(terraform output -json ssm_parameter_names | jq -r ".$1")" --query Parameter.Value --output text; }
-OWNER_PW="$(ssm_get owner_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
-APP_PW="$(ssm_get app_dsn | sed -E 's#.*:([^:@]+)@.*#\1#')"
-MASTER_PW="$(ssm_get rds_master_password)"
-
-psql "postgres://dbadmin:${MASTER_PW}@$(terraform output -raw rds_endpoint):5432/margince?hostaddr=127.0.0.1&sslmode=verify-full&sslrootcert=/tmp/rds-ca-bundle.pem" \
-  -v owner_pw="$OWNER_PW" -v app_pw="$APP_PW" \
-  -f ../../../../core/scripts/deploy/db-bootstrap.sql   # core's SQL, at the pinned core version
-```
-
-The master password exists only as the `/<name_prefix>/rds-master-password`
-parameter, for this step; no ECS task or execution role can read it.
-
-## 3. Build and push the images
-
-The images are the ones `make release` (the `release.yml` workflow) or
-`make package` builds from core's `Dockerfile`, named
-`<REGISTRY>/<instance_name>/<role>:<VERSION>` (the instance repository's
-`docs/release.md`, Section 6). This stack deploys
-`<registry>/<instance_name>/<role>:<release_version>`
-(`terraform output image_refs`).
-
-1. Set the image registry. `REGISTRY` is this account's ECR registry host:
-
-   ```sh
-   terraform output -raw registry   # <account>.dkr.ecr.<region>.amazonaws.com
-   ```
-
-   For `release.yml`, set it as the repository variable `REGISTRY`. For a
-   manual push, export it in your shell. `instance_name` must equal `name`
-   in `instance.yaml`.
-
-2. Log in to the registry. `release.yml` logs in with the repository
-   secrets `REGISTRY_USERNAME` (`AWS`) and `REGISTRY_PASSWORD`. An ECR
-   password expires after 12 hours, so refresh it right before each release:
-
-   ```sh
-   aws ecr get-login-password --region <aws_region> | gh secret set REGISTRY_PASSWORD
-   gh secret set REGISTRY_USERNAME --body AWS
-   ```
-
-   For a manual push:
-
-   ```sh
-   aws ecr get-login-password --region <aws_region> \
-     | docker login --username AWS --password-stdin "$REGISTRY"
-   ```
-
-3. Build and push the release, one of:
-
-   ```sh
-   make release VERSION=v0.3.0                      # release.yml builds, tests and pushes
-   make package VERSION=v0.3.0 && for role in api web worker; do
-     docker push "$REGISTRY/<instance_name>/$role:v0.3.0"
-   done                                             # manual push
-   ```
-
-The identity that pushes needs `ecr:GetAuthorizationToken` on `*`, and
-`ecr:BatchCheckLayerAvailability`, `ecr:InitiateLayerUpload`,
-`ecr:UploadLayerPart`, `ecr:CompleteLayerUpload`, `ecr:PutImage` and
-`ecr:BatchGetImage` on the three repositories, plus `kms:GenerateDataKey`
-and `kms:Decrypt` on `kms_key_arn` (the repositories are encrypted with it).
-The repositories are `IMMUTABLE`: a pushed tag is never overwritten. The
-tasks run `cpu_architecture` (default `X86_64`, what `release.yml` builds by
-default); for `ARM64`, set the repository variable
-`PLATFORMS = "linux/amd64,linux/arm64"` first.
-
-## 4. Upload `margince.yaml` (once)
-
-On the bootstrap host (`aws ssm start-session --target "$OPS_ID"`). The file
-system policy allows only IAM-authorised TLS mounts; the host's instance
-profile grants mount and write. Copy `margince.yaml` (from
-`core/config/margince.example.yaml`) and the RDS CA bundle to the host first,
-then:
-
-```bash
-sudo dnf install -y amazon-efs-utils
-sudo mkdir -p /mnt/margince-config
-sudo mount -t efs -o tls,iam,accesspoint=<efs_config_access_point_id> \
-  <efs_file_system_id>:/ /mnt/margince-config
-# the ids: terraform output -raw efs_config_access_point_id / efs_file_system_id
-sudo cp ./margince.yaml /mnt/margince-config/margince.yaml
-# edit: workspace, bootstrap_admin (password_file: secrets/admin-password),
-# seeds.ai_routing for your LLM provider
-sudo cp ./rds-ca-bundle.pem /mnt/margince-config/rds-ca-bundle.pem   # the DSNs verify RDS against it
-sudo umount /mnt/margince-config
-```
-
-Terminate the bootstrap host when steps 2 and 4 are done:
-
-```bash
-aws ec2 terminate-instances --instance-ids "$OPS_ID"
-```
-
-## 5. Start the services
-
-```bash
 terraform apply
 ```
 
-This creates everything else: the ALB with its web ACL, the three ECS
-services, the remaining parameters and the alarms. Point `public_base_url`'s
-host at `terraform output -raw alb_dns_name` (CNAME or ALIAS record). The api
-applies migrations on start and bootstraps the organization from
-`MARGINCE_ADMIN_PASSWORD`.
+`terraform.tfvars` needs `public_base_url`, `acm_certificate_arn`,
+`image_repo`, `release_version`, `license_token` and `admin_bootstrap_password`,
+and usually `alert_email`. See "Variables".
 
-Check the entry point:
+One apply creates everything, in this order:
+
+1. The network, RDS, ElastiCache, S3, EFS, the SSM parameters and the KMS key.
+2. The one-off setup task (`setup.tf`), which the apply runs with the AWS CLI
+   and waits for (`scripts/run-setup.sh`). In the private subnets it:
+   - writes `margince.yaml` and the RDS CA bundle onto the EFS config volume
+     (core's api image);
+   - runs core's `db-bootstrap.sql` as `dbadmin` through
+     `scripts/bootstrap-db.sh`, the same script as the Azure stack's, because
+     RDS's admin is not a superuser (the template's Postgres image). It creates
+     the `margince` database owned by `margince_owner`, the two roles and the
+     extensions.
+
+   The apply fails if either step fails; the log is in the CloudWatch group
+   `/ecs/<name_prefix>/setup`. Only this task can read the RDS master password.
+3. The ALB with its web ACL, the three ECS services and the alarms. The api
+   applies migrations on start and bootstraps the organization from
+   `MARGINCE_ADMIN_PASSWORD`.
+
+The setup task runs again on any apply that changes its inputs (a new
+`margince.yaml`, core's SQL, a release image); the SQL is idempotent.
+
+Point `public_base_url`'s host at `terraform output -raw alb_dns_name` (CNAME
+or ALIAS record), then check the entry point:
 
 ```bash
 curl -s https://crm.example.com/readyz                                                  # 200 when dependencies are healthy
@@ -216,11 +157,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://crm.example.com/metrics        
 curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                        # 301 to HTTPS
 ```
 
-## 6. First login
+## 4. First login
 
 1. Sign in with the bootstrap admin and set the permanent password.
-2. Remove `bootstrap_admin` from `margince.yaml` and overwrite the admin
-   password parameter with an inert value (`secrets.tf` ignores later changes
+2. Remove `bootstrap_admin` from `deploy/production/config/margince.yaml`
+   (the next apply or `make deploy` writes it to the config volume) and
+   overwrite the admin password parameter with an inert value (`secrets.tf` ignores later changes
    to it, so an apply does not put the bootstrap password back):
 
    ```bash
@@ -233,11 +175,31 @@ curl -s -o /dev/null -w '%{http_code}\n' http://crm.example.com/                
 3. Confirm the `alert_email` subscription (AWS sends a confirmation mail), or
    subscribe your own endpoint to `terraform output -raw alerts_topic_arn`.
 
-## 7. Releases
+## 5. Releases
 
-Follow Section 3 for each new version, then set `release_version` in
-`terraform.tfvars` and run `terraform apply`. All three services get a new
-task definition in the same apply; api, worker and web move together.
+Ship every release after the first with `make deploy`, as on the light
+stacks. The template's `hook` adapter runs this directory's `hooks/`
+([deploy.md](../../../../docs/deploy.md)):
+
+| Step | Hook |
+|---|---|
+| `preflight` | Records the running release, plans `image_repo` and the new `release_version`; changes nothing |
+| `apply` | Applies exactly that plan; all three roles move in one apply |
+| `verify` | Waits until `/readyz` answers 200 and `/v1/auth/capabilities` reports the new release (`VERIFY_TIMEOUT`, default 900 seconds) |
+| `rollback` | After a failed `apply` or `verify`: plans and applies the recorded release |
+
+1. In `instance.yaml`, set the environment's adapter to `hook`, for example
+   `production: { adapter: hook }`.
+2. Copy `hooks/` to `deploy/<env>/hooks/` in the instance, and export
+   `TERRAFORM_DIR` as the path of this directory (the default is the
+   directory that holds `hooks/`).
+3. On the machine where `terraform init` has run here, cut the release and
+   deploy it:
+
+   ```sh
+   make release VERSION=<v>                   # wait until release.yml has pushed the images
+   make deploy ENV=production VERSION=<v>
+   ```
 
 ## Sign-in
 
@@ -304,16 +266,18 @@ uses it.
 |---|---|---|
 | `public_base_url` | required | `https://<host>` the ALB serves |
 | `acm_certificate_arn` | required | ACM certificate for that host |
-| `release_version` | required | Release to deploy (image tag) |
+| `image_repo` | required | `<REGISTRY>/<instance name>` of the instance release, in a public registry |
+| `release_version` | required | The release to run for api, worker and web; `make deploy` sets it |
 | `license_token` | required | Licence token |
 | `admin_bootstrap_password` | required | First-boot admin password |
 | `alert_email` | `""` | Alert subscription |
-| `aws_region`, `name_prefix`, `instance_name` | `eu-central-1`, `margince`, `margince-default` | Placement and names |
+| `aws_region`, `name_prefix` | `eu-central-1`, `margince` | Placement and names |
 | `az_count` | `2` | Availability Zones (one NAT gateway each) |
-| `cpu_architecture` | `X86_64` | Fargate architecture of the images |
+| `cpu_architecture` | `X86_64` | `X86_64` or `ARM64`, matching a platform in the selected instance release |
 | `db_instance_class`, `db_multi_az` | `db.t4g.medium`, `true` | Postgres size and HA |
 | `api_min_replicas`, `api_max_replicas` | `2`, `4` | api scale bounds |
 | `waf_mode` | `count` | `count` then `block` |
+| `margince_config_path`, `bootstrap_sql_path` | the instance's `deploy/production/config/margince.yaml`, core's `db-bootstrap.sql` | Inputs of the setup task |
 
 ## Redis
 
@@ -329,19 +293,19 @@ Rough list prices in eu-central-1, per month, before usage-based traffic:
 
 | Item | USD |
 |---|---|
-| ECS Fargate: api (2-4 tasks), worker (1-3), web (2) | 80-165 |
+| ECS Fargate X86_64: api (2-4 tasks), worker (1-3), web (2) | 80-165 |
 | RDS db.t4g.medium Multi-AZ, 50 GB gp3 | 130-145 |
 | ElastiCache cache.t4g.small, two nodes | 60 |
 | NAT gateways (2) and data processing | 65-90 |
 | ALB | 30-45 |
-| VPC endpoints (5 interface; the S3 gateway endpoint is free) | 40 |
+| VPC endpoints (3 interface; the S3 gateway endpoint is free) | 22 |
 | AWS WAF | 15-25 |
 | CloudWatch logs and alarms, SNS | 10-20 |
-| S3, EFS, ECR, KMS key and SSM Standard | 10-20 |
-| **Total** | **about 440-660** |
+| S3, EFS, KMS key and SSM Standard | 10-20 |
+| **Total** | **about 407-557** |
 
-A Graviton release (`cpu_architecture = "ARM64"`, `PLATFORMS` including
-`linux/arm64`) cuts the Fargate line by about 20%.
+Setting `cpu_architecture = "ARM64"` (Graviton) costs about 20% less on the
+Fargate line than the `X86_64` default.
 
 ## Security notes
 
@@ -350,7 +314,7 @@ A Graviton release (`cpu_architecture = "ARM64"`, `PLATFORMS` including
   header fields and does not route `/metrics`.
 - **Encryption at rest**: one customer-managed KMS key (`kms.tf`, rotation
   on) for RDS, ElastiCache, S3 (SSE-KMS with Bucket Keys, other keys denied),
-  EFS, every SSM parameter, the ECR repositories, the SNS topic and the WAF
+  EFS, every SSM parameter, the SNS topic and the WAF
   log group. The ALB log bucket uses SSE-S3, the only option ELB access
   logging supports.
 - **Encryption in transit**: TLS 1.2/1.3 at the ALB, HTTP to HTTPS redirect;
@@ -368,12 +332,13 @@ A Graviton release (`cpu_architecture = "ARM64"`, `PLATFORMS` including
   with `aws:SourceAccount`/`aws:SourceArn`, no
   `AmazonECSTaskExecutionRolePolicy`. `web` reads no secrets. The RDS master
   password parameter is readable by no task.
+- **Image source**: the instance's `release.yml` builds, smoke-tests and
+  publishes all three roles, core plus the instance's units. This stack only
+  runs them by release tag, pulled anonymously from a public registry; no task or execution role holds registry credentials.
 - **Containers**: all Linux capabilities dropped, explicit
   `runtime_platform`, `stopTimeout = 60` for api and worker.
-- **Images**: IMMUTABLE ECR tags, so `release_version` pins the deployed
-  images; continuous enhanced scanning (Amazon Inspector, metered) for this
-  instance's repositories; untagged images expire after 14 days, and the 30
-  most recent releases are kept.
+- **Images**: every task definition runs `<image_repo>/<role>:<release_version>`;
+  tasks pull over the NAT gateways at task start.
 - **Sign-in**: the WAF's auth-path rate rule is the one fleet-wide login
   limit; the api's own login limiters are per task.
 - **Protection**: RDS and ALB deletion protection; `prevent_destroy` on the

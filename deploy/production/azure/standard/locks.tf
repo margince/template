@@ -6,7 +6,6 @@ locals {
     postgres = azurerm_postgresql_flexible_server.this.id
     storage  = azurerm_storage_account.this.id
     keyvault = azurerm_key_vault.this.id
-    acr      = azurerm_container_registry.this.id
     rsv      = azurerm_recovery_services_vault.this.id
   }
 }

@@ -11,12 +11,6 @@ locals {
       nsg-private-endpoints = { id = azurerm_network_security_group.private_endpoints.id, logs = local.nsg_logs, metrics = false, dedicated = false }
       nsg-appgw             = { id = azurerm_network_security_group.appgw.id, logs = local.nsg_logs, metrics = false, dedicated = false }
       nsg-ops               = { id = azurerm_network_security_group.ops.id, logs = local.nsg_logs, metrics = false, dedicated = false }
-      acr = {
-        id        = azurerm_container_registry.this.id
-        logs      = ["ContainerRegistryLoginEvents", "ContainerRegistryRepositoryEvents"]
-        metrics   = true
-        dedicated = false
-      }
       blob-audit = {
         id        = "${azurerm_storage_account.this.id}/blobServices/default"
         logs      = ["StorageRead", "StorageWrite", "StorageDelete"]

@@ -4,7 +4,7 @@
 # ---- Placement and naming ------------------------------------------------------
 
 variable "azure_region" {
-  description = "Azure region for every resource. westeurope supports every service this stack uses (Container Apps, Premium ACR, Postgres zone-redundant HA); confirm availability before choosing another."
+  description = "Azure region for every resource. westeurope supports every service this stack uses (Container Apps, Postgres zone-redundant HA); confirm availability before choosing another."
   type        = string
   default     = "westeurope"
 }
@@ -20,27 +20,41 @@ variable "name_prefix" {
 }
 
 # ---- Release ------------------------------------------------------------------------
-# Images are <registry>/<instance_name>/<role>:<release_version>, as
-# `make release` or `make package` names them (docs/release.md, Section 6).
-# Released tags are locked read-only after the push (README.md, "Releases").
+# One release of this instance (docs/release.md): release.yml builds api, web
+# and worker with core's Dockerfile and bake definition and pushes them as
+# <image_repo>/<role>:<release_version>, the references `make deploy` exports
+# as IMAGE_API, IMAGE_WEB and IMAGE_WORKER. All three roles run at one release
+# and are pulled by tag; core's release guard refuses a mixed set
+# (core/docs/deployment.md, "Deploy all three roles at ONE release").
 
-variable "instance_name" {
-  description = "The instance's name from instance.yaml (`name`): the image namespace."
+variable "image_repo" {
+  description = "The image repository of the instance release: <REGISTRY>/<instance name>, the IMAGE_REPO of `make deploy`, for example ghcr.io/acme/margince-default. A public registry: the images are pulled anonymously."
   type        = string
-  default     = "margince-default"
   validation {
-    condition     = can(regex("^[a-z0-9]+(-[a-z0-9]+)*$", var.instance_name))
-    error_message = "instance_name must match instance.yaml's name format: lowercase letters and digits, separated by single hyphens."
+    condition     = can(regex("^[a-z0-9-]+(\\.[a-z0-9-]+)+(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+$", var.image_repo))
+    error_message = "image_repo must be <registry host>/<path> with no tag or digest, for example ghcr.io/acme/margince-default."
   }
 }
 
 variable "release_version" {
-  description = "The release to deploy for api, worker and web: the VERSION of `make release`, which is also the image tag."
+  description = "The release to run for api, worker and web: the VERSION of `make release`, which is the image tag. `make deploy` sets it."
   type        = string
   validation {
     condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$", var.release_version))
     error_message = "release_version must be a release version such as v0.3.0 or v1.3.0-rc.1 (docs/release.md, Section 2)."
   }
+}
+
+variable "margince_config_path" {
+  description = "margince.yaml for the config share. Default: the instance's deploy/production/config/margince.yaml, the file the light stacks use. The setup job writes it on every apply that changes it."
+  type        = string
+  default     = null
+}
+
+variable "bootstrap_sql_path" {
+  description = "Core's db-bootstrap.sql. Default: core/scripts/deploy/db-bootstrap.sql at the pinned core version."
+  type        = string
+  default     = null
 }
 
 variable "deploy_apps" {
@@ -89,7 +103,7 @@ variable "include_bootstrap_admin" {
 # ---- Access -----------------------------------------------------------------------------
 
 variable "operator_ip_allowlist" {
-  description = "Public IPv4 addresses (no /prefix) let through the Key Vault, Storage and registry firewalls while you set up or push a release. Leave empty in steady state; Postgres and Redis are never reachable this way (use the jumpbox)."
+  description = "Public IPv4 addresses (no /prefix) let through the Key Vault and Storage firewalls while you set up. Leave empty in steady state; Postgres and Redis are never reachable this way (use the jumpbox)."
   type        = list(string)
   default     = []
   validation {
@@ -166,7 +180,7 @@ variable "alert_email" {
 }
 
 variable "enable_resource_locks" {
-  description = "CanNotDelete locks on Postgres, storage, Key Vault, the Recovery Services vault and ACR. Set false and apply before terraform destroy."
+  description = "CanNotDelete locks on Postgres, storage, Key Vault and the Recovery Services vault. Set false and apply before terraform destroy."
   type        = bool
   default     = true
 }

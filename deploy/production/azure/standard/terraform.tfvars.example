@@ -5,8 +5,12 @@
 # MARGINCE_PUBLIC_BASE_URL: the canonical external scheme and host.
 public_base_url = "https://crm.example.com"
 
-# The release to deploy: the VERSION of `make release` (docs/release.md).
-release_version = "v0.3.0"
+# One release of this instance (docs/release.md): the stack runs
+# <image_repo>/<role>:<release_version> for api, worker and web. The registry
+# is public GitHub Container Registry (ghcr.io/<org>); the stack pulls
+# anonymously. For the first apply only: `make deploy` sets both afterwards.
+image_repo      = "ghcr.io/<org>/<instance-name>"
+release_version = "v1.0.0"
 
 # Licence token issued for this installation.
 license_token = "<licence token>"
@@ -38,7 +42,6 @@ operator_ip_allowlist = ["203.0.113.20"]
 
 # azure_region            = "westeurope"
 # name_prefix             = "margince"          # also the resource group name
-# instance_name           = "margince-default"  # instance.yaml's name
 # db_sku_name             = "B_Standard_B2s"    # "GP_Standard_D2ds_v5": Microsoft's production recommendation
 # db_zone_redundant_ha    = false               # true needs a GP_ or MO_ SKU
 # api_min_replicas        = 3

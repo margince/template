@@ -1,11 +1,6 @@
-# Every resource this file targets already sets public_network_access_enabled
-# = false (keyvault.tf, acr.tf, storage.tf) or is referenced by name from
-# those files' own comments as reachable "through this stack's own private
-# endpoint" (keyvault.tf, acr.tf, network.tf's azurerm_subnet.private_endpoints
-# comment) — this file is that private endpoint set, completing what those
-# comments already promised rather than introducing a new design decision.
-# Without it, Container Apps has no path to a Key Vault or an ACR that both
-# refuse the public internet outright.
+# Private endpoints for Key Vault and storage (blob and file): Container Apps,
+# the jumpbox and the Application Gateway reach both only through these,
+# since their firewalls deny the public internet (keyvault.tf, storage.tf).
 #
 # One shared subnet (network.tf's azurerm_subnet.private_endpoints), one
 # private DNS zone per service, each zone linked to this stack's one VNet —
@@ -42,39 +37,6 @@ resource "azurerm_private_endpoint" "key_vault" {
   private_dns_zone_group {
     name                 = "kv"
     private_dns_zone_ids = [azurerm_private_dns_zone.key_vault.id]
-  }
-}
-
-resource "azurerm_private_dns_zone" "acr" {
-  name                = "privatelink.azurecr.io"
-  resource_group_name = azurerm_resource_group.this.name
-  tags                = merge(local.common_tags, { Name = "${var.name_prefix}-acr", Component = "network" })
-}
-
-resource "azurerm_private_dns_zone_virtual_network_link" "acr" {
-  name                  = "${var.name_prefix}-acr"
-  private_dns_zone_name = azurerm_private_dns_zone.acr.name
-  resource_group_name   = azurerm_resource_group.this.name
-  virtual_network_id    = azurerm_virtual_network.this.id
-}
-
-resource "azurerm_private_endpoint" "acr" {
-  name                = "${var.name_prefix}-acr"
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
-  subnet_id           = azurerm_subnet.private_endpoints.id
-  tags                = merge(local.common_tags, { Name = "${var.name_prefix}-acr", Component = "network" })
-
-  private_service_connection {
-    name                           = "${var.name_prefix}-acr"
-    private_connection_resource_id = azurerm_container_registry.this.id
-    subresource_names              = ["registry"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "acr"
-    private_dns_zone_ids = [azurerm_private_dns_zone.acr.id]
   }
 }
 

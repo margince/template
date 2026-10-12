@@ -3,12 +3,12 @@
 #
 #   caddy (HTTPS, certificates) -> nginx :8080 -> api :8080 | web :8080
 #
-# Why nginx and not caddy alone: core keys its own per-IP limits (login,
-# password reset, OIDC) on the direct TCP peer and never reads
-# X-Forwarded-For (core's httpserver.ClientIP: "a deployment fronted by a
-# proxy terminates rate limiting there"). Behind a proxy every client is the
-# proxy's address, so the per-IP limiting has to happen here, keyed on the
-# real client address caddy passes on. Stock caddy has no rate limiting.
+# Why nginx and not caddy alone: stock caddy has no rate limiting. nginx
+# limits the credential endpoints per client, keyed on the real client
+# address caddy passes on, and forwards that address to the api in
+# X-Forwarded-For. The api trusts it from nginx (MARGINCE_TRUSTED_PROXIES in
+# compose.yaml), so core's own per-IP limits (login, password reset, OIDC)
+# also key on the client instead of on nginx.
 #
 # The nginx image's entrypoint substitutes ${AUTH_RATE_LIMIT_PER_MINUTE}
 # (compose.yaml, from host.env) into this file at start. nginx's own

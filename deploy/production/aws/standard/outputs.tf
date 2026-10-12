@@ -6,26 +6,23 @@ output "ecs_cluster_name" {
   value = aws_ecs_cluster.this.name
 }
 
-output "ecr_api_repository_url" {
-  value = aws_ecr_repository.api.repository_url
-}
-
-output "ecr_worker_repository_url" {
-  value = aws_ecr_repository.worker.repository_url
-}
-
-output "ecr_web_repository_url" {
-  value = aws_ecr_repository.web.repository_url
-}
-
-output "registry" {
-  description = "The REGISTRY value for `make release` and `make package` (docs/release.md, Section 5): this account's ECR registry host."
-  value       = split("/", aws_ecr_repository.api.repository_url)[0]
-}
-
-output "image_refs" {
-  description = "The images this stack deploys: <registry>/<instance_name>/<role>:<release_version>."
+output "images" {
+  description = "The api, worker and web images this stack runs: <image_repo>/<role>:<release_version>."
   value       = local.images
+}
+
+output "release_version" {
+  description = "The release this stack runs; make deploy's rollback goes back to it."
+  value       = var.release_version
+}
+
+output "public_base_url" {
+  value = var.public_base_url
+}
+
+output "image_platform" {
+  description = "The image platform that cpu_architecture needs; the instance release must have pushed it (PLATFORMS)."
+  value       = var.cpu_architecture == "ARM64" ? "linux/arm64" : "linux/amd64"
 }
 
 output "rds_endpoint" {
@@ -104,18 +101,8 @@ output "waf_log_group_name" {
   value       = aws_cloudwatch_log_group.waf.name
 }
 
-output "ops_security_group_id" {
-  description = "Security group for the temporary bootstrap host (README steps 2 and 4)."
-  value       = aws_security_group.ops.id
-}
-
-output "ops_instance_profile_name" {
-  description = "Instance profile for the temporary bootstrap host: SSM Session Manager and EFS config mount/write."
-  value       = aws_iam_instance_profile.ops.name
-}
-
 output "private_subnet_ids" {
-  description = "Private subnets; launch the temporary bootstrap host in one of these."
+  description = "Private subnets: the ECS tasks and the one-off setup task run in these."
   value       = aws_subnet.private[*].id
 }
 

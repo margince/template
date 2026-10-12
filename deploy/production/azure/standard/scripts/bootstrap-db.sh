@@ -1,39 +1,40 @@
 #!/bin/bash
-# Runs core's scripts/deploy/db-bootstrap.sql (the core/ submodule) against the
-# Flexible Server as its admin (pgadmin): creates the margince database, the
-# margince_owner and margince_app roles and the extensions. Run it from the
-# jumpbox (the server has no public endpoint), in this stack's directory so
-# `terraform output` works. The SQL is idempotent, so a rerun is safe.
+# Runs core's scripts/deploy/db-bootstrap.sql against a managed PostgreSQL 16
+# server as its admin, who is not a superuser: Azure Flexible Server's pgadmin
+# or RDS's dbadmin. Creates the margince database, the margince_owner and
+# margince_app roles and the extensions. The stack's one-off setup runs it
+# inside the private network (setup.tf); the SQL is idempotent, so a rerun is
+# safe. The AWS and Azure standard stacks ship the same file.
 #
-#   scripts/bootstrap-db.sh [path/to/db-bootstrap.sql]
+#   scripts/bootstrap-db.sh path/to/db-bootstrap.sql
 #
-# The upstream SQL assumes a superuser. Azure's pgadmin is not one, so a few
-# of its statements are rewritten on the fly (see the functions below).
+# Inputs, from the environment:
+#   BOOTSTRAP_PG_HOST, BOOTSTRAP_PG_ADMIN_PASSWORD   the server and its admin
+#   BOOTSTRAP_PG_ADMIN_USER                          default pgadmin
+#   BOOTSTRAP_OWNER_PASSWORD, BOOTSTRAP_APP_PASSWORD the two role passwords
+#   BOOTSTRAP_PGSSLMODE                              default verify-full
+#   BOOTSTRAP_PGSSLROOTCERT                          default system
+#
+# The upstream SQL assumes a superuser, so a few of its statements are
+# rewritten on the fly (see the functions below).
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+SQL="${1:-}"
+[[ -n "$SQL" && -f "$SQL" ]] || { echo "bootstrap-db: usage: bootstrap-db.sh path/to/db-bootstrap.sql" >&2; exit 1; }
+for v in BOOTSTRAP_PG_HOST BOOTSTRAP_PG_ADMIN_PASSWORD BOOTSTRAP_OWNER_PASSWORD BOOTSTRAP_APP_PASSWORD; do
+  [[ -n "${!v:-}" ]] || { echo "bootstrap-db: $v is not set" >&2; exit 1; }
+done
+owner_pw="$BOOTSTRAP_OWNER_PASSWORD"
+app_pw="$BOOTSTRAP_APP_PASSWORD"
 
-# core's bootstrap SQL, from the instance repository's core/ submodule (the
-# core version instance.yaml pins); the working directory is this stack.
-default_sql=../../../../core/scripts/deploy/db-bootstrap.sql
-SQL="${1:-$default_sql}"
-[[ -f "$SQL" ]] || { echo "bootstrap-db: $SQL not found (run git submodule update --init, or pass the path)" >&2; exit 1; }
-
-# The BOOTSTRAP_* variables override the terraform outputs and TLS settings
-# (for a local test server); unset, they change nothing.
-pg_host="${BOOTSTRAP_PG_HOST:-$(terraform output -raw postgres_fqdn)}"
-admin_pw="${BOOTSTRAP_PG_ADMIN_PASSWORD:-$(terraform output -raw postgres_admin_password)}"
-owner_pw="${BOOTSTRAP_OWNER_PASSWORD:-$(terraform output -raw margince_owner_password)}"
-app_pw="${BOOTSTRAP_APP_PASSWORD:-$(terraform output -raw margince_app_password)}"
-
-export PGHOST="$pg_host" PGPORT=5432 PGUSER=pgadmin PGDATABASE=postgres
-export PGPASSWORD="$admin_pw" PGSSLMODE="${BOOTSTRAP_PGSSLMODE:-verify-full}" PGSSLROOTCERT="${BOOTSTRAP_PGSSLROOTCERT-system}" PGCONNECT_TIMEOUT=10
+export PGHOST="$BOOTSTRAP_PG_HOST" PGPORT=5432 PGUSER="${BOOTSTRAP_PG_ADMIN_USER:-pgadmin}" PGDATABASE=postgres
+export PGPASSWORD="$BOOTSTRAP_PG_ADMIN_PASSWORD" PGSSLMODE="${BOOTSTRAP_PGSSLMODE:-verify-full}" PGSSLROOTCERT="${BOOTSTRAP_PGSSLROOTCERT-system}" PGCONNECT_TIMEOUT=10
 
 psql -X -qAtc 'select 1' >/dev/null
 
 # The role passwords go in through stdin, not argv, so they never show up in
 # the process list. They are alphanumeric (random_password, special = false).
-# Azure's pgadmin is not a superuser, and PostgreSQL only lets a superuser
+# The admin is not a superuser, and PostgreSQL only lets a superuser
 # name the SUPERUSER attribute (and a BYPASSRLS holder name BYPASSRLS) in
 # ALTER ROLE, even to turn it off. The script's unconditional normalisation
 # therefore fails here; it is replaced by the same checks run only when a
