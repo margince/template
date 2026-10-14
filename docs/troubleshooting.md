@@ -307,11 +307,15 @@ mismatch stays, the download changed; report it.
 
 **Fix:** Choose a higher version.
 
-### `error: release: make check failed; nothing was tagged`
+### `error: release: make release-check failed; nothing was tagged`
 
-**Cause:** The last precondition of `make release` failed.
+**Cause:** The last precondition of `make release` failed: `instance.yaml` is
+invalid, a template-owned path changed, or the core pin is not on core's
+`main`.
 
-**Fix:** Run `make check`, correct the failure, and run `make release` again.
+**Fix:** Run `make release-check`, correct the failure, and run `make release`
+again. When `RELEASE_CHECK_TARGET` names another target, the message names it,
+and the fix is the same with that target.
 
 ### `release: <tag> is not a release version.` (in `release.yml`)
 

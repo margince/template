@@ -52,16 +52,26 @@ order, and the first one that fails exits 1 without creating a tag:
 3. `HEAD` is an ancestor of `origin/main`, after `git fetch --tags`.
 4. The tag exists neither locally nor on `origin`.
 5. `VERSION` is newer than every existing release tag.
-6. `make check` passes.
+6. `make release-check` passes: `make check-instance`, `make check-template`,
+   and `make core-check-pin`.
 
 It then creates an annotated tag and pushes it. When the push fails, it
 deletes the local tag.
+
+`make release` does not run `make check`. `release.yml` runs the full gate on
+the tag before it builds or publishes anything (Section 4), so a tag that
+fails the gate publishes nothing. To run the full gate locally first, set
+`RELEASE_CHECK_TARGET=check`:
+
+```sh
+make release VERSION=v0.3.0 RELEASE_CHECK_TARGET=check
+```
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `RELEASE_REMOTE` | `origin` | The remote to fetch from and push the tag to. |
 | `RELEASE_BRANCH` | `main` | The branch that `HEAD` must be an ancestor of. |
-| `RELEASE_CHECK_TARGET` | `check` | The `make` target run as the last precondition. |
+| `RELEASE_CHECK_TARGET` | `release-check` | The `make` target run as the last precondition. `check` runs the full gate. |
 
 ## 4. What `release.yml` does
 

@@ -5,7 +5,7 @@
 #
 # Usage: bash scripts/release.sh <version>   (or: make release VERSION=<v>)
 #   RELEASE_REMOTE (default origin), RELEASE_BRANCH (default main),
-#   RELEASE_CHECK_TARGET (default check)
+#   RELEASE_CHECK_TARGET (default release-check; check runs the full gate)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$ROOT"
@@ -13,7 +13,7 @@ cd "$ROOT"
 version="${1:-}"
 remote="${RELEASE_REMOTE:-origin}"
 branch="${RELEASE_BRANCH:-main}"
-target="${RELEASE_CHECK_TARGET:-check}"
+target="${RELEASE_CHECK_TARGET:-release-check}"
 
 # Read into the locals above, then removed from the environment: `git push`
 # below runs this repository's pre-push hook when one is installed, which
