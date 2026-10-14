@@ -97,8 +97,8 @@ git commit -am "deploy: configure production" && git push
 # 2. Compare the printed key fingerprint with the server's before you use it.
 export HOST_KNOWN_HOSTS="$(ssh-keyscan -H <host>)"
 make host-bootstrap ENV=production
-# 3. make release runs make check, then tags the release. release.yml
-#    builds, tests, and pushes the images.
+# 3. make release runs make release-check, then tags the release.
+#    release.yml runs the full gate, then builds, tests, and pushes the images.
 make release VERSION=v0.1.0
 # 4. When release.yml has finished:
 REGISTRY=<registry> MARGINCE_LICENSE="$(cat <license-file>)" \

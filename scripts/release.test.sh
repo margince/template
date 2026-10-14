@@ -4,8 +4,8 @@
 #
 # Each case builds a throwaway "origin" (a scratch bare repository) and a
 # clone holding scripts/lib.sh, scripts/release.sh, the CLI directory and a
-# Makefile whose check and check-instance targets append their own name to a
-# log and fail when a file FAIL_CHECK exists. lib.sh derives ROOT from its own
+# Makefile whose release-check, check and check-instance targets append their
+# own name to a log and fail when a file FAIL_CHECK exists. lib.sh derives ROOT from its own
 # location, so this is everything release.sh needs to run.
 #
 # Usage: bash scripts/release.test.sh
@@ -40,9 +40,9 @@ commit_all() { git_q "$1" add -A && git_q "$1" commit -q --allow-empty -m change
 bare_of() { printf '%s/origin.git\n' "$(dirname "$1")"; }
 
 # fresh_repo — a bare "origin" and a clone with scripts/lib.sh,
-# scripts/release.sh, scripts/cli/ and a Makefile whose check and
-# check-instance targets each append their own name to ./log and fail when
-# ./FAIL_CHECK exists. main is committed and pushed to origin.
+# scripts/release.sh, scripts/cli/ and a Makefile whose release-check, check
+# and check-instance targets each append their own name to ./log and fail
+# when ./FAIL_CHECK exists. main is committed and pushed to origin.
 fresh_repo() {
   local base bare work
   base="$(mktemp -d "$TMP/repo.XXXXXX")"
@@ -59,7 +59,10 @@ fresh_repo() {
   # embedded in this script's own indentation makes that byte easy to lose
   # or duplicate by accident.
   {
-    printf '.PHONY: check check-instance\n\n'
+    printf '.PHONY: release-check check check-instance\n\n'
+    printf 'release-check:\n'
+    printf '\t@echo release-check >> log\n'
+    printf '\t@[ ! -f FAIL_CHECK ]\n\n'
     printf 'check:\n'
     printf '\t@echo check >> log\n'
     printf '\t@[ ! -f FAIL_CHECK ]\n\n'
@@ -214,31 +217,31 @@ else
 fi
 assert_no_tag "v1.2.0-rc.1 after v1.2.0 already exists leaves no new tag" "$work" "v1.2.0-rc.1"
 
-# --- a failing check: no tag locally or on the remote ---
+# --- a failing release-check: no tag locally or on the remote ---
 # FAIL_CHECK is gitignored, so creating it does not dirty the working tree.
 work="$(fresh_repo)"
 : > "$work/FAIL_CHECK"
 out="$(release_out "$work" "v1.0.0")" && rc=0 || rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF 'make check failed'; then
-  ok "a failing make check fails the release"
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF 'make release-check failed'; then
+  ok "a failing make release-check fails the release"
 else
-  fail "a failing make check fails the release: $out"
+  fail "a failing make release-check fails the release: $out"
 fi
-assert_no_tag "a failing make check leaves no tag" "$work" "v1.0.0"
-if [ "$(cat "$work/log" 2>/dev/null)" = "check" ]; then
-  ok "a failing make check runs check exactly once"
+assert_no_tag "a failing make release-check leaves no tag" "$work" "v1.0.0"
+if [ "$(cat "$work/log" 2>/dev/null)" = "release-check" ]; then
+  ok "a failing make release-check runs release-check exactly once"
 else
-  fail "a failing make check runs check exactly once: $(cat "$work/log" 2>/dev/null)"
+  fail "a failing make release-check runs release-check exactly once: $(cat "$work/log" 2>/dev/null)"
 fi
 
-# --- success: an annotated tag on the remote, pointing at HEAD; check ran once ---
+# --- success: an annotated tag on the remote, pointing at HEAD; release-check ran once ---
 work="$(fresh_repo)"
 out="$(release_out "$work" "v1.0.0")" && rc=0 || rc=$?
 if [ "$rc" -eq 0 ]; then ok "a clean release succeeds"; else fail "a clean release succeeds: $out"; fi
-if printf '%s' "$out" | grep -qF 'release: running make check'; then
-  ok "it prints that it is running make check, before tagging"
+if printf '%s' "$out" | grep -qF 'release: running make release-check'; then
+  ok "it prints that it is running make release-check, before tagging"
 else
-  fail "it prints that it is running make check, before tagging: $out"
+  fail "it prints that it is running make release-check, before tagging: $out"
 fi
 if printf '%s' "$out" | grep -qF 'release: pushed v1.0.0; release.yml builds it'; then
   ok "it prints the final pushed message"
@@ -257,10 +260,10 @@ if [ "$(git -C "$bare" rev-list -n1 v1.0.0 2>/dev/null)" = "$head" ]; then
 else
   fail "the pushed tag points at HEAD"
 fi
-if [ "$(cat "$work/log" 2>/dev/null)" = "check" ]; then
-  ok "a successful release runs check exactly once"
+if [ "$(cat "$work/log" 2>/dev/null)" = "release-check" ]; then
+  ok "a successful release runs release-check exactly once, not check"
 else
-  fail "a successful release runs check exactly once: $(cat "$work/log" 2>/dev/null)"
+  fail "a successful release runs release-check exactly once, not check: $(cat "$work/log" 2>/dev/null)"
 fi
 
 # --- a push failure (the bare repository's pre-receive hook exits 1) ---
@@ -299,6 +302,16 @@ if [ "$(cat "$work/log" 2>/dev/null)" = "check-instance" ]; then
   ok "RELEASE_CHECK_TARGET=check-instance runs check-instance, not check"
 else
   fail "RELEASE_CHECK_TARGET=check-instance runs check-instance, not check: $(cat "$work/log" 2>/dev/null)"
+fi
+
+# --- RELEASE_CHECK_TARGET=check runs the full gate instead ---
+work="$(fresh_repo)"
+out="$(release_out "$work" "v1.0.0" RELEASE_CHECK_TARGET=check)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then ok "RELEASE_CHECK_TARGET=check succeeds"; else fail "RELEASE_CHECK_TARGET=check succeeds: $out"; fi
+if [ "$(cat "$work/log" 2>/dev/null)" = "check" ]; then
+  ok "RELEASE_CHECK_TARGET=check runs check, not release-check"
+else
+  fail "RELEASE_CHECK_TARGET=check runs check, not release-check: $(cat "$work/log" 2>/dev/null)"
 fi
 
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi

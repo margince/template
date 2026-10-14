@@ -22,7 +22,7 @@ MAKE_CORE := $(MAKE) -C $(CORE)/backend
 REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 
 .PHONY: help init config config-check config-sync hooks \
-	stage unstage compose watch new-unit new-instance deploy-init deploy host-bootstrap host-admin-password local-up local-down local-admin-password release license u u-fe u-check \
+	stage unstage compose watch new-unit new-instance deploy-init deploy host-bootstrap host-admin-password local-up local-down local-admin-password release release-check license u u-fe u-check \
 	core-status core-branch core-restore core-check core-pr core-check-pin \
 	check check-instance check-template check-public template-sync check-composition build test test-extensions arch ext-imports \
 	check-ext-migrations check-manifests check-docs drift test-scripts test-cli test-lifecycle secret-scan test-secret-scan \
@@ -326,6 +326,12 @@ check-instance: ## instance.yaml is valid and names the tag core/ is at
 check-template: ## Template-owned paths match the template commit this instance merged; instance.mk only adds targets
 	@bash scripts/check-instance-mk.sh
 	@bash scripts/check-template.sh
+
+## The precondition make release runs by default (RELEASE_CHECK_TARGET). It
+## checks only what the pushed tag cannot fix afterwards: instance.yaml, the
+## template-owned paths, and the core pin. The full gate runs in release.yml
+## (full-check.yml) before any image or release is published.
+release-check: check-instance check-template core-check-pin ## The fast release precondition; release.yml runs the full gate
 
 template-sync: ## Merge margince/template's main into this instance and record it in .template-version
 	@bash scripts/template-sync.sh
