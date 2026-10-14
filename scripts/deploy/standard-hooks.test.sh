@@ -7,6 +7,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# deploy/ is instance-owned: an instance that replaced the default production
+# environment has no standard stacks, and there is nothing here to test.
+for cloud in aws azure; do
+  if [ ! -d "$ROOT/deploy/production/$cloud/standard/hooks" ]; then
+    echo "notice: deploy/production/$cloud/standard/hooks is not in this instance; standard-hooks.test.sh is skipped"
+    exit 0
+  fi
+done
+
 unset TERRAFORM_DIR VERIFY_TIMEOUT STUB_PREVIOUS STUB_RELEASE STUB_READY_RC STUB_TF_RC
 
 TMP="$(mktemp -d)"
