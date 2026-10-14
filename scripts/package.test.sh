@@ -40,7 +40,7 @@ mkdir -p "$STUB_BIN"
 export STUB_LOG="$TMP/log"
 cat > "$STUB_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
-printf 'docker %s | PLATFORMS=%s\n' "$*" "${PLATFORMS:-}" >> "$STUB_LOG"
+printf 'docker %s | PLATFORMS=%s | CORE_VERSION=%s\n' "$*" "${PLATFORMS:-}" "${CORE_VERSION:-}" >> "$STUB_LOG"
 exit 0
 EOF
 chmod +x "$STUB_BIN/docker"
@@ -61,7 +61,11 @@ if bake | grep -q -- '--push'; then fail "a local build does not push"; else ok 
 
 # --- PLATFORMS reaches the bake ---
 rc="$(run_package PLATFORMS=linux/amd64)"
-if [ "$rc" = 0 ] && bake | grep -q 'PLATFORMS=linux/amd64$'; then ok "PLATFORMS reaches the bake"; else fail "PLATFORMS reaches the bake: $(bake)"; fi
+if [ "$rc" = 0 ] && bake | grep -q 'PLATFORMS=linux/amd64 |'; then ok "PLATFORMS reaches the bake"; else fail "PLATFORMS reaches the bake: $(bake)"; fi
+
+# --- the pinned core release reaches the bake, not the instance's VERSION ---
+rc="$(run_package)"
+if [ "$rc" = 0 ] && bake | grep -q 'CORE_VERSION=v0.0.2$'; then ok "instance.yaml core: reaches the bake as CORE_VERSION"; else fail "instance.yaml core: reaches the bake as CORE_VERSION: $(bake)"; fi
 
 # --- PUSH=1 without REGISTRY is refused before the bake ---
 rc="$(run_package PUSH=1)"
@@ -78,7 +82,7 @@ else
   fail "PUSH=1 pushes (--push, no --load) (rc=$rc): $line $(cat "$TMP/out")"
 fi
 if printf '%s\n' "$line" | grep -qF -- "--metadata-file $TMP/meta.json"; then ok "METADATA_FILE reaches the bake"; else fail "METADATA_FILE reaches the bake: $line"; fi
-if printf '%s\n' "$line" | grep -q 'PLATFORMS=linux/amd64,linux/arm64$'; then ok "a push builds every platform in PLATFORMS"; else fail "a push builds every platform in PLATFORMS: $line"; fi
+if printf '%s\n' "$line" | grep -q 'PLATFORMS=linux/amd64,linux/arm64 |'; then ok "a push builds every platform in PLATFORMS"; else fail "a push builds every platform in PLATFORMS: $line"; fi
 if grep -q 'registry.example.test/acme/{api,worker,web}:v1.0.0' "$TMP/out"; then ok "the pushed names carry REGISTRY"; else fail "the pushed names carry REGISTRY: $(cat "$TMP/out")"; fi
 
 if [ "$FAILURES" -gt 0 ]; then
