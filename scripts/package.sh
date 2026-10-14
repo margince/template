@@ -76,7 +76,7 @@ printf '\n'
 # workspace references ../backend and ../extensions/* by relative path, so a
 # partial context cannot compose.
 cd "$CORE"
-REPO="$REPO" VERSION="$VERSION" MARGINCE_BUILD_REVISION="$revision" \
+REPO="$REPO" VERSION="$VERSION" CORE_VERSION="$core_version" MARGINCE_BUILD_REVISION="$revision" \
   docker buildx bake \
     --set "*.labels.com.margince.instance.name=$instance_name" \
     --set "*.labels.com.margince.instance.revision=$revision" \
