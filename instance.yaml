@@ -2,6 +2,6 @@
 # See docs/superpowers/specs/2026-09-24-client-instance-template-design.md, Section 6.2.
 name: margince-default
 display_name: Margince Default
-core: v0.0.5
+core: v0.0.6
 deploy:
   production: { adapter: host }
