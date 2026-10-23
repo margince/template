@@ -5,8 +5,7 @@
 # No `\b`: git grep on macOS uses a regex engine that does not support it.
 # A boundary is spelled out instead: (^|[^a-z0-9])PATTERN([^a-z0-9]|$).
 #
-# This file, and docs/superpowers/, are the only places allowed to name any
-# of these (spec Section 7).
+# This file is the only place allowed to name any of these.
 
 # Private organization and host
 gradionhq

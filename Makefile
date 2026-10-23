@@ -135,8 +135,8 @@ compose: stage ## Run upstream's composer over the staged set
 	@bash scripts/sync-manifests.sh
 
 ## Staging is a copy, so Vite watches the copy and never sees an edit here. A
-## symlinked frontend layer would fix it properly; the composer refuses one
-## (docs/superpowers/notes/spike-b-frontend-symlink.md). Needs fswatch.
+## symlinked frontend layer would fix it properly; the composer refuses one.
+## Needs fswatch.
 watch: ## Re-stage units whenever a source file changes
 	@command -v fswatch >/dev/null || { echo "watch: needs fswatch (brew install fswatch)" >&2; exit 1; }
 	@echo "watch: re-staging on change under extensions/ — ctrl-c to stop"
@@ -418,9 +418,9 @@ check-manifests: ## Unit manifests are committed and current
 check-docs: ## Every `make <target>` the docs name exists
 	@bash scripts/check-docs.sh
 
-## Public-template gate (spec Section 7): no tracked or staged file names a
-## private repository, host, organization or service. Only docs/superpowers/
-## and scripts/check-public.patterns itself may. `check` above adds this only
+## Public-template gate: no tracked or staged file names a private repository,
+## host, organization or service. Only scripts/check-public.patterns itself
+## may. `check` above adds this only
 ## when .template-version is absent — see the comment there.
 check-public: ## No private repository/host/organization/service is named (template only)
 	@bash scripts/check-public.sh

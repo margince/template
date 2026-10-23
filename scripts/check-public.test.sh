@@ -28,7 +28,7 @@ ok()   { printf 'ok: %s\n' "$*"; }
 
 # Fixture values built from parts at runtime, never spelled whole in this
 # file's own source: this file is itself scanned by check-public (it is not
-# docs/superpowers/ or scripts/check-public.patterns), so a literal match
+# scripts/check-public.patterns), so a literal match
 # here would fail this repository's own gate.
 PRIV_ORG="gradion""hq"
 PRIV_ORG_UPPER="$(printf '%s' "$PRIV_ORG" | tr '[:lower:]' '[:upper:]')"
@@ -75,16 +75,15 @@ else
 fi
 git -C "$REPO" reset -q -- staged.txt && rm -f "$REPO/staged.txt"
 
-# --- a match under docs/superpowers/ passes ---
+# --- a match under docs/superpowers/ fails: no directory is exempt ---
 printf '%s/z\n' "$PRIV_ORG" > "$REPO/docs/superpowers/notes.md"
 commit_all "add a docs/superpowers note"
 if run_check >/dev/null 2>&1; then
-  ok "a match under docs/superpowers/ passes"
+  fail "a match under docs/superpowers/ fails"
 else
-  fail "a match under docs/superpowers/ passes"
+  ok "a match under docs/superpowers/ fails"
 fi
-git -C "$REPO" rm -q -r docs/superpowers >/dev/null && mkdir -p "$REPO/docs/superpowers" \
-  && : > "$REPO/docs/superpowers/.gitkeep" && commit_all "restore docs/superpowers"
+git -C "$REPO" rm -q -r docs/superpowers >/dev/null && commit_all "remove docs/superpowers"
 
 # --- a match under scripts/check-public.patterns itself is not flagged ---
 if run_check >/dev/null 2>&1; then

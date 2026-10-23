@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # check-public.sh — no tracked or staged file names a private repository,
-# private host, private organization or private service (spec Section 7).
+# private host, private organization or private service.
 #
 # This repository is a public template. scripts/check-public.patterns holds
 # the private names it must never carry; this script fails the build the
 # moment one of them lands in a tracked or staged file, anywhere except
-# scripts/check-public.patterns itself (which has to name them to check for
-# them) and docs/superpowers/ (working notes about this repository's own
-# history, not shipped template content).
+# scripts/check-public.patterns itself, which has to name them to check for
+# them.
 #
 # TWO scans, because one is not enough:
 #
@@ -39,7 +38,7 @@ FILTERED="$(mktemp)"
 trap 'rm -f "$FILTERED" "${HITS_FILE:-}"' EXIT
 grep -v -E '^[[:space:]]*(#|$)' "$PATTERNS" > "$FILTERED" || true
 
-PATHSPEC=(-- ':!docs/superpowers/' ':!scripts/check-public.patterns')
+PATHSPEC=(-- ':!scripts/check-public.patterns')
 
 # scan <git grep args...> — one git grep pass. git grep exits 0 (it found a
 # match), 1 (it found nothing, and that is a clean scan, not a failure), or
@@ -73,7 +72,7 @@ if [ -n "$hits" ]; then
   echo "check-public: a tracked or staged file names a private repository, host, organization or service:" >&2
   printf '%s\n' "$hits" >&2
   echo >&2
-  echo "  Replace it. Only docs/superpowers/ and scripts/check-public.patterns may name one." >&2
+  echo "  Replace it. Only scripts/check-public.patterns may name one." >&2
   exit 1
 fi
 

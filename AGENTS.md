@@ -7,10 +7,8 @@ Rules for AI agents and human contributors who change this repository.
 - This repository is `margince/template`, the template that every Margince
   client instance is created from. Without extensions it is itself an
   instance, Margince Default. Read [README.md](README.md) first.
-- The design is
-  [docs/superpowers/specs/2026-09-24-client-instance-template-design.md](docs/superpowers/specs/2026-09-24-client-instance-template-design.md).
-  Do not implement anything that contradicts it; propose a change to the spec
-  instead. `docs/superpowers/` is design history: do not rewrite it.
+- Design specs and plans are kept locally and never committed.
+  `docs/superpowers/` is git-ignored for them.
 - The guides are listed in [docs/README.md](docs/README.md).
 
 ## Rules
@@ -32,9 +30,9 @@ Rules for AI agents and human contributors who change this repository.
 - **Secrets.** Never commit a license, token, key, or password. Scripts read
   them from the environment, never print them, and never pass them on a
   command line. `deploy/<env>/secrets` holds names only.
-- **Public-only rule.** The template is public. No file outside
-  `docs/superpowers/` and `scripts/check-public.patterns` may name a private
-  repository, host, organization, or service (design Section 7).
+- **Public-only rule.** The template is public. No file except
+  `scripts/check-public.patterns` may name a private repository, host,
+  organization, or service.
   `make check-public` enforces this.
 
 ## Writing style

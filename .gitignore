@@ -55,3 +55,6 @@
 !/deploy/**/*.tfvars.example
 /deploy/**/backend.hcl
 /deploy/**/.terraform.lock.hcl
+
+# Design specs and plans: kept locally, never committed.
+/docs/superpowers/
