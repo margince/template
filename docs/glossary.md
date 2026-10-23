@@ -124,9 +124,9 @@ gates that check them. See [adding-an-extension.md](adding-an-extension.md#8-wha
 ## release
 
 A version of an instance: a git tag in the release version format
-(`vX.Y.Z` or `vX.Y.Z-rc.N`), the images built from it, and the GitHub Release
-that lists them. `make release` creates the tag; `release.yml`
-builds the release. See [release.md](release.md).
+(`vX.Y.Z`, optionally with `-alpha.N`, `-beta.N`, or `-rc.N`), the images
+built from it, and the GitHub Release that lists them. `make release` creates
+the tag; `release.yml` builds the release. See [release.md](release.md).
 
 ## risk tier
 

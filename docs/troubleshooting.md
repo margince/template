@@ -480,9 +480,10 @@ is missing, or `core/` is a shallow clone.
 `git -C core fetch --unshallow origin main` for a shallow clone), then
 `make core-check-pin`.
 
-### `error: update-core: '<ref>' must be a release tag like v0.0.2`
+### `error: update-core: '<ref>' must be a release tag like v1.0.0 or v1.0.0-beta.1`
 
-**Cause:** `REF` is not a core release tag (`vX.Y.Z`). Your instance pins core
+**Cause:** `REF` is not a core release tag in the release version format
+([release.md](release.md#2-version-format)). Your instance pins core
 releases only. `update-core: '<ref>' is not a core release tag.` means that no
 such tag exists in `core/`.
 

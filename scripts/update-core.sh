@@ -11,14 +11,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_core
 
 ref="${1:-}"
-[ -n "$ref" ] || die "update-core: pass a core release tag, e.g. make update-core REF=v0.0.3"
+[ -n "$ref" ] || die "update-core: pass a core release tag, e.g. make update-core REF=v1.0.0-beta.1"
 
 # instance.yaml can only record a release tag (design Section 11): a branch
 # name, a bare SHA, or a non-release tag such as archive/pr100-salvage would
 # be written there and make check-instance would then refuse the result.
 # Checked before anything else so a malformed REF fails fast, with no fetch.
-printf '%s' "$ref" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-  || die "update-core: '$ref' must be a release tag like v0.0.2"
+is_release_version "$ref" \
+  || die "update-core: '$ref' must be a release tag like v1.0.0 or v1.0.0-beta.1"
 
 # Fetches origin main with tags, then refuses a core/ that holds work of its own.
 bash "$ROOT/scripts/core-contrib.sh" guard-update

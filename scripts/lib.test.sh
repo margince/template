@@ -371,10 +371,10 @@ unset INSTANCE_FILE
 
 # --- is_release_version ---
 
-for v in v1.2.0 v0.1.0 v1.3.0-rc.1 v10.0.12; do
+for v in v1.2.0 v0.1.0 v1.3.0-rc.1 v1.3.0-beta.2 v1.3.0-alpha.1 v10.0.12; do
   if is_release_version "$v"; then ok "is_release_version accepts $v"; else fail "is_release_version accepts $v"; fi
 done
-for v in 1.2.0 v1.2 v1.2.0-rc.0 v1.2.0-rc1 v1.2.0-beta.1; do
+for v in 1.2.0 v1.2 v1.2.0-rc.0 v1.2.0-rc1 v1.2.0-beta v1.2.0-pre.1 v1.2.0-beta.0; do
   if is_release_version "$v"; then fail "is_release_version refuses $v"; else ok "is_release_version refuses $v"; fi
 done
 
@@ -395,10 +395,18 @@ expect_newer v2.0.0 v1.99.99
 expect_newer v1.2.0 v1.2.0-rc.3
 expect_newer v1.2.0-rc.10 v1.2.0-rc.9
 expect_newer v1.2.1-rc.1 v1.2.0
+expect_newer v1.2.0-beta.1 v1.2.0-alpha.9
+expect_newer v1.2.0-rc.1 v1.2.0-beta.10
+expect_newer v1.2.0 v1.2.0-beta.1
+expect_newer v1.2.0-beta.10 v1.2.0-beta.9
+expect_newer v1.2.1-alpha.1 v1.2.0
 
 expect_not_newer v1.2.0 v1.2.0
 expect_not_newer v1.2.0-rc.1 v1.2.0
 expect_not_newer v1.1.0 v1.2.0
+expect_not_newer v1.2.0-beta.1 v1.2.0-rc.1
+expect_not_newer v1.2.0-alpha.1 v1.2.0-beta.1
+expect_not_newer v1.2.0-beta.2 v1.2.0-beta.2
 
 # IFS must not leak out of version_newer (it is set `local IFS=.` inside).
 IFS_before="$IFS"

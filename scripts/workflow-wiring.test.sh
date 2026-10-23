@@ -105,10 +105,10 @@ if [ -e "$DEPLOY_WF" ]; then
   fi
   if grep -qE 'REF_TYPE:[[:space:]]*\$\{\{[[:space:]]*github\.ref_type[[:space:]]*\}\}' "$DEPLOY_WF" \
      && grep -qF '"$REF_TYPE" != tag' "$DEPLOY_WF" \
-     && grep -qF '"$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$' "$DEPLOY_WF"; then
+     && grep -qF '"$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$' "$DEPLOY_WF"; then
     ok "deploy.yml refuses a run not dispatched from a release tag"
   else
-    fail "deploy.yml does not guard github.ref_type == tag and ref_name ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?\$ through env:"
+    fail "deploy.yml does not guard github.ref_type == tag and ref_name ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?\$ through env:"
   fi
   first_step="$(awk '/^[[:space:]]*steps:/ {s=1; next} s && /^[[:space:]]*- / {n++} n==1 {print} n>1 {exit}' "$DEPLOY_WF")"
   if printf '%s\n' "$first_step" | grep -qF 'github.ref_type'; then
@@ -330,16 +330,16 @@ if [ -e "$RELEASE_WF" ]; then
   fi
 
   version_job="$(block_of version "$RELEASE_WF")"
-  if printf '%s\n' "$version_job" | grep -qF '[[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]'; then
+  if printf '%s\n' "$version_job" | grep -qF '[[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$ ]]'; then
     ok "release.yml's version job checks the tag with the release pattern"
   else
-    fail "release.yml's version job does not check [[ ! \"\$TAG\" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?\$ ]]"
+    fail "release.yml's version job does not check [[ ! \"\$TAG\" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?\$ ]]"
   fi
-  if printf '%s\n' "$version_job" | grep -qE '\*-rc\.\*\)[[:space:]]*prerelease=true' \
+  if printf '%s\n' "$version_job" | grep -qE '\*-\*\)[[:space:]]*prerelease=true' \
      && [ "$(printf '%s\n' "$version_job" | grep -c 'prerelease=true')" -eq 1 ]; then
-    ok "release.yml sets prerelease=true only for -rc.N"
+    ok "release.yml sets prerelease=true only for a pre-release version"
   else
-    fail "release.yml does not set prerelease=true exactly for *-rc.*"
+    fail "release.yml does not set prerelease=true exactly for *-*"
   fi
 
   images_job="$(block_of images "$RELEASE_WF")"
@@ -498,7 +498,7 @@ if [ -e "$RELEASE_WF" ]; then
   if [ "$pre_lines" -eq 1 ] \
      && grep -B2 -- '--prerelease' "$RELEASE_WF" | grep -qF 'if [ "$PRERELEASE" = true ]' \
      && printf '%s\n' "$publish_job" | grep -qE 'PRERELEASE:[[:space:]]*\$\{\{[[:space:]]*needs\.version\.outputs\.prerelease'; then
-    ok "publish adds --prerelease only when the version job says -rc"
+    ok "publish adds --prerelease only when the version job says pre-release"
   else
     fail "--prerelease is not added once, behind PRERELEASE from needs.version.outputs.prerelease"
   fi

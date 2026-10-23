@@ -20,17 +20,18 @@ deployment of a release is in [deploy.md](deploy.md).
 A release version is the git tag and the image tag:
 
 ```
-^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$
+^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$
 ```
 
 | Matches | Does not match |
 |---|---|
-| `v0.1.0`, `v1.2.0`, `v10.0.12`, `v1.3.0-rc.1` | `1.2.0`, `v1.2`, `v1.2.0-rc.0`, `v1.2.0-rc1`, `v1.2.0-beta.1` |
+| `v0.1.0`, `v1.2.0`, `v10.0.12`, `v1.3.0-alpha.1`, `v1.3.0-beta.2`, `v1.3.0-rc.1` | `1.2.0`, `v1.2`, `v1.2.0-rc.0`, `v1.2.0-rc1`, `v1.2.0-beta`, `v1.2.0-pre.1` |
 
-Versions are ordered by semantic versioning: `vX.Y.Z-rc.N` is older than
-`vX.Y.Z`, and the `N` values compare as numbers (`-rc.10` is newer than
-`-rc.2`). A version with `-rc.N` is published as a GitHub pre-release; a
-version without it is published as a normal release.
+Versions are ordered by semantic versioning:
+`vX.Y.Z-alpha.N` < `vX.Y.Z-beta.N` < `vX.Y.Z-rc.N` < `vX.Y.Z`, and the `N`
+values compare as numbers (`-rc.10` is newer than `-rc.2`). A version with a
+suffix is published as a GitHub pre-release; a version without one is
+published as a normal release. Core release tags use the same format.
 
 ## 3. Cut a release
 
@@ -77,7 +78,7 @@ make release VERSION=v0.3.0 RELEASE_CHECK_TARGET=check
 `release.yml` runs when a tag that starts with `v` is pushed:
 
 1. **Version check.** The tag matches the version format and its commit is on
-   `main`. A tag with `-rc.N` is marked as a pre-release.
+   `main`. A tag with a suffix is marked as a pre-release.
 2. **Full gate.** `full-check.yml`: the light gate plus the screen suites,
    the composed typecheck, and the database lanes (Section 8).
 3. **Images.** `make package VERSION=<v>` builds `api`, `web`, and `worker`
