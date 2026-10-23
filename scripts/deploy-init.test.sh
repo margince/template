@@ -245,7 +245,7 @@ fi
 # best-effort structural check on top of them: pyyaml is not provided by
 # `make install` or CI (only the Go toolchain and the stdlib tools this
 # repository's own scripts need are), so its absence is a skip, not a
-# failure — same pattern as scripts/desktop-kit.test.sh's python3 guard.
+# failure.
 yaml_err="$TMP/deploy-init-yaml-err"
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import yaml' >/dev/null 2>&1; then
   ok "margince.yaml YAML-structure check: skipped (no pyyaml)"

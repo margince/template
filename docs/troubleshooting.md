@@ -214,8 +214,7 @@ on the machine. The instance has no such target; run it as
 **Cause:** `make seed-demo` has no default dataset.
 
 **Fix:** Pass the checkout: `make seed-demo DATASET=<dataset-checkout>`.
-`make seed-demo` seeds the `make dev` stack only; for a desktop folder use
-`make desktop-seed` ([desktop-build.md](desktop-build.md#6-seed-demo-data)).
+`make seed-demo` seeds the `make dev` stack only.
 
 ## 5. Checks and CI
 
@@ -351,123 +350,7 @@ for a build that you do not release.
 
 **Fix:** Install Docker Desktop or the buildx plugin.
 
-## 7. Desktop
-
-### `the installation folder is too deeply nested: the database socket path would be <n> bytes and the system limit is 103.`
-
-**Cause:** The launcher refuses to start: macOS limits a socket path to 103
-bytes, and the folder path is longer than 76 bytes. A path inside the checkout,
-such as `build/desktop/margince/`, is usually too long.
-
-**Fix:** Install the folder at a short path, then start it there:
-
-```sh
-make desktop-install DESKTOP_DEST=~/Margince
-make desktop-run
-```
-
-### `error: the installation path is too long: the database socket would be <n> bytes and the system limit is 103.`
-
-**Cause:** `make desktop-install` checks the path before it copies the folder.
-
-**Fix:** Pass a shorter `DESKTOP_DEST`, for example
-`make desktop-install DESKTOP_DEST=~/M`. The message suggests `DEST=`, which
-the `make` target does not read.
-
-### `error: the installation at <folder> is running — quit it first (Ctrl-C in its window), then install again`
-
-**Cause:** `make desktop-install` updates a folder whose app is running.
-
-**Fix:** Stop the app, then run `make desktop-install` again.
-
-### `error: the installation at <folder> has no demo loader.`
-
-**Cause:** The folder was built without a demo dataset, so it has no
-`Load Demo Data.command`.
-
-**Fix:** Build again with the dataset, and install:
-
-```sh
-make desktop DATASET=<dataset-checkout>
-make desktop-install
-```
-
-### `error: no demo dataset.`
-
-**Cause:** `make desktop-seed` has no `DATASET`, and `<folder>/data/demo/` has
-no dataset.
-
-**Fix:** Pass `DATASET=<dataset-checkout>`, or copy the dataset into
-`<folder>/data/demo/`.
-
-### `422 fx_rate_base_self` during `make desktop-seed`
-
-**Cause:** The folder's base currency is not EUR. The demo dataset is based on
-EUR, and the `api` refuses an exchange rate for the base currency. The base
-currency is fixed when the workspace is created.
-
-**Fix:** Start over with a new database; this deletes the folder's data:
-
-```sh
-rm -rf ~/Margince/data ~/Margince/margince.yaml ~/Margince/margince.env
-make desktop-install
-```
-
-`make desktop-install` writes `base_currency: EUR` unless `CURRENCY` is set
-([desktop-build.md](desktop-build.md#41-what-setupcommand-writes)).
-
-### A `/v1/ext/...` request answers `500`, and `api.log` says `extsecrets: no keyvault is configured for this installation`
-
-**Cause:** `margince.env` has no `MARGINCE_KEYVAULT_ROOT_KEY`. Every unit that
-stores a credential needs it. The folder was configured without
-`Setup.command`, or without `openssl`.
-
-**Fix:** Stop the app, run `Setup.command` in the folder (or
-`make desktop-install` again), and start the app. Set the key before you
-connect an account: credentials sealed under one key do not open with another.
-
-### `margince.env line 1: expected KEY=value, got "﻿# ..."` (Windows)
-
-**Cause:** `margince.env` starts with a UTF-8 byte-order mark. `setup.ps1` of an
-older release wrote it.
-
-**Fix:** Run `Setup.cmd` in the folder again. It removes the mark and keeps the
-settings. A hand-edited `margince.env` must be saved as UTF-8 without a BOM.
-
-### `error: margince.env names an object store at <host:port> and nothing is listening there.`
-
-**Cause:** `margince.env` sets `MARGINCE_BLOBSTORE_ENDPOINT`, and the `api`
-does not start without that object store.
-
-**Fix:** Start the object store, or remove the `MARGINCE_BLOBSTORE_*` lines from
-`margince.env` to store files in `data/blobs/`.
-
-### `error: neither data/admin-password nor the seeded password signs in as <email>.`
-
-**Cause:** The admin password was changed in the app.
-
-**Fix:** Pass the password: `MARGINCE_SEED_PASSWORD=<password> make desktop-seed`.
-
-### A database client cannot connect to the desktop folder
-
-**Cause:** The macOS database has no TCP listener. It accepts connections only
-on the socket in `<folder>/data/sockets/`.
-
-**Fix:** Run `make desktop-dsn` for the socket path and a `socat` bridge, or
-`make desktop-psql` ([desktop-build.md](desktop-build.md#121-the-database)).
-
-### `Bad CPU type in executable`
-
-**Cause:** The folder was built for the other Mac architecture.
-
-**Fix:** Use the zip for the Mac: `margince-macos-apple-silicon-<v>.zip` or
-`margince-macos-intel-<v>.zip`. A local `make desktop` builds for the Mac
-that runs it.
-
-Core's failure table for the desktop app is in
-[core/docs/how-to/build-the-desktop-app.md](../core/docs/how-to/build-the-desktop-app.md#when-something-goes-wrong).
-
-## 8. Deploy and host
+## 7. Deploy and host
 
 ### `error: deploy: the working tree has uncommitted changes, so the hooks and configuration match no commit; commit them, or re-run with ALLOW_DIRTY=1`
 
@@ -560,7 +443,7 @@ it afterwards.
 **Fix:** Use the admin password that you set. `host-admin-password: <target> has
 no <file>; run make deploy ...` means that the environment was never deployed.
 
-## 9. The core submodule
+## 8. The core submodule
 
 ### `git status` shows `core` as modified
 
@@ -616,7 +499,7 @@ in `core/`. The same guard refuses modified tracked files
 `make core-restore`, or give the commits a branch name with
 `git -C core branch <name>`.
 
-## 10. Local stack
+## 9. Local stack
 
 ### `error: local: make local-up needs ports 80 and 443:` ...
 
@@ -641,13 +524,7 @@ and the data volumes still hold the old database.
 **Fix:** Run `make local-down WIPE=1`, which removes the volumes and `.local/`,
 then `make local-up VERSION=<v>`. This deletes the local data.
 
-## 11. Trial and license
-
-### `error: trial: <dir> exists; pass FORCE=1 to replace it`
-
-**Cause:** A trial bundle for this name, version, and platform exists.
-
-**Fix:** Run `make trial VERSION=<v> FORCE=1`, or move the existing bundle.
+## 10. License
 
 ### `license: set MARGINCE_LICENSE_API and MARGINCE_ACCOUNT_TOKEN (or set $MARGINCE_TRIAL_LICENSE directly to skip the request)`
 
@@ -655,8 +532,7 @@ then `make local-up VERSION=<v>`. This deletes the local data.
 `make license`, the variable named last is `MARGINCE_LICENSE`.
 
 **Fix:** Set the license value, or the two service variables
-([license.md](license.md#5-variables)). `make trial` then stops with
-`error: trial: no trial license; nothing was built`.
+([license.md](license.md#5-variables)).
 
 ### `license: cannot reach <url>`
 
@@ -666,85 +542,6 @@ then `make local-up VERSION=<v>`. This deletes the local data.
 service are printed as `license: the license service answered <code>: <message>`
 ([license.md](license.md#6-behavior)).
 
-## 12. All-in-one image
-
-### `error: aio: pass VERSION=<release version>, e.g. make aio VERSION=v0.1.0 (got '<value>')`
-
-**Cause:** `VERSION` is missing or is not a release version.
-
-**Fix:** Pass a release version, for example `make aio VERSION=v0.1.0`.
-
-### `error: aio: PUSH=1 requires REGISTRY (the registry host the image is pushed to)`
-
-**Cause:** Without `REGISTRY` the image name has no registry host.
-
-**Fix:** Set `REGISTRY=<registry>` ([try-margince.md](try-margince.md#3-build-the-image)).
-
-### `aio: notice: the workspace's base_currency is <code> and the demo dataset is euro-based, so the image has no demo data.`
-
-**Cause:** The demo dataset needs a workspace with the base currency `EUR`.
-
-**Fix:** Set `workspace.base_currency: EUR` in
-`deploy/production/config/margince.yaml`, or build without demo data.
-
-### `error: aio-smoke: no image <repo>/all-in-one:<v> — run make aio VERSION=<v> first`
-
-**Cause:** The image is not in the local image store.
-
-**Fix:** Run `make aio VERSION=<v>`, then `make aio-smoke VERSION=<v>` again.
-
-### `aio-smoke: FAIL: <check>`
-
-**Cause:** The image started, but a check failed. The last 100 log lines of
-the container follow the message.
-
-**Fix:** Read the log lines. `margince: <process> exited` names the process
-that stopped.
-
-### `Error: Docker is installed but not running. Start Docker Desktop, then run this command again.`
-
-**Cause:** The install command found Docker but could not start it.
-
-**Fix:** Start Docker Desktop, wait until it reports that it is running, and
-run the command again.
-
-### `Error: Docker did not start within 3 minutes. ...`
-
-**Cause:** Docker Desktop is still starting, or waits for the tester to accept
-its terms.
-
-**Fix:** Open Docker Desktop, accept its terms, wait until it is running, and
-run the command again.
-
-### `Error: Ports 8080 to 8099 are all in use. ...`
-
-**Cause:** Other programs use every port that the install command tries.
-
-**Fix:** Stop one of those programs, then run the command again.
-
-### `Error: Margince did not start within 10 minutes. ...`
-
-**Cause:** The container did not become healthy.
-
-**Fix:** Run the command with the `logs` action and read the lines that start
-with `margince:`. Send them to the instance owner.
-
-### `Error: This system (<name>) is not supported. ...`
-
-**Cause:** The install command installs Docker only on macOS, Windows, and
-Ubuntu 22.04 and 24.04.
-
-**Fix:** Install Docker from the page the message names, then run the command
-again. The command then only starts Margince.
-
-### `Error: ... There is no terminal to answer in. ...`
-
-**Cause:** The command must ask before it installs Docker, and it runs
-without a terminal.
-
-**Fix:** Add `--yes` at the end (`sh -s -- up --yes`). On Windows, use
-`& ([scriptblock]::Create((irm <url>/install.ps1))) up -Yes`.
-
 ## Related guides
 
 - [create-an-instance.md](create-an-instance.md): setup, template sync, core
@@ -752,6 +549,4 @@ without a terminal.
 - [adding-an-extension.md](adding-an-extension.md): units and gates.
 - [release.md](release.md): releases and images.
 - [deploy.md](deploy.md): deployment.
-- [desktop-build.md](desktop-build.md): the desktop folder.
-- [trial.md](trial.md) and [license.md](license.md): trials and licenses.
-- [try-margince.md](try-margince.md): the all-in-one image.
+- [license.md](license.md): licenses.

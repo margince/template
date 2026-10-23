@@ -10,8 +10,6 @@
 # the fast gate fast without dropping the slow one.
 #
 # Release and host deployment steps are part of `scripts/lifecycle.test.sh`.
-# Trial is covered separately, by `scripts/trial.test.sh` (run under
-# `make test-scripts`, not by this workflow).
 #
 # `.github/workflows/` is template-owned (.template-owned), so every instance
 # inherits this file unchanged and check-template rejects removing it. In an

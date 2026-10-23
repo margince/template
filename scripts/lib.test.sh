@@ -315,8 +315,7 @@ expect_eq_str "an absolute path that does not exist is kept as given" \
 # A WINDOWS absolute path is absolute. MSYS2 bash accepts `D:/a/...` and does
 # not start it with a slash, so the relative arm turned it into
 # <pwd>/D:/a/... — a path that cannot exist. Everything downstream then
-# reported "no dataset reachable", and the desktop-windows lane stamped a
-# folder with no loader and failed on the seed step three lines later.
+# reported "no dataset reachable".
 expect_eq_str "a Windows drive path is absolute, not relative" \
   "$(cd "$TMP" && dataset_path "D:/a/dataset")" "D:/a/dataset"
 expect_eq_str "a Windows drive path with backslashes is absolute too" \

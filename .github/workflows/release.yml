@@ -1,6 +1,6 @@
 # The release lane: a semver tag in, a finished release out.
 #
-# The ONLY lane that cuts a downloadable build, and one gesture starts it:
+# The ONLY lane that cuts a release, and one gesture starts it:
 #
 #   git tag -a v0.3.0 -m "..." && git push origin v0.3.0
 #
@@ -58,8 +58,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          ## This tag IS the version. It names the build, the images, the zips
-          ## and the release, and it is what a user quotes in a bug report —
+          ## This tag IS the version. It names the build, the images and the
+          ## release, and it is what a user quotes in a bug report —
           ## nothing derives it, so nothing catches a malformed one later. It is
           ## checked here with the release pattern (design Section 10, the same
           ## RELEASE_VERSION_RE scripts/lib.sh holds), and a v0.3, a v0.3.0.1 or
@@ -187,42 +187,6 @@ jobs:
         shell: bash
         run: make smoke VERSION="$VERSION"
 
-      ## The all-in-one image (docs/superpowers/specs/2026-09-30-all-in-one-image-design.md).
-      ## The dataset reaches it as it reaches the desktop lanes; without it the
-      ## image has no demo data and says so.
-      - name: Can the demo dataset be reached?
-        id: dataset
-        shell: bash
-        env:
-          KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
-          REPO: ${{ vars.DATASET_REPOSITORY }}
-        run: |
-          if [ -n "$KEY" ] && [ -n "$REPO" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no DATASET_REPOSITORY/DATASET_DEPLOY_KEY — the all-in-one image has no demo data"
-          fi
-
-      - name: Check out the demo dataset
-        if: steps.dataset.outputs.available == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ vars.DATASET_REPOSITORY }}
-          ssh-key: ${{ secrets.DATASET_DEPLOY_KEY }}
-          path: .dataset
-          persist-credentials: false
-
-      - name: Build the all-in-one image (linux/amd64, loaded locally)
-        shell: bash
-        env:
-          DATASET: ${{ steps.dataset.outputs.available == 'true' && '.dataset' || '' }}
-        run: make aio VERSION="$VERSION"
-
-      - name: Smoke test the all-in-one image
-        shell: bash
-        run: make aio-smoke VERSION="$VERSION"
-
       - name: Push the images
         id: push
         if: vars.REGISTRY != ''
@@ -232,7 +196,6 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AIO_DATASET: ${{ steps.dataset.outputs.available == 'true' && '.dataset' || '' }}
         run: |
           set -euo pipefail
           ## docker login takes the registry host, without the path REGISTRY
@@ -259,10 +222,6 @@ jobs:
             digest="$(jq -er --arg role "$role" '.[$role]."containerimage.digest"' "$metadata")"
             echo "${repo}/${role}:${VERSION}@${digest}" >> "$list"
           done
-          aio_metadata="$RUNNER_TEMP/aio-metadata.json"
-          DATASET="$AIO_DATASET" make aio VERSION="$VERSION" PUSH=1 METADATA_FILE="$aio_metadata"
-          digest="$(jq -er '."containerimage.digest"' "$aio_metadata")"
-          echo "${repo}/all-in-one:${VERSION}@${digest}" >> "$list"
 
       ## The public mirror (docs/release.md, Section 5): the pushed images
       ## copied, every platform and the same digests, to MIRROR_REGISTRY. Docker
@@ -324,101 +283,18 @@ jobs:
           path: ${{ runner.temp }}/image-list/
           if-no-files-found: error
 
-      - name: Install scripts for testers
-        shell: bash
-        run: make aio-scripts VERSION="$VERSION"
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: margince-aio-scripts-${{ needs.version.outputs.version }}
-          path: |
-            dist/aio/${{ needs.version.outputs.version }}/install.sh
-            dist/aio/${{ needs.version.outputs.version }}/install.ps1
-          if-no-files-found: error
-
-  ## Reusable lanes, called rather than copied, so the bundle a release ships is
-  ## built by the same workflow a manual dispatch exercises. They gate on
-  ## full-check deliberately: macOS minutes bill at ten times a Linux minute, and
-  ## compiling PostgreSQL for a tree that fails lint is an expensive way to find
-  ## that out.
-  desktop-macos-apple-silicon:
-    needs: [version, full-check]
-    uses: ./.github/workflows/desktop-macos.yml
-    with:
-      ref: ${{ needs.version.outputs.ref }}
-      version: ${{ needs.version.outputs.version }}
-      arch: apple-silicon
-    secrets:
-      DATASET_DEPLOY_KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
-
-  ## The SAME lane, on an Intel runner. A macOS bundle is whatever machine built
-  ## it, so this is the only way an Intel Mac gets a folder that starts at all.
-  ##
-  ## Gated on the Apple-silicon build rather than merely on full-check, which is
-  ## the argument above applied once more: paying for a second macOS job — ten
-  ## times a Linux minute — for a tree whose first macOS job just failed buys
-  ## nothing. It is also the job with an end date. GitHub retires x86_64 on
-  ## Actions in August 2027, so this is the one that will eventually fail for a
-  ## reason outside this repository, and it should be the one that fails last.
-  desktop-macos-intel:
-    needs: [version, full-check, desktop-macos-apple-silicon]
-    uses: ./.github/workflows/desktop-macos.yml
-    with:
-      ref: ${{ needs.version.outputs.ref }}
-      version: ${{ needs.version.outputs.version }}
-      arch: intel
-    secrets:
-      DATASET_DEPLOY_KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
-
-  desktop-windows:
-    needs: [version, full-check]
-    uses: ./.github/workflows/desktop-windows.yml
-    with:
-      ref: ${{ needs.version.outputs.ref }}
-      version: ${{ needs.version.outputs.version }}
-    secrets:
-      DATASET_DEPLOY_KEY: ${{ secrets.DATASET_DEPLOY_KEY }}
-
-  ## The release is created HERE, in one call, with all three bundles already in
-  ## hand. There is no window in which the tag has a release that carries no
-  ## download — which is the whole reason this lane exists rather than a person
-  ## publishing first and CI catching up. A release that carries SOME of them is
-  ## the same failure in a smaller size: the reader of the release page cannot
-  ## tell a folder that is missing from one that was never built for their Mac.
+  ## The release is created HERE, after the gate and the images, so a release
+  ## page never names images that failed their smoke test.
   publish:
-    needs: [version, full-check, images, desktop-macos-apple-silicon, desktop-macos-intel, desktop-windows]
+    needs: [version, full-check, images]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: margince-macos-apple-silicon-${{ needs.version.outputs.version }}
-          path: dist
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: margince-macos-intel-${{ needs.version.outputs.version }}
-          path: dist
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: margince-windows-${{ needs.version.outputs.version }}
-          path: dist
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
           name: margince-images-${{ needs.version.outputs.version }}
           path: image-list
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: margince-aio-scripts-${{ needs.version.outputs.version }}
-          path: dist
-
-      - name: Show what will be attached
-        shell: bash
-        run: ls -l dist
 
       ## The notes name what the release is made of: the core release, this
       ## repository's commit, and the pushed images by digest (or why none were
@@ -455,18 +331,6 @@ jobs:
               echo
               sed '/^$/d; s/^/- /' image-list/mirror.txt
             fi
-            ## The install scripts pull the pushed all-in-one image. Without a
-            ## push, their image name has no registry and a tester's pull would
-            ## go to the default public registry, so they are not offered.
-            if ! grep -qF 'images were not pushed' image-list/images.txt; then
-              echo
-              echo "## Try it"
-              echo
-              echo "Testers start the all-in-one image with one command. It installs Docker when it is missing."
-              echo
-              echo "- macOS, Ubuntu: \`curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.sh | sh\`"
-              echo "- Windows (PowerShell): \`irm https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/install.ps1 | iex\`"
-            fi
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
@@ -484,18 +348,11 @@ jobs:
           set -euo pipefail
 
           ## Idempotent on a re-run: a release may already exist if the publish
-          ## step failed after creating it. Uploading with --clobber into the
-          ## existing one is the recovery, rather than a red run nobody can
-          ## clear without deleting the release by hand.
-          ## The install scripts only when their image was pushed (see the notes).
-          assets=(dist/*.zip)
-          if ! grep -qF 'images were not pushed' image-list/images.txt; then
-            assets+=(dist/install.sh dist/install.ps1)
-          fi
-
+          ## step failed after creating it. Replacing its notes is the recovery,
+          ## rather than a red run nobody can clear without deleting the release
+          ## by hand.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release: $TAG already exists — replacing its assets and notes"
-            gh release upload "$TAG" "${assets[@]}" --clobber
+            echo "release: $TAG already exists — replacing its notes"
             gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
           else
             ## Spelled as a conditional rather than `[ … ] && args+=(…)`. The
@@ -507,8 +364,7 @@ jobs:
             if [ "$PRERELEASE" = true ]; then
               args+=(--prerelease)
             fi
-            gh release create "$TAG" "${args[@]}" "${assets[@]}"
+            gh release create "$TAG" "${args[@]}"
           fi
 
           echo "release: published $TAG" >> "$GITHUB_STEP_SUMMARY"
-          gh release view "$TAG" --json assets -q '.assets[].name' >> "$GITHUB_STEP_SUMMARY"

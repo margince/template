@@ -16,7 +16,6 @@ link to it.
 
 | Guide | Purpose |
 |---|---|
-| [Desktop build](desktop-build.md) | Build, install, run, and seed the macOS desktop folder. |
 | [Contributing to core](contributing-to-core.md) | Change `core/` on a contribution branch and open a pull request to `margince/margince`. |
 | [Troubleshooting](troubleshooting.md) | Known error messages, their causes, and their fixes. |
 
@@ -27,8 +26,6 @@ link to it.
 | [Release](release.md) | Cut a release with `make release`, and what `release.yml` builds, tests, and publishes. Image names, `make package`, and `make smoke`. |
 | [Deploy](deploy.md) | The deployment contract, `make deploy-init`, the `host` adapter, the `hook` adapter, and `deploy.yml`. |
 | [License](license.md) | Obtain a trial or production license with `make license`, and the license service API. |
-| [Trial](trial.md) | Build a trial desktop bundle with a trial license with `make trial`. |
-| [Try Margince](try-margince.md) | Build the all-in-one image with `make aio` and give testers the one-line install command. |
 
 ## Reference
 

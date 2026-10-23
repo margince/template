@@ -209,7 +209,7 @@ passes:
 | `fe-ds-gates` | Core's design-system gates over the unit screens. |
 
 CI runs a subset of these on every pull request; see
-[release.md](release.md#9-ci-workflows).
+[release.md](release.md#8-ci-workflows).
 
 ## 9. The manifest
 

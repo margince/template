@@ -3,7 +3,7 @@
 This guide covers Margince licenses: when a license is needed, how to obtain a
 production or trial license with `scripts/license.sh`, and the license service
 API that the script calls. It is for the developer or operator who deploys an
-instance or builds a trial bundle. It is the one guide for licenses.
+instance. It is the one guide for licenses.
 
 A license is a JWT that core reads from `MARGINCE_LICENSE`. It authorizes
 running Margince core; there is no per-instance product. A license is never
@@ -17,7 +17,6 @@ calls the license service.
 | Development (`make dev`) | `MARGINCE_ENV=dev` | Not needed. |
 | Smoke test (`make smoke`) | `MARGINCE_ENV=test` | Not needed. |
 | Local stack (`make local-up`) | `MARGINCE_ENV=test`, or production when `MARGINCE_LICENSE` is set | Optional. |
-| Trial bundle (`make trial`) | production | A trial license, written into the bundle. See [trial.md](trial.md). |
 | Deployment (`make deploy`) | production, unless the environment sets `MARGINCE_ENV` to `dev` or `test` | A production license in `MARGINCE_LICENSE`. See [deploy.md](deploy.md#58-the-license-check). |
 
 ## 2. Prerequisites
@@ -48,8 +47,7 @@ calls the license service.
 
 ## 4. Obtain a trial license
 
-`make trial` calls `scripts/license.sh trial <file>` itself. To obtain a trial
-license on its own:
+To obtain a trial license:
 
 ```sh
 MARGINCE_LICENSE_API=https://license.margince.example \
@@ -104,5 +102,4 @@ Content-Type: application/json
 ## Related guides
 
 - [deploy.md](deploy.md): where a deployment reads `MARGINCE_LICENSE`.
-- [trial.md](trial.md): the trial bundle that embeds a trial license.
 - [release.md](release.md): the release a license runs with.
