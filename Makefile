@@ -173,7 +173,7 @@ u: compose ## One unit's tests + policy gates (NAME=<unit>)
 	@# finding names core/extensions/<unit>/…, the staged copy that must not be
 	@# edited and that the next compose overwrites.
 	@set -o pipefail; $(MAKE) -C $(CORE) ext-imports 2>&1 $(REWRITE)
-	@set -o pipefail; $(MAKE) -C $(CORE) fitness-jurisdiction 2>&1 $(REWRITE)
+	@set -o pipefail; $(MAKE) -C $(CORE) no-jurisdiction 2>&1 $(REWRITE)
 	@$(MAKE) compose >/dev/null
 	@$(MAKE) check-manifests
 
