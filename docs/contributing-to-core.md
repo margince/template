@@ -15,7 +15,7 @@ Moving the instance to a new core release is in
 | A unit's own behavior, tables, screen, or tests | The unit, in `extensions/<name>/` ([adding-an-extension.md](adding-an-extension.md)). |
 | A core package that a unit needs to import but that has no `//margince:extension-surface` marker | Core. Units may import only marked packages under `core/backend/pkg/`; the `arch` gate refuses other imports. |
 | A change to an existing extension seam (a type, a field, or an interface in a marked package) | Core. |
-| A fix to a core bug, a core `make` lane, core's composer, or the desktop build in `core/desktop/` | Core. |
+| A fix to a core bug, a core `make` lane, or core's composer | Core. |
 | A lifecycle script, workflow, or `make` target of this repository | The template ([create-an-instance.md](create-an-instance.md#6-receive-template-changes)). |
 
 Never edit `core/` to change the instance. The instance pins a core release
@@ -216,6 +216,6 @@ change the remote and branch that these targets compare with and branch from.
 
 - [adding-an-extension.md](adding-an-extension.md): the units that use a seam.
 - [create-an-instance.md](create-an-instance.md#7-upgrade-core): upgrade core.
-- [troubleshooting.md](troubleshooting.md#9-the-core-submodule): core
+- [troubleshooting.md](troubleshooting.md#8-the-core-submodule): core
   submodule errors.
 - `core/CONTRIBUTING.md`: core's contribution rules.

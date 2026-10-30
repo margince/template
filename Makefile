@@ -30,11 +30,6 @@ REWRITE := | { . $(CURDIR)/scripts/lib.sh; rewrite_staged_paths; }
 	dev dev-fresh dev-stop dev-logs seed-dev seed-demo verify-demo run \
 	infra-up infra-down infra-logs infra-reset db-up migrate \
 	lint fmt package smoke toolcheck test-integration test-integration-ext ci \
-	desktop desktop-mirror desktop-kit desktop-win-kit \
-	desktop-install desktop-run desktop-connect desktop-seed \
-	desktop-verify desktop-status desktop-logins desktop-psql desktop-dsn \
-	desktop-clean trial \
-	aio aio-up aio-down aio-reset aio-logins aio-logs aio-smoke aio-scripts \
 	update-core clean
 
 help: ## Show the lanes
@@ -140,8 +135,8 @@ compose: stage ## Run upstream's composer over the staged set
 	@bash scripts/sync-manifests.sh
 
 ## Staging is a copy, so Vite watches the copy and never sees an edit here. A
-## symlinked frontend layer would fix it properly; the composer refuses one
-## (docs/superpowers/notes/spike-b-frontend-symlink.md). Needs fswatch.
+## symlinked frontend layer would fix it properly; the composer refuses one.
+## Needs fswatch.
 watch: ## Re-stage units whenever a source file changes
 	@command -v fswatch >/dev/null || { echo "watch: needs fswatch (brew install fswatch)" >&2; exit 1; }
 	@echo "watch: re-staging on change under extensions/ — ctrl-c to stop"
@@ -178,7 +173,7 @@ u: compose ## One unit's tests + policy gates (NAME=<unit>)
 	@# finding names core/extensions/<unit>/…, the staged copy that must not be
 	@# edited and that the next compose overwrites.
 	@set -o pipefail; $(MAKE) -C $(CORE) ext-imports 2>&1 $(REWRITE)
-	@set -o pipefail; $(MAKE) -C $(CORE) fitness-jurisdiction 2>&1 $(REWRITE)
+	@set -o pipefail; $(MAKE) -C $(CORE) no-jurisdiction 2>&1 $(REWRITE)
 	@$(MAKE) compose >/dev/null
 	@$(MAKE) check-manifests
 
@@ -423,9 +418,9 @@ check-manifests: ## Unit manifests are committed and current
 check-docs: ## Every `make <target>` the docs name exists
 	@bash scripts/check-docs.sh
 
-## Public-template gate (spec Section 7): no tracked or staged file names a
-## private repository, host, organization or service. Only docs/superpowers/
-## and scripts/check-public.patterns itself may. `check` above adds this only
+## Public-template gate: no tracked or staged file names a private repository,
+## host, organization or service. Only scripts/check-public.patterns itself
+## may. `check` above adds this only
 ## when .template-version is absent — see the comment there.
 check-public: ## No private repository/host/organization/service is named (template only)
 	@bash scripts/check-public.sh
@@ -455,10 +450,7 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/preflight.test.sh
 	@bash scripts/check-manifests.test.sh
 	@bash scripts/check-public.test.sh
-	@bash scripts/build-info.test.sh
-	@bash scripts/desktop-kit.test.sh
 	@bash scripts/workflow-wiring.test.sh
-	@bash scripts/desktop-arch.test.sh
 	@bash scripts/check-instance-mk.test.sh
 	@bash scripts/check-template.test.sh
 	@bash scripts/template-sync.test.sh
@@ -470,11 +462,6 @@ test-scripts: ## The staging scripts' own tests
 	@bash scripts/release.test.sh
 	@bash scripts/package.test.sh
 	@bash scripts/smoke.test.sh
-	@bash scripts/trial.test.sh
-	@bash scripts/aio.test.sh
-	@bash scripts/aio-install.test.sh
-	@if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -NonInteractive -File scripts/aio-install.test.ps1; \
-	  else echo "aio-install.test.ps1: skipped (pwsh is not installed; CI runs it)"; fi
 	@bash scripts/deploy/host/render.test.sh
 	@bash scripts/deploy/host.test.sh
 	@bash scripts/deploy/standard-hooks.test.sh
@@ -572,15 +559,6 @@ seed-dev: ## Demo workspace + records on the running stack (needs make dev)
 ## test -f below (resolved from the instance root) and then reached
 ## `$(MAKE) -C core`, which resolves it from core/ — a different directory. An
 ## absolute path is the only spelling both sides agree on.
-##
-## DATASET_GIVEN is what the CALLER typed, captured BEFORE the override below
-## resolves it. The desktop lanes need that distinction and this is the only
-## place it survives: after the override, DATASET is either resolved to an
-## absolute path or still empty, and `$(origin DATASET)` reads "override"
-## whether or not anyone passed one. A desktop installation carries its own
-## data/demo, and preferring it over an explicit DATASET is only possible
-## while "nobody said" is still visible.
-DATASET_GIVEN := $(DATASET)
 override DATASET := $(if $(DATASET),$(shell . $(CURDIR)/scripts/lib.sh; dataset_path "$(DATASET)"))
 
 seed-demo: ## Fill the running stack from the demo dataset (DATASET=<path> required)
@@ -656,221 +634,6 @@ package: compose ## Build the role images with our units (ROLE=, VERSION=, REPO=
 ## (seconds, default 10) is how long the worker must stay running.
 smoke: ## Start the role images with a temporary database and check them (VERSION=, SMOKE_TIMEOUT=, SMOKE_SETTLE=)
 	@bash scripts/smoke.sh "$(VERSION)"
-
-# ─────────────────────────── desktop build ────────────────────────────
-
-# Core's build writes here; DESKTOP_OUT is our mirror of it, outside the
-# submodule. Both are ignored (core/.gitignore, .gitignore).
-DESKTOP_SRC := $(CORE)/build/desktop/margince
-DESKTOP_OUT := build/desktop/margince
-
-## Empty when VERSION is unset, so the flag is absent rather than passed with an
-## empty value — build-info.sh distinguishes the two, and `--version ""` would
-## name the build the empty string instead of falling back to the derived one.
-VERSION_FLAG := $(if $(VERSION),--version $(VERSION),)
-
-## SEEDED=1 re-stamps a folder whose database was filled in the build: the demo
-## loader and the seeder it drives come OUT, and the README stops describing a
-## dataset the recipient no longer has to fetch.
-SEEDED_FLAG := $(if $(SEEDED),--seeded,)
-
-## desktop — the self-contained macOS folder (Postgres, bus, api, worker, web,
-## launcher; no Docker), with our units composed into it. ~5 min on the first
-## run, which compiles Postgres; minutes after that.
-##
-## Upstream owns the build — core/desktop/, documented in
-## core/docs/how-to/build-the-desktop-app.md. This lane exists for two reasons
-## that are ours rather than upstream's: `compose` runs first, so the folder is
-## built from a tree with our units staged in it, and `desktop-mirror` copies
-## the result out of the submodule afterwards.
-##
-## It calls core's three stages directly rather than going through the
-## `core-root-%` rule, because that rule re-STAGES and `compose` has just done
-## it. Until core commit 50f57116 there was a second, sharper reason: core's
-## build-app.sh installed only the root pnpm workspace, so every unit screen
-## failed to resolve react and this lane carried the missing install itself.
-## Upstream does that install now, and refuses loudly if the composed workspace
-## is absent, so the workaround is gone.
-##
-## VERSION= names the build. It reaches the folder through desktop-kit, which
-## writes it into BUILD-INFO.txt and runtime/build-info.json — the only record
-## an unzipped folder has of what it is. A release lane passes its tag; left
-## unset it is derived, and scripts/build-info.sh owns that rule.
-desktop: compose ## The self-contained macOS desktop folder, with our units (VERSION=)
-	@$(MAKE) -C $(CORE) desktop-deps
-	@$(MAKE) -C $(CORE) desktop-app
-	@$(MAKE) -C $(CORE) desktop-dist
-	@$(MAKE) desktop-mirror
-	@$(MAKE) desktop-kit VERSION="$(VERSION)"
-
-## desktop-mirror — copy the built folder out of the submodule into ./build/.
-##
-## Reachable on its own so a re-mirror does not rebuild. Two reasons it exists
-## at all: core's `make clean` drops core/build/ wholesale, and an artifact of
-## this installation reads better outside upstream's tree than inside it.
-##
-## It does NOT make the folder runnable, and the message below says so rather
-## than letting the launcher be the one to explain it. macOS caps a unix socket
-## path at 103 bytes; the launcher appends /data/sockets/.s.PGSQL.5432 (27) to
-## the install root, so the root must be <= 76 bytes. This checkout's path is
-## 79 before `build/desktop/margince` is added, so NO in-tree location can run
-## — moving it here saves 5 bytes against a 26-byte deficit. Copy it out.
-desktop-mirror: ## Re-copy the built desktop folder into ./build/desktop/
-	@test -d $(DESKTOP_SRC) || { \
-		echo "desktop-mirror: $(DESKTOP_SRC) does not exist — run 'make desktop' first" >&2; exit 1; }
-	@rm -rf $(DESKTOP_OUT)
-	@mkdir -p $(dir $(DESKTOP_OUT))
-	@cp -Rp $(DESKTOP_SRC) $(DESKTOP_OUT)
-	@echo "desktop: $(DESKTOP_OUT) ($$(du -sh $(DESKTOP_OUT) | cut -f1))"
-	@echo "desktop: it cannot run from here (socket path > 103 bytes). Next:"
-	@echo "         make desktop-install   copy it to $(DESKTOP_DEST)"
-	@echo "         make desktop-run       start it"
-	@echo "         make desktop-seed      fill it from the demo dataset"
-	@echo "         make desktop-connect   start it reachable by Claude (tunnel + MCP)"
-
-## ────────────────────────── the demo-data loader ──────────────────────────
-##
-## `make seed-demo` needs this repository, a Go toolchain and a composed
-## workspace. Nobody who downloads a zip has any of the three — so the seeder
-## ships INSIDE the folder as a binary, driven by a script beside it and a
-## README that tells a non-technical reader where to put the dataset. That is
-## the "kit", and scripts/desktop-kit/ is its source.
-##
-## The dataset itself never ships: it is a private repository. What ships is an
-## empty data/demo and the instruction to fill it.
-##
-## `make desktop` stamps the macOS folder automatically. This is reachable on
-## its own so a change to the loader does not mean a 20-minute rebuild.
-desktop-kit: compose ## Stamp the loader and the build info into the folder (VERSION=, SEEDED=1)
-	@DATASET="$(DATASET)" bash scripts/desktop.sh kit --dir $(DESKTOP_OUT) --os darwin $(VERSION_FLAG) $(SEEDED_FLAG)
-
-## desktop-win-kit — the same, for a Windows folder built elsewhere (DIR=).
-##
-## Takes DIR because we cannot produce that folder here: upstream builds it with
-## PowerShell ON a Windows host — pgvector has no build system but nmake against
-## MSVC, and Redis needs MSYS2 — so `make desktop-win` is not a lane this
-## repository can run. The seeder is the one half that DOES cross-build (pure Go,
-## CGO_ENABLED=0), so this stamps a folder wherever it is: on the Windows host
-## after `make -C core desktop-win`, or on a copy mounted here.
-desktop-win-kit: compose ## Stamp the loader into a Windows desktop folder (DIR=, VERSION=)
-	@test -n "$(DIR)" || { \
-		echo "desktop-win-kit: DIR= is required — the path to a built margince-windows folder" >&2; exit 1; }
-	@DATASET="$(DATASET)" bash scripts/desktop.sh kit --dir "$(DIR)" --os windows $(VERSION_FLAG) $(SEEDED_FLAG)
-
-## trial — a production-mode desktop bundle with a trial license, for a client
-## to evaluate on a laptop (design Section 9.4). It obtains the license first
-## (scripts/license.sh trial; MARGINCE_TRIAL_LICENSE, or the license API), runs
-## `make desktop`, and writes dist/trial/<name>-<v>-<platform>/. FORCE=1
-## replaces an existing one.
-trial: ## Build a trial desktop bundle with a trial license (VERSION=, FORCE=1)
-	@bash scripts/trial.sh "$(VERSION)"
-
-# ─────────────────────────── all-in-one image ─────────────────────────
-
-## aio — one image with all of Margince, for non-technical testers (design
-## docs/superpowers/specs/2026-09-30-all-in-one-image-design.md). Built from
-## the role images of VERSION; runs `make package` when one is missing.
-aio: ## Build the all-in-one image <repo>/all-in-one:<v> (VERSION=, DATASET=, PUSH=1)
-	@bash scripts/aio.sh build "$(VERSION)"
-
-aio-smoke: ## Run the all-in-one image on a temporary volume and check it (VERSION=, AIO_SMOKE_TIMEOUT=)
-	@bash scripts/aio.sh smoke "$(VERSION)"
-
-aio-up: ## Start the all-in-one image here; installs Docker when it is missing (VERSION=)
-	@bash scripts/aio.sh up "$(VERSION)"
-
-aio-down: ## Stop the all-in-one container; the data is kept
-	@bash scripts/aio.sh down
-
-aio-reset: ## Delete the all-in-one container and its data (asks first)
-	@bash scripts/aio.sh reset
-
-aio-logins: ## The address and the accounts of the running all-in-one container
-	@bash scripts/aio.sh logins
-
-aio-logs: ## The last 200 log lines of the all-in-one container
-	@bash scripts/aio.sh logs
-
-aio-scripts: ## Write dist/aio/<v>/install.sh and install.ps1 for testers (VERSION=)
-	@bash scripts/aio.sh scripts "$(VERSION)"
-
-# ──────────────────────── using the desktop folder ────────────────────
-#
-# The build produces a folder that cannot run where it was built, whose
-# credentials live inside it, and whose seeding path is NOT `make seed-demo` —
-# that lane is bound to the dev stack (core/config/margince-admin-password,
-# :8080, the compose MinIO). These lanes are the gestures that were prose, and
-# they need no Docker: the installation carries its own database and its own
-# object storage. scripts/desktop.sh says why they are a script and not recipes.
-
-## Where an installation lives. Short on purpose: the database socket path is
-## capped at 103 bytes and the launcher refuses a folder that busts it.
-DESKTOP_DEST ?= $(HOME)/Margince
-
-desktop-install: ## Copy the built folder somewhere it can run (DESKTOP_DEST=~/Margince)
-	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh install
-
-desktop-run: ## Start the installed desktop app in the foreground (DESKTOP_DEST=)
-	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh run
-
-## desktop-connect — the same start, reachable by an agent.
-##
-## Three things have to be true together for Claude or ChatGPT to call this
-## installation, and the folder's own "Connect to Claude.command" does all
-## three: mcp.connector_enabled in margince.yaml, a tunnel to the app's port,
-## and that tunnel's address in margince.env as MARGINCE_PUBLIC_BASE_URL.
-##
-## The tunnel is cloudflared, which needs no account. MARGINCE_TUNNEL=ngrok
-## switches providers, and is inferred when NGROK_DOMAIN or NGROK_AUTHTOKEN is
-## set — ngrok is what buys a RESERVED domain, and so an address that survives a
-## restart. ngrok v3 opens no anonymous tunnel, which is why it is not default.
-##
-## The api mounts /mcp only when the deployment declares the connector, and it
-## REFUSES TO BOOT with that declared and no public base URL — so none of the
-## three is optional and the tunnel has to exist before the api starts.
-##
-## It publishes the whole installation, not just /mcp: the agent's consent flow
-## is a browser sign-in on the public address, so the login page is on it too.
-desktop-connect: ## Start it behind a public address, with MCP on (DESKTOP_DEST=)
-	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh connect
-
-## desktop-seed — the commercial demo dataset, into a RUNNING installation.
-##
-## `compose` first, for the same reason core/backend's own seed-demo depends on
-## composition: the seeder resolves the composed workspace, and an unstaged one
-## has none of our units in it. DATASET= points at the dataset checkout; without
-## it, a dataset already copied into the installation (data/demo) is used, and
-## otherwise the lane refuses with a message. LIMIT= seeds fewer companies — but
-## barely, and a small
-## value FAILS: -limit truncates the company list alone while deals and contracts
-## are seeded whole and resolve their company by domain, so the floor is the
-## deepest company any of them names (193 of 198 today). docs/desktop-build.md
-## measures it. SEED_ARGS= passes anything
-## else through to the seeder (-dry-run, -limit N).
-desktop-seed: compose ## Fill the running desktop app from the demo dataset (DATASET=, LIMIT=)
-	@DEST="$(DESKTOP_DEST)" DATASET="$(DATASET_GIVEN)" bash scripts/desktop.sh seed \
-		$(if $(LIMIT),-limit $(LIMIT),) $(SEED_ARGS)
-
-desktop-verify: compose ## Re-run the seeder's verify pass on the desktop app, writing nothing
-	@DEST="$(DESKTOP_DEST)" DATASET="$(DATASET_GIVEN)" bash scripts/desktop.sh verify
-
-desktop-status: ## Where the installation is, whether it is up, how to sign in
-	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh status
-
-## The sign-in screen says "accounts come from your administrator" and nothing
-## else, so the accounts have to be discoverable from here.
-desktop-logins: ## Every account that can sign in to the desktop app, and its password
-	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh logins
-
-desktop-psql: ## psql on the desktop app's database, using the psql it ships
-	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh psql
-
-desktop-dsn: ## How to point psql or a GUI client at the desktop app's database
-	@DEST="$(DESKTOP_DEST)" bash scripts/desktop.sh dsn
-
-desktop-clean: ## Remove both desktop build folders
-	@rm -rf $(DESKTOP_OUT)
-	@$(MAKE) -C $(CORE) desktop-clean 2>/dev/null || true
 
 # ───────────────────────────── upstream ───────────────────────────────
 

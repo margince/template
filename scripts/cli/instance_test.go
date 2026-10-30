@@ -60,8 +60,9 @@ func TestValidate(t *testing.T) {
 		{"blank display name", Instance{Name: "a", DisplayName: "  ", Core: "v1"}, "display_name: required"},
 		{"multi-line display name", Instance{Name: "a", DisplayName: "A\nB", Core: "v1"}, "single line"},
 		{"missing core", Instance{Name: "a", DisplayName: "D"}, "core: required"},
-		{"core is a branch, not a release tag", Instance{Name: "a", DisplayName: "D", Core: "main"}, "release tag like v0.0.2"},
-		{"core is a non-release tag", Instance{Name: "a", DisplayName: "D", Core: "archive/pr100-salvage"}, "release tag like v0.0.2"},
+		{"core is a branch, not a release tag", Instance{Name: "a", DisplayName: "D", Core: "main"}, "release tag like v1.0.0"},
+		{"core is a non-release tag", Instance{Name: "a", DisplayName: "D", Core: "archive/pr100-salvage"}, "release tag like v1.0.0"},
+		{"core is an unknown pre-release", Instance{Name: "a", DisplayName: "D", Core: "v1.0.0-pre.1"}, "release tag like v1.0.0"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -70,6 +71,15 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("Validate = %q, want a problem containing %q", problems, c.want)
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsPreReleaseCore(t *testing.T) {
+	for _, core := range []string{"v1.0.0", "v1.0.0-alpha.1", "v1.0.0-beta.2", "v1.0.0-rc.10"} {
+		in := Instance{Name: "a", DisplayName: "A", Core: core}
+		if p := in.Validate(); len(p) != 0 {
+			t.Fatalf("Validate(core %s) = %v", core, p)
+		}
 	}
 }
 

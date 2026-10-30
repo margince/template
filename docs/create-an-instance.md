@@ -206,18 +206,18 @@ remote or branch.
 1. Move `core/` to a core release tag:
 
    ```sh
-   make update-core REF=v0.0.3
+   make update-core REF=v1.0.0-beta.1
    ```
 
 2. Run `make check`.
 3. Commit the change on its own:
 
    ```sh
-   git commit core instance.yaml -m "core: bump to v0.0.3"
+   git commit core instance.yaml -m "core: bump to v1.0.0-beta.1"
    ```
 
-`REF` must be a core release tag that matches `^v[0-9]+\.[0-9]+\.[0-9]+$`,
-because `instance.yaml` records only release tags. A branch, a commit, or
+`REF` must be a core release tag in the release version format
+([release.md](release.md#2-version-format)), because `instance.yaml` records only release tags. A branch, a commit, or
 another tag is refused. `git -C core tag --list 'v*'` lists the tags. The
 command also refuses to run while `core/` holds work of its own (see
 [contributing-to-core.md](contributing-to-core.md)). After the move it runs

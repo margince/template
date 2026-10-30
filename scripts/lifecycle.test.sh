@@ -6,7 +6,7 @@
 # release it against a local bare "origin", deploy it through the hook
 # adapter (a success and a rollback) and through the host adapter (through
 # stubs), and merge a template change into it. Every step asserts its
-# outcome. Trial is covered by trial.test.sh.
+# outcome.
 #
 # Slow (it composes and tests a unit), so it is not part of `make test-scripts`.
 # Needs the tools `make install` provides.

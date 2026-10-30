@@ -22,7 +22,7 @@ instance. Contributors to the template itself also read [AGENTS.md](AGENTS.md).
 | Docker, with a running daemon and `docker buildx` | current | the database, `make package`, `make smoke`, `make local-up` | `make preflight`; `make package` checks buildx |
 | GitHub CLI (`gh`) | any | `make new-instance PUSH=1`, `make core-pr` | optional |
 | fswatch | any | `make watch` | optional |
-| python3, curl | any | `make config-check`, `make license`, `make trial`, `make smoke`, `make local-up` | not checked |
+| python3, curl | any | `make config-check`, `make license`, `make smoke`, `make local-up` | not checked |
 | ssh, scp, ssh-keyscan | any | the `host` adapter | not checked |
 
 `make install` runs `make preflight` first and names every missing tool.
@@ -111,24 +111,10 @@ For a private registry, also set `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`.
 See [docs/deploy.md](docs/deploy.md) for every step, the `hook` adapter, and
 deployment from GitHub Actions.
 
-### Let a tester try Margince
-
-A tester who is not a developer runs your instance's Margince from one Docker
-image, started by one pasted command that installs Docker when it is missing:
-
-```sh
-make aio VERSION=v0.1.0
-make aio-smoke VERSION=v0.1.0
-make aio-scripts VERSION=v0.1.0
-```
-
-See [docs/try-margince.md](docs/try-margince.md) for pushing the image,
-hosting the install scripts, and what the tester sees.
-
 ## Commands
 
-`make help` lists every target, including the individual gates, the frontend
-and infrastructure lanes, and the desktop lanes.
+`make help` lists every target, including the individual gates and the frontend
+and infrastructure lanes.
 
 | Stage | Command | Function |
 |---|---|---|
@@ -158,8 +144,6 @@ and infrastructure lanes, and the desktop lanes.
 | Release | `make smoke VERSION=<v>` | Start the built images with a temporary database and check them. |
 | Release | `make release VERSION=<v>` | Check the preconditions, then tag and push a release; `release.yml` builds it. |
 | Release | `make license OUT=<file>` | Obtain a production license into a file. |
-| Release | `make desktop VERSION=<v>` | Build the macOS desktop folder with the instance's units. |
-| Release | `make trial VERSION=<v>` | Build a trial bundle with a trial license. |
 | Deploy | `make deploy-init ENV=<env>` | Create `deploy/<env>/` and register the environment in `instance.yaml`. |
 | Deploy | `make host-bootstrap ENV=<env>` | Install Docker and Docker Compose on a new server of a `host` environment. |
 | Deploy | `make deploy ENV=<env> VERSION=<v>` | Deploy a release to an environment in `instance.yaml`. |
@@ -167,10 +151,6 @@ and infrastructure lanes, and the desktop lanes.
 | Local | `make local-up VERSION=<v>` | Run a built release on `https://localhost`. |
 | Local | `make local-down` | Stop the local stack (`WIPE=1` also removes its data and `.local/`). |
 | Local | `make local-admin-password` | Print the generated first admin password of the local stack. |
-| Try | `make aio VERSION=<v>` | Build the all-in-one image for testers (`PUSH=1` pushes it). |
-| Try | `make aio-smoke VERSION=<v>` | Start the all-in-one image on a temporary volume and check it. |
-| Try | `make aio-scripts VERSION=<v>` | Write the testers' install scripts to `dist/aio/<v>/`. |
-| Try | `make aio-up VERSION=<v>` | Start the all-in-one image on this computer, as a tester would. |
 | Core | `make core-status` | Show where `core/` is: branch, pinned commit, ahead and behind, changes. |
 | Core | `make core-branch NAME=<type>/<slug>` | Start a core contribution branch in `core/`. |
 | Core | `make core-pr` | Verify the sign-off, push the core branch, and open the pull request. |
@@ -183,7 +163,7 @@ and infrastructure lanes, and the desktop lanes.
 | `core/` | pinned | Git submodule of `margince/margince`, pinned to a core release tag. Changed only by `make update-core`. |
 | `Makefile` | template | The lifecycle targets. Includes `instance.mk`. |
 | `scripts/` | template | Lifecycle scripts, deployment adapters, the Go CLI in `scripts/cli`, and their tests. |
-| `.github/workflows/` | template | `ci`, `full-check`, `lifecycle`, `release`, `deploy`, `desktop-macos`, `desktop-windows`. |
+| `.github/workflows/` | template | `ci`, `full-check`, `lifecycle`, `release`, `deploy`. |
 | `.githooks/`, `.gitleaks.toml`, `.gitignore` | template | The pre-push hook, the secret scanner configuration, the ignore rules. |
 | `AGENTS.md`, `CLAUDE.md`, `docs/*.md` | template | Contributor rules and the guides. |
 | `.template-owned` | template | The list of template-owned paths, one git pathspec per line. |
@@ -206,9 +186,9 @@ template-owned path differs from the merged template commit. See
 
 | Repository or service | Role |
 |---|---|
-| `margince/margince` | Core product, release tags, image and desktop build definitions. |
+| `margince/margince` | Core product, release tags, image build definitions. |
 | Margince license service | Issues trial and production licenses through the API in [docs/license.md](docs/license.md). Not part of this template. |
-| A demo dataset repository | Optional, per instance: `data.dataset` in `instance.yaml` and, for the desktop workflows, `vars.DATASET_REPOSITORY` and `secrets.DATASET_DEPLOY_KEY`. |
+| A demo dataset repository | Optional, per instance: `data.dataset` in `instance.yaml`. |
 | The client's image registry | Optional: `make release` pushes images there when `REGISTRY` is set. |
 
 ## Documentation
@@ -221,6 +201,4 @@ template-owned path differs from the merged template commit. See
 | [Release](docs/release.md) | Cut a release, build and test the images. |
 | [Deploy](docs/deploy.md) | Deploy a release with the `host` or `hook` adapter. |
 | [License](docs/license.md) | Obtain a trial or production license. |
-| [Trial](docs/trial.md) | Build a trial bundle. |
-| [Try Margince](docs/try-margince.md) | Build the all-in-one image and give testers the install command. |
 | [Troubleshooting](docs/troubleshooting.md) | Known errors and their fixes. |

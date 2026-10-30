@@ -121,7 +121,7 @@ Section 6.
 
 `scripts/deploy.sh` does the following before any step runs:
 
-1. Requires `VERSION` to match `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$`.
+1. Requires `VERSION` to match `^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$`.
 2. Validates `instance.yaml`, including the `deploy/<env>/` directories.
 3. Refuses a working tree with uncommitted changes, untracked files included,
    unless `ALLOW_DIRTY=1`.

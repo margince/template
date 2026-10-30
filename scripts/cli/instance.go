@@ -34,8 +34,9 @@ type DeployTarget struct {
 }
 
 var (
-	namePattern    = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	coreTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	namePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	// coreTagPattern is RELEASE_VERSION_RE in scripts/lib.sh.
+	coreTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$`)
 	// datasetPattern is <git-url>@<ref>, split at the LAST @: an scp-style
 	// git URL (git@host:org/repo) contains one itself, a ref cannot.
 	datasetPattern = regexp.MustCompile(`^\S+@[^@\s]+$`)
@@ -96,7 +97,7 @@ func (in Instance) Validate() []string {
 	case in.Core == "":
 		problems = append(problems, "core: required")
 	case !coreTagPattern.MatchString(in.Core):
-		problems = append(problems, fmt.Sprintf("core: %q must be a release tag like v0.0.2", in.Core))
+		problems = append(problems, fmt.Sprintf("core: %q must be a release tag like v1.0.0 or v1.0.0-beta.1", in.Core))
 	}
 	if ds := in.Data.Dataset; ds != "" && !datasetPattern.MatchString(ds) {
 		problems = append(problems, fmt.Sprintf("data.dataset: %q must have the form <git-url>@<ref>", ds))

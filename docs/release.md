@@ -13,25 +13,25 @@ deployment of a release is in [deploy.md](deploy.md).
 - The instance repository on GitHub, with `origin` pointing at it and GitHub
   Actions enabled.
 - The commit to release is on `origin/main`, and the working tree is clean.
-- Optional: the repository settings in Section 5, to push the images and to
-  seed the desktop bundles.
+- Optional: the repository settings in Section 5, to push the images.
 
 ## 2. Version format
 
-A release version is the git tag, the image tag, and the desktop bundle name:
+A release version is the git tag and the image tag:
 
 ```
-^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$
+^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$
 ```
 
 | Matches | Does not match |
 |---|---|
-| `v0.1.0`, `v1.2.0`, `v10.0.12`, `v1.3.0-rc.1` | `1.2.0`, `v1.2`, `v1.2.0-rc.0`, `v1.2.0-rc1`, `v1.2.0-beta.1` |
+| `v0.1.0`, `v1.2.0`, `v10.0.12`, `v1.3.0-alpha.1`, `v1.3.0-beta.2`, `v1.3.0-rc.1` | `1.2.0`, `v1.2`, `v1.2.0-rc.0`, `v1.2.0-rc1`, `v1.2.0-beta`, `v1.2.0-pre.1` |
 
-Versions are ordered by semantic versioning: `vX.Y.Z-rc.N` is older than
-`vX.Y.Z`, and the `N` values compare as numbers (`-rc.10` is newer than
-`-rc.2`). A version with `-rc.N` is published as a GitHub pre-release; a
-version without it is published as a normal release.
+Versions are ordered by semantic versioning:
+`vX.Y.Z-alpha.N` < `vX.Y.Z-beta.N` < `vX.Y.Z-rc.N` < `vX.Y.Z`, and the `N`
+values compare as numbers (`-rc.10` is newer than `-rc.2`). A version with a
+suffix is published as a GitHub pre-release; a version without one is
+published as a normal release. Core release tags use the same format.
 
 ## 3. Cut a release
 
@@ -78,9 +78,9 @@ make release VERSION=v0.3.0 RELEASE_CHECK_TARGET=check
 `release.yml` runs when a tag that starts with `v` is pushed:
 
 1. **Version check.** The tag matches the version format and its commit is on
-   `main`. A tag with `-rc.N` is marked as a pre-release.
+   `main`. A tag with a suffix is marked as a pre-release.
 2. **Full gate.** `full-check.yml`: the light gate plus the screen suites,
-   the composed typecheck, and the database lanes (Section 9).
+   the composed typecheck, and the database lanes (Section 8).
 3. **Images.** `make package VERSION=<v>` builds `api`, `web`, and `worker`
    for `linux/amd64` into the runner's local image store.
 4. **Smoke test.** `make smoke VERSION=<v>` (Section 7.2).
@@ -90,11 +90,7 @@ make release VERSION=v0.3.0 RELEASE_CHECK_TARGET=check
    pushes the images with the tag `<v>` for every platform in `PLATFORMS`, and
    logs out. The list of pushed images with their digests goes to the build
    artifact `margince-images-<v>`.
-6. **Desktop bundles.** `desktop-macos.yml` for Apple silicon and for Intel,
-   and `desktop-windows.yml` (Section 8).
-7. **GitHub Release.** Created after every job above passes, with the three
-   zip files attached: `margince-macos-apple-silicon-<v>.zip`,
-   `margince-macos-intel-<v>.zip`, and `margince-windows-<v>.zip`. The notes
+6. **GitHub Release.** Created after every job above passes. The notes
    list the core version, the instance commit, and the pushed image digests,
    or `images were not pushed: REGISTRY is not set`.
 
@@ -109,14 +105,13 @@ git push --delete origin v0.3.0 && git tag -d v0.3.0
 make release VERSION=v0.3.0
 ```
 
-A run started again after the release exists replaces the release's zip files
-and notes instead of failing.
+A run started again after the release exists replaces the release's notes
+instead of failing.
 
 ## 5. Repository settings
 
 `release.yml` works without any repository setting: it builds and
-smoke-tests the images without pushing them, and builds the desktop bundles
-without demo data. Someone with admin rights on the repository can set:
+smoke-tests the images without pushing them. Someone with admin rights on the repository can set:
 
 | Setting | Kind | Default | Effect |
 |---|---|---|---|
@@ -126,8 +121,6 @@ without demo data. Someone with admin rights on the repository can set:
 | `MIRROR_REGISTRY` | variable | unset | A public mirror, for example `docker.io/acme`: after the push, every image is copied there (all platforms, the same digests) as `<MIRROR_REGISTRY>/<name>-<role>:<v>`, because Docker Hub allows one path level under a namespace. The release notes list the mirrored images. Unset: no mirror. |
 | `MIRROR_REGISTRY_USERNAME`, `MIRROR_REGISTRY_PASSWORD` | secret | none | The mirror login; for Docker Hub, the user name and an access token with write access. Never printed. |
 | `PLATFORMS` | variable | `linux/amd64` | Comma-separated platforms of the pushed images, for example `linux/amd64,linux/arm64`. |
-| `DATASET_REPOSITORY` | variable | unset | The demo dataset repository that the desktop workflows check out and seed. |
-| `DATASET_DEPLOY_KEY` | secret | unset | An SSH key with read access to `DATASET_REPOSITORY`. Without it or the variable, the bundles ship without demo data. |
 
 Use the same `REGISTRY` value when you deploy, so that `make deploy` names the
 same images ([deploy.md](deploy.md#53-credentials)).
@@ -141,7 +134,7 @@ The image repository is the instance's `name` from `instance.yaml`, with
 |---|---|
 | unset | `<name>/api`, `<name>/web`, `<name>/worker` |
 | `registry.example.com/acme` | `registry.example.com/acme/<name>/api`, `/web`, `/worker` |
-| `ghcr.io/acme`, with `MIRROR_REGISTRY=docker.io/acme` | `ghcr.io/acme/<name>/api`, `/web`, `/worker`, `/all-in-one`; mirrored as `docker.io/acme/<name>-api`, `-web`, `-worker`, `-all-in-one` |
+| `ghcr.io/acme`, with `MIRROR_REGISTRY=docker.io/acme` | `ghcr.io/acme/<name>/api`, `/web`, `/worker`; mirrored as `docker.io/acme/<name>-api`, `-web`, `-worker` |
 
 A package that GitHub Container Registry creates on the first push is
 private. Make each one public once (the package's settings, Change
@@ -215,34 +208,7 @@ The smoke test runs `api` with `MARGINCE_ENV=test`, so it needs no license.
 To run the images as a full local stack, use `make local-up VERSION=<v>` (see
 the [README](../README.md#run-margince-default-on-your-computer)).
 
-## 8. Desktop bundles
-
-`desktop-macos.yml` and `desktop-windows.yml` are reusable workflows that
-`release.yml` calls. They are copies of core's workflows, because a workflow
-cannot use a file inside a submodule; update them from `core/.github/workflows/`
-when core's versions change. They do not run on pull requests. To test one
-without a release, start it by hand:
-
-```sh
-gh workflow run desktop-windows.yml --ref main
-```
-
-A build started this way is named after its commit. Locally, `make desktop`
-builds the macOS folder; there is no local Windows build. See
-[desktop-build.md](desktop-build.md) for building, installing, and running a
-folder.
-
-Each folder carries `BUILD-INFO.txt` and `runtime/build-info.json`, which name
-the version, the platform, the instance and core commits, the units, and the
-demo dataset commit. The release workflows pass the version and the commits
-in. The fields and their values are in
-[desktop-build.md](desktop-build.md#8-build-information).
-
-The desktop workflows check out the dataset's default branch, not a pinned
-commit. A second run of a release on the same tag can therefore ship
-different demo data; the `dataset` line shows which.
-
-## 9. CI workflows
+## 8. CI workflows
 
 | Workflow | Runs on | Content |
 |---|---|---|
@@ -250,7 +216,6 @@ different demo data; the `dataset` line shows which.
 | `lifecycle.yml` | pull requests, pushes to `main`, by hand | `make test-lifecycle`. In your instance every step after the first check is skipped. |
 | `release.yml` | pushed `v*` tags | Section 4. |
 | `full-check.yml` | called by `release.yml` | The light gate plus `fe-test-ext`, `fe-typecheck-composed`, `check-ext-migrations`, and `test-integration-ext`. |
-| `desktop-macos.yml`, `desktop-windows.yml` | called by `release.yml`, by hand | Section 8. |
 | `deploy.yml` | by hand | [deploy.md](deploy.md#6-deploy-from-github-actions). |
 
 A green pull request means that the composition builds and passes the light
@@ -261,6 +226,4 @@ locally.
 
 - [deploy.md](deploy.md): deploy a released version.
 - [license.md](license.md): the license a production deployment needs.
-- [trial.md](trial.md): a trial desktop bundle.
-- [desktop-build.md](desktop-build.md): the desktop folder.
 - [troubleshooting.md](troubleshooting.md): release and packaging errors.

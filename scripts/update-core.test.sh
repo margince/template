@@ -33,6 +33,8 @@ MAIN="$(git -C "$UP" rev-parse main)"
 # release tag, so this must be refused on shape alone, before core/ is even
 # asked whether the tag exists.
 git -C "$UP" tag archive/pr100-salvage "$V2"
+# A pre-release tag on the untagged commit, the shape core's betas take.
+git -C "$UP" tag v0.0.3-beta.1 "$MAIN"
 
 fresh_repo() {
   local repo
@@ -51,6 +53,13 @@ if out="$(bash "$repo/scripts/update-core.sh" v0.0.2 2>&1)"; then ok "moves to a
 if [ "$(git -C "$repo/core" rev-parse HEAD)" = "$V2" ]; then ok "core/ is at the tag"; else fail "core/ is at the tag"; fi
 if grep -qx 'core: v0.0.2' "$repo/instance.yaml"; then ok "instance.yaml records the tag"; else fail "instance.yaml records the tag"; fi
 if grep -qx 'name: acme' "$repo/instance.yaml" && grep -qx 'display_name: Acme' "$repo/instance.yaml"; then ok "other keys are unchanged"; else fail "other keys are unchanged"; fi
+
+# --- a pre-release tag ---
+
+repo="$(fresh_repo)"
+if out="$(bash "$repo/scripts/update-core.sh" v0.0.3-beta.1 2>&1)"; then ok "moves to a pre-release tag"; else fail "moves to a pre-release tag: $out"; fi
+if [ "$(git -C "$repo/core" rev-parse HEAD)" = "$MAIN" ]; then ok "core/ is at the pre-release tag"; else fail "core/ is at the pre-release tag"; fi
+if grep -qx 'core: v0.0.3-beta.1' "$repo/instance.yaml"; then ok "instance.yaml records the pre-release tag"; else fail "instance.yaml records the pre-release tag"; fi
 
 # --- refusals change nothing ---
 
@@ -73,6 +82,7 @@ expect_refused "refuses a branch" main
 expect_refused "refuses a commit" "$MAIN"
 expect_refused "refuses a tag that does not exist" v9.9.9
 expect_refused "refuses a non-release tag" archive/pr100-salvage
+expect_refused "refuses an unknown pre-release label" v0.0.3-pre.1
 
 if [ "$FAILURES" -gt 0 ]; then printf '\n%s case(s) failed\n' "$FAILURES" >&2; exit 1; fi
 printf '\nall cases passed\n'

@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
 # A reusable workflow gets the secrets it is PASSED, and never the caller's.
 #
-# The defect this exists for shipped four releases. desktop-windows.yml and
-# desktop-macos.yml read DATASET_DEPLOY_KEY to decide whether to seed the
-# folder they build. Both are called by release.yml through
-# `uses:`, neither declared the secret under `workflow_call:`, and no call site
-# passed it — so in every release the key read empty, the dataset check reported
-# it unavailable, every seeding step skipped, and the lane went GREEN shipping an
-# empty folder. It was only ever exercised by `workflow_dispatch`, which runs in
-# the repository's own context and therefore sees the secret; that is why the
-# feature was proved working twice and still never reached a release.
-#
-# Nothing fails here at runtime. The fallback is deliberate and correct for a
-# fork with no key, so the only place this can be caught is the wiring.
+# A called workflow that reads a secret its caller does not pass reads it as
+# empty, and whatever that secret gates is skipped without failing anything.
+# Nothing fails at runtime, so the only place this can be caught is the wiring.
 #
 # Usage: bash scripts/workflow-wiring.test.sh
 set -euo pipefail
@@ -114,10 +105,10 @@ if [ -e "$DEPLOY_WF" ]; then
   fi
   if grep -qE 'REF_TYPE:[[:space:]]*\$\{\{[[:space:]]*github\.ref_type[[:space:]]*\}\}' "$DEPLOY_WF" \
      && grep -qF '"$REF_TYPE" != tag' "$DEPLOY_WF" \
-     && grep -qF '"$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$' "$DEPLOY_WF"; then
+     && grep -qF '"$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$' "$DEPLOY_WF"; then
     ok "deploy.yml refuses a run not dispatched from a release tag"
   else
-    fail "deploy.yml does not guard github.ref_type == tag and ref_name ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?\$ through env:"
+    fail "deploy.yml does not guard github.ref_type == tag and ref_name ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?\$ through env:"
   fi
   first_step="$(awk '/^[[:space:]]*steps:/ {s=1; next} s && /^[[:space:]]*- / {n++} n==1 {print} n>1 {exit}' "$DEPLOY_WF")"
   if printf '%s\n' "$first_step" | grep -qF 'github.ref_type'; then
@@ -339,16 +330,16 @@ if [ -e "$RELEASE_WF" ]; then
   fi
 
   version_job="$(block_of version "$RELEASE_WF")"
-  if printf '%s\n' "$version_job" | grep -qF '[[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]'; then
+  if printf '%s\n' "$version_job" | grep -qF '[[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$ ]]'; then
     ok "release.yml's version job checks the tag with the release pattern"
   else
-    fail "release.yml's version job does not check [[ ! \"\$TAG\" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?\$ ]]"
+    fail "release.yml's version job does not check [[ ! \"\$TAG\" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?\$ ]]"
   fi
-  if printf '%s\n' "$version_job" | grep -qE '\*-rc\.\*\)[[:space:]]*prerelease=true' \
+  if printf '%s\n' "$version_job" | grep -qE '\*-\*\)[[:space:]]*prerelease=true' \
      && [ "$(printf '%s\n' "$version_job" | grep -c 'prerelease=true')" -eq 1 ]; then
-    ok "release.yml sets prerelease=true only for -rc.N"
+    ok "release.yml sets prerelease=true only for a pre-release version"
   else
-    fail "release.yml does not set prerelease=true exactly for *-rc.*"
+    fail "release.yml does not set prerelease=true exactly for *-*"
   fi
 
   images_job="$(block_of images "$RELEASE_WF")"
@@ -469,28 +460,6 @@ if [ -e "$RELEASE_WF" ]; then
       fail "images lacks packages: write for GitHub Container Registry"
     fi
 
-    # The all-in-one image (docs/superpowers/specs/2026-09-30-all-in-one-image-design.md,
-    # Section 11): built and smoke-tested after the role images' smoke test,
-    # pushed only in the registry step, and its install scripts uploaded.
-    aio_line="$(printf '%s\n' "$images_job" | grep -nE '^[[:space:]]*run:.*make aio VERSION' | head -1 | cut -d: -f1 || true)"
-    aio_smoke_line="$(printf '%s\n' "$images_job" | grep -nE '^[[:space:]]*run:.*make aio-smoke' | head -1 | cut -d: -f1 || true)"
-    if [ -n "$smk" ] && [ -n "$aio_line" ] && [ -n "$aio_smoke_line" ] && [ "$smk" -lt "$aio_line" ] && [ "$aio_line" -lt "$aio_smoke_line" ]; then
-      ok "images runs make aio after make smoke, then make aio-smoke"
-    else
-      fail "images does not run make aio after make smoke and then make aio-smoke (smoke ${smk:-none}, aio ${aio_line:-none}, aio-smoke ${aio_smoke_line:-none})"
-    fi
-    if printf '%s\n' "$push_step" | grep -qE 'make aio VERSION="\$VERSION" PUSH=1' \
-       && printf '%s\n' "$push_step" | grep -qF '/all-in-one:${VERSION}@${digest}'; then
-      ok "the push step pushes the all-in-one image and lists it by digest"
-    else
-      fail "the push step does not run make aio ... PUSH=1 and list <repo>/all-in-one:<v>@<digest>"
-    fi
-    if printf '%s\n' "$images_job" | grep -qE '^[[:space:]]*run:.*make aio-scripts' \
-       && printf '%s\n' "$images_job" | grep -qF 'name: margince-aio-scripts-${{ needs.version.outputs.version }}'; then
-      ok "images writes the install scripts and uploads them as margince-aio-scripts-<version>"
-    else
-      fail "images does not run make aio-scripts and upload margince-aio-scripts-\${{ needs.version.outputs.version }}"
-    fi
   fi
 
   publish_job="$(block_of publish "$RELEASE_WF")"
@@ -524,24 +493,12 @@ if [ -e "$RELEASE_WF" ]; then
   else
     fail "publish does not refuse a missing or empty image-list/images.txt with ::error:: and build the notes from it"
   fi
-  # The install scripts pull the pushed image. Without a push their image
-  # name has no registry, and a tester's docker pull would resolve it on the
-  # default public registry: they are attached and advertised only after a push.
-  if printf '%s\n' "$publish_job" | grep -qF 'name: margince-aio-scripts-${{ needs.version.outputs.version }}' \
-     && [ "$(printf '%s\n' "$publish_job" | grep -cF "if ! grep -qF 'images were not pushed' image-list/images.txt; then")" -ge 2 ] \
-     && printf '%s\n' "$publish_job" | grep -qF 'assets+=(dist/install.sh dist/install.ps1)' \
-     && [ "$(printf '%s\n' "$publish_job" | grep -cF '"${assets[@]}"')" -eq 2 ] \
-     && ! printf '%s\n' "$publish_job" | grep -qF 'dist/*.zip dist/install.sh'; then
-    ok "publish attaches and advertises install.sh and install.ps1 only when the images were pushed"
-  else
-    fail "publish does not attach dist/install.sh and dist/install.ps1 (and write 'Try it') only when image-list/images.txt lists pushed images"
-  fi
   # --prerelease is added in exactly one place, behind the version job's flag.
   pre_lines="$(grep -c -- '--prerelease' "$RELEASE_WF" || true)"
   if [ "$pre_lines" -eq 1 ] \
      && grep -B2 -- '--prerelease' "$RELEASE_WF" | grep -qF 'if [ "$PRERELEASE" = true ]' \
      && printf '%s\n' "$publish_job" | grep -qE 'PRERELEASE:[[:space:]]*\$\{\{[[:space:]]*needs\.version\.outputs\.prerelease'; then
-    ok "publish adds --prerelease only when the version job says -rc"
+    ok "publish adds --prerelease only when the version job says pre-release"
   else
     fail "--prerelease is not added once, behind PRERELEASE from needs.version.outputs.prerelease"
   fi

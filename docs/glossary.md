@@ -12,13 +12,6 @@ with Docker Compose) or `hook` (`scripts/deploy/hook.sh`, which runs the
 environment's own hook scripts). `instance.yaml` names the adapter of each
 environment. See [deploy.md](deploy.md).
 
-## all-in-one image
-
-The Docker image `<repo>/all-in-one:<v>` that runs all of an instance's
-Margince in one container, in test mode, for a tester on one computer. It is
-built by `make aio` from the role images of the same version. See
-[try-margince.md](try-margince.md).
-
 ## composition
 
 The generated tree that combines core with the staged units. `make compose`
@@ -46,20 +39,6 @@ core's `main`.
 
 Core's code-quality linter. `make lint` runs `craft static --strict` over
 `extensions/`, using the binary that `core/scripts/craft-pin.sh` downloads.
-
-## desktop bundle
-
-Another name for a desktop folder, used for a folder built for distribution:
-the zips of a release ([release.md](release.md#8-desktop-bundles)) and the
-trial bundle. Same concept as desktop folder.
-
-## desktop folder
-
-The self-contained Margince folder for macOS or Windows that `make desktop`
-(macOS) or `desktop-windows.yml` (Windows) builds: PostgreSQL, the event bus,
-`api`, `worker`, the web UI, and a launcher, with the instance's units. An
-installed copy, for example at `~/Margince`, is a desktop installation. See
-[desktop-build.md](desktop-build.md).
 
 ## drift
 
@@ -90,20 +69,13 @@ runs them.
 
 `make check`, and in CI `full-check.yml`: the light gate plus the screen
 suites, the composed typecheck, and the database lanes. `make ci` adds the
-submodule checks. See [release.md](release.md#9-ci-workflows).
+submodule checks. See [release.md](release.md#8-ci-workflows).
 
 ## gate
 
 A `make` target that fails when a rule is broken, for example `ext-imports`,
 `arch`, `check-manifests`, `drift`, `check-composition`, or `secret-scan`.
 `make check` runs all gates; `make u` runs the fast gates for one unit.
-
-## install command
-
-The one-line command that a tester pastes to install Docker when it is
-missing and start the all-in-one image: `install.sh` for macOS and Ubuntu,
-`install.ps1` for Windows, written by `make aio-scripts`. See
-[try-margince.md](try-margince.md).
 
 ## instance
 
@@ -128,7 +100,7 @@ a target of core's `Makefile` or `backend/Makefile`.
 ## light gate
 
 The gates that `ci.yml` runs on every pull request and push to `main`. See
-[release.md](release.md#9-ci-workflows).
+[release.md](release.md#8-ci-workflows).
 
 ## manifest
 
@@ -152,9 +124,9 @@ gates that check them. See [adding-an-extension.md](adding-an-extension.md#8-wha
 ## release
 
 A version of an instance: a git tag in the release version format
-(`vX.Y.Z` or `vX.Y.Z-rc.N`), the images built from it, and the GitHub Release
-with the desktop bundles. `make release` creates the tag; `release.yml`
-builds the release. See [release.md](release.md).
+(`vX.Y.Z`, optionally with `-alpha.N`, `-beta.N`, or `-rc.N`), the images
+built from it, and the GitHub Release that lists them. `make release` creates
+the tag; `release.yml` builds the release. See [release.md](release.md).
 
 ## risk tier
 
@@ -208,11 +180,6 @@ receives changes to it only through `make template-sync`, and
 `make template-sync`: merging the template's `main` into an instance and
 recording the template commit in `.template-version`. See
 [create-an-instance.md](create-an-instance.md#6-receive-template-changes).
-
-## trial bundle
-
-A desktop folder that runs in production mode with a trial license, built with
-`make trial`. See [trial.md](trial.md).
 
 ## unit
 

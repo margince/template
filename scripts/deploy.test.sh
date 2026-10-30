@@ -184,7 +184,7 @@ expect_invalid "an environment without its deploy/<env>/ directory elsewhere in 
 # --- the version and the working tree ---
 inst="$(fresh_instance apply)"
 out="$(deploy_out "$inst" staging 1.0.0)" || true
-if printf '%s' "$out" | grep -qF '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$'; then ok "a bad VERSION is refused, naming the format"; else fail "a bad VERSION is refused, naming the format: $out"; fi
+if printf '%s' "$out" | grep -qF '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[1-9][0-9]*)?$'; then ok "a bad VERSION is refused, naming the format"; else fail "a bad VERSION is refused, naming the format: $out"; fi
 
 inst="$(fresh_instance apply)"
 printf '# edited\n' >> "$inst/deploy/staging/hooks/apply.sh"

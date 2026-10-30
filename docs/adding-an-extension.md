@@ -158,7 +158,7 @@ listed as skipped. The lane:
 
 | Command | Runs | Time |
 |---|---|---|
-| `make u NAME=<name>` | `make compose`; the unit's Go tests in the staged copy with the composed workspace; core's `ext-imports` and `fitness-jurisdiction` gates; `make compose` again; `make check-manifests`. | Seconds |
+| `make u NAME=<name>` | `make compose`; the unit's Go tests in the staged copy with the composed workspace; core's `ext-imports` and `no-jurisdiction` gates; `make compose` again; `make check-manifests`. | Seconds |
 | `make u-fe` | `make compose`, then core's `fe-test-ext`: every unit's screen suite. No `NAME` filter. | Minutes |
 | `make u-check NAME=<name>` | `make u`, `make u-fe`, and core's `fe-typecheck-composed`. | Minutes |
 | `make test-extensions` | Every unit's Go tests. | Minutes |
@@ -209,7 +209,7 @@ passes:
 | `fe-ds-gates` | Core's design-system gates over the unit screens. |
 
 CI runs a subset of these on every pull request; see
-[release.md](release.md#9-ci-workflows).
+[release.md](release.md#8-ci-workflows).
 
 ## 9. The manifest
 

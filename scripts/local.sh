@@ -150,7 +150,7 @@ EOF
 up() {
   local v="${1:-}" repo role img missing="" tmp rel shr caddy_changed=0 deadline code timeout_s interval mode
   [ -n "$v" ] || die "local: pass VERSION=<v>, e.g. make local-up VERSION=v1.0.0"
-  is_release_version "$v" || die "local: VERSION '$v' is not a release version (vX.Y.Z or vX.Y.Z-rc.N)"
+  is_release_version "$v" || die "local: VERSION '$v' is not a release version (vX.Y.Z, or vX.Y.Z with -alpha.N, -beta.N or -rc.N)"
   timeout_s="${LOCAL_TIMEOUT:-180}"
   interval="${LOCAL_INTERVAL:-2}"
   [[ "$timeout_s" =~ ^[0-9]+$ ]] || die "local: LOCAL_TIMEOUT must be a whole number of seconds"
