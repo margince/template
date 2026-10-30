@@ -1,6 +1,6 @@
 # instance.yaml — what this instance is. Validated by `make check-instance`.
 name: margince-default
 display_name: Margince Default
-core: v1.0.0-beta.1
+core: v1.0.0-beta.2
 deploy:
   production: { adapter: host }
