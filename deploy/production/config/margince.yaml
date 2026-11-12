@@ -29,6 +29,62 @@ bootstrap_admin:
 mcp:
   connector_enabled: false
 
+# The tier→model binding (optional). Consumed once, at first boot against an
+# empty database; Settings → AI re-points a lane afterwards without a restart.
+#
+# Every lane rides OpenRouter: one OPENAI_COMPATIBLE_API_KEY reaches Anthropic's
+# catalogue, so the installation needs a single BYOK credential rather than one
+# per vendor. `base_url` is the broker's host root — the adapter appends /v1.
+#
+# List OPENAI_COMPATIBLE_API_KEY in deploy/production/secrets, or put the key in
+# under Settings → AI → Model provider keys after first boot. Never write a key
+# into this file: the vault is the key's home, this file is committed.
+#
+# Tiers with no `routing:` inherit the product default (sort: throughput,
+# quantizations: [fp16, bf16], require_parameters: true), which filters out
+# quantized servings of a model bound for its quality. frontier writes the
+# block out to refuse quantized endpoints without sorting for speed — a
+# frontier answer is worth waiting for.
+#
+# cloud_frontier, not eu_hosted: no Claude model has an EU-region endpoint on
+# OpenRouter, so nothing here keeps text in the EU. For an EU-residency
+# deployment, bind the lanes to a provider with an EU endpoint instead.
+#
+# Known gap: the openai_compatible wire cannot declare a PDF, so a task that
+# hands a whole PDF to the model (document_extract) is refused by the adapter.
+# Rebind that tier to a provider whose wire carries PDFs if needed.
+seeds:
+  ai_routing:
+    profile: cloud_frontier     # eu_hosted | sovereign | cloud_frontier
+    tiers:
+      local_small:
+        provider: openai_compatible
+        model: anthropic/claude-haiku-4.5
+        base_url: https://openrouter.ai/api
+      cheap_cloud:
+        provider: openai_compatible
+        model: anthropic/claude-haiku-4.5
+        base_url: https://openrouter.ai/api
+      premium:
+        provider: openai_compatible
+        model: anthropic/claude-sonnet-4.6
+        base_url: https://openrouter.ai/api
+      frontier:
+        provider: openai_compatible
+        model: anthropic/claude-opus-4.5
+        base_url: https://openrouter.ai/api
+        routing:
+          quantizations: [fp16, bf16, fp32]
+          require_parameters: true
+    # Anthropic serves no embedding model; the lane rides the same broker and
+    # key on Mistral's. dimensions must equal the model's native width — the
+    # openai_compatible adapter never sends it.
+    embeddings:
+      provider: openai_compatible
+      model: mistralai/mistral-embed-2312
+      base_url: https://openrouter.ai/api
+      dimensions: 1024
+
 # Outbound transactional email (password reset). Off until you set an SMTP
 # relay: uncomment enabled and smtp below.
 email:
