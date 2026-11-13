@@ -27,8 +27,8 @@ fi
 
 if [ -x "$BIOME" ] && ls -d "$SRC_EXT"/*/frontend >/dev/null 2>&1; then
   echo "== biome"
-  "$BIOME" check --write --config-path "$CORE/frontend" "$SRC_EXT"/*/frontend 2>&1 | tail -2 | sed 's/^/  /'
-  "$BIOME" format --write --config-path "$CORE/frontend" "$SRC_EXT"/*/frontend 2>&1 | tail -2 | sed 's/^/  /'
+  (cd "$CORE/frontend" && "$BIOME" check --write --config-path . "$SRC_EXT"/*/frontend) 2>&1 | tail -2 | sed 's/^/  /'
+  (cd "$CORE/frontend" && "$BIOME" format --write --config-path . "$SRC_EXT"/*/frontend) 2>&1 | tail -2 | sed 's/^/  /'
 else
   echo "== biome: skipped (not installed, or no unit ships a frontend/)"
 fi
