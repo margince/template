@@ -83,7 +83,7 @@ if [ ! -x "$BIOME" ]; then
 elif ! ls -d "$SRC_EXT"/*/frontend >/dev/null 2>&1; then
   echo "  no unit ships a frontend/"
 else
-  if ! out="$("$BIOME" check --config-path "$CORE/frontend" "$SRC_EXT"/*/frontend 2>&1)"; then
+  if ! out="$(cd "$CORE/frontend" && "$BIOME" check --config-path . "$SRC_EXT"/*/frontend 2>&1)"; then
     printf '%s\n' "$out" | sed 's/^/  /'
     fail "biome findings under extensions/*/frontend — 'make fmt' fixes the safe ones"
   else
