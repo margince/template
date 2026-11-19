@@ -14,6 +14,12 @@ marker_file() {
   printf '%s/staged-units\n' "$(git -C "$CORE" rev-parse --git-dir)"
 }
 
+# Present while stage.sh has turned our units on in core/instance/go.mod. Cores that read the enabled set from
+# that file (instance/go.mod is "the one switch that turns a unit on") ignore a folder it does not require.
+instance_edit_marker() {
+  printf '%s/staged-instance-gomod\n' "$(git -C "$CORE" rev-parse --git-dir)"
+}
+
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 require_core() {
@@ -222,6 +228,8 @@ assert_core_clean() {
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     path="${line:3}"
+    # Our own edit of the instance's go.mod, made by stage.sh and undone by unstage.sh.
+    if [ "$path" = "instance/go.mod" ] && [ -f "$(instance_edit_marker)" ]; then continue; fi
     if [ "${line:0:2}" = "??" ] && [ -f "$marker" ]; then
       unit="${path#extensions/}"; unit="${unit%%/*}"
       if [ "$path" != "$unit" ] && grep -qxF "$unit" "$marker" 2>/dev/null; then

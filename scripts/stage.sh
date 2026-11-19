@@ -49,6 +49,34 @@ while IFS= read -r unit; do
   echo "stage: extensions/$unit -> core/extensions/$unit"
 done <<< "$units"
 
+# A core that reads the enabled set from instance/go.mod composes only the units that file requires, so require ours.
+# Each unit is replaced onto its staged folder, the way core's own units are. The file is restored by unstage.sh.
+instance_gomod="$CORE/instance/go.mod"
+if [ -f "$instance_gomod" ]; then
+  git -C "$CORE" checkout --quiet -- instance/go.mod
+  req="" rep=""
+  while IFS= read -r unit; do
+    [ -n "$unit" ] || continue
+    grep -q "margince/extensions/$unit " "$instance_gomod" && continue
+    req="$req	github.com/margince/margince/extensions/$unit v0.0.0
+"
+    rep="$rep	github.com/margince/margince/extensions/$unit => ../extensions/$unit
+"
+  done <<< "$units"
+  if [ -n "$req" ]; then
+    # Not awk -v: the macOS awk refuses a newline in a variable.
+    printf '%s' "$req" > "$instance_gomod.req"; printf '%s' "$rep" > "$instance_gomod.rep"
+    awk -v reqf="$instance_gomod.req" -v repf="$instance_gomod.rep" '
+      function dump(f,  l) { while ((getline l < f) > 0) print l; close(f) }
+      /^require \(/ { print; dump(reqf); next }
+      /^replace \(/ { print; dump(repf); next }
+      { print }' "$instance_gomod" > "$instance_gomod.new" && mv "$instance_gomod.new" "$instance_gomod"
+    rm -f "$instance_gomod.req" "$instance_gomod.rep"
+    : > "$(instance_edit_marker)"
+    echo "stage: instance/go.mod requires the staged units"
+  fi
+fi
+
 # Keep the submodule's `git status` clean. See exclude_block_write in lib.sh.
 #
 # A while-read loop, NOT mapfile: mapfile is bash 4+ and this machine's only

@@ -6,6 +6,13 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ -d "$CORE/.git" ] || [ -f "$CORE/.git" ] || exit 0
 
+# Undo the instance/go.mod edit stage.sh made, whether or not any unit is still marked.
+if [ -f "$(instance_edit_marker)" ]; then
+  git -C "$CORE" checkout --quiet -- instance/go.mod
+  rm -f "$(instance_edit_marker)"
+  echo "unstage: restored core/instance/go.mod"
+fi
+
 marker="$(marker_file)"
 [ -f "$marker" ] || exit 0
 
