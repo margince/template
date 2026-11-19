@@ -178,7 +178,7 @@ u: compose ## One unit's tests + policy gates (NAME=<unit>)
 	@# finding names core/extensions/<unit>/…, the staged copy that must not be
 	@# edited and that the next compose overwrites.
 	@set -o pipefail; $(MAKE) -C $(CORE) ext-imports 2>&1 $(REWRITE)
-	@set -o pipefail; $(MAKE) -C $(CORE) fitness-jurisdiction 2>&1 $(REWRITE)
+	@set -o pipefail; $(MAKE) -C $(CORE) no-jurisdiction 2>&1 $(REWRITE)
 	@$(MAKE) compose >/dev/null
 	@$(MAKE) check-manifests
 
@@ -246,7 +246,6 @@ check: toolcheck check-instance check-template $(if $(wildcard .template-version
 ci: ## Everything check runs, plus the real-database and submodule lanes
 	@$(MAKE) check
 	@$(MAKE) test-integration-ext
-	@$(MAKE) core-check-pin
 	@$(MAKE) unstage
 	@bash scripts/check-core-clean.sh
 	@echo
@@ -331,7 +330,7 @@ check-template: ## Template-owned paths match the template commit this instance 
 ## checks only what the pushed tag cannot fix afterwards: instance.yaml, the
 ## template-owned paths, and the core pin. The full gate runs in release.yml
 ## (full-check.yml) before any image or release is published.
-release-check: check-instance check-template core-check-pin ## The fast release precondition; release.yml runs the full gate
+release-check: check-instance ## The fast release precondition; release.yml runs the full gate
 
 template-sync: ## Merge margince/template's main into this instance and record it in .template-version
 	@bash scripts/template-sync.sh

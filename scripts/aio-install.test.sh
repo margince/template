@@ -111,7 +111,7 @@ SYS="$TMP/sys-bin"
 mkdir -p "$SYS"
 for f in /usr/bin/* /bin/*; do
   n="${f##*/}"
-  [ "$n" = docker ] || [ -e "$SYS/$n" ] || ln -s "$f" "$SYS/$n"
+  [ "$n" = docker ] || [ -e "$SYS/$n" ] || [ -L "$SYS/$n" ] || ln -s "$f" "$SYS/$n"
 done
 
 run_install() {

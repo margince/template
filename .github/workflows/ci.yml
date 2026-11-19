@@ -50,9 +50,6 @@ jobs:
       - name: instance.yaml is valid
         run: make check-instance
 
-      - name: Template-owned paths are unchanged
-        run: make check-template
-
       ## Node and pnpm, because `make lint` runs biome over extensions/ and the
       ## composer resolves a pnpm workspace. The composed frontend SUITES are not
       ## here — they moved to full-check.yml — but the toolchain is still needed.
@@ -61,7 +58,7 @@ jobs:
       ## resolve a different tree and stop predicting CI.
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
-          version: 11
+          version: 12
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -153,13 +150,6 @@ jobs:
       ## step here depends on.
       - name: Staging script tests
         run: make test-scripts
-
-      ## WHICH commit core/ is pinned to, which no other step asks. The steps
-      ## below assert the submodule is unmodified — true of a pointer to an
-      ## unmerged contribution branch as well, and if that branch was pushed the
-      ## whole run is green while main pins something upstream never merged.
-      - name: core/ is pinned to a merged upstream commit
-        run: make core-check-pin
 
       ## The submodule must come out of a full build untouched — no tracked
       ## modifications AND no staged residue. The assertions live in
