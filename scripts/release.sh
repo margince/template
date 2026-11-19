@@ -26,6 +26,12 @@ unset RELEASE_REMOTE RELEASE_BRANCH RELEASE_CHECK_TARGET
 is_release_version "$version" ||
   die "release: VERSION '$version' does not match $RELEASE_VERSION_RE, e.g. v1.2.0 or v1.2.0-rc.1"
 
+# stage.sh turns units on by editing core/instance/go.mod. That edit is scratch, so undo it before the check.
+if [ -f "$(instance_edit_marker)" ]; then
+  git -C "$CORE" checkout --quiet -- instance/go.mod
+  rm -f "$(instance_edit_marker)"
+fi
+
 dirty="$(git status --porcelain)"
 [ -z "$dirty" ] ||
   die "release: the working tree has uncommitted changes; commit or discard them first"
